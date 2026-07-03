@@ -47,3 +47,6 @@ next-env.d.ts
 
 # local Claude Code project state — not app code
 /.claude
+
+.vercel
+.env*
