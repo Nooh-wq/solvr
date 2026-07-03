@@ -312,16 +312,19 @@ export async function getReportStats() {
 
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
     const tenantId = session.tenantId;
-    const [byStatus, byPriority, total, unassigned, tickets] = await Promise.all([
-      tx.ticket.groupBy({ by: ["status"], where: { tenantId }, _count: true }),
-      tx.ticket.groupBy({ by: ["priority"], where: { tenantId }, _count: true }),
-      tx.ticket.count({ where: { tenantId } }),
-      tx.ticket.count({ where: { tenantId, assignedToId: null, status: { notIn: ["RESOLVED", "CLOSED"] } } }),
-      tx.ticket.findMany({
-        where: { tenantId, firstReplyAt: { not: null } },
-        select: { createdAt: true, firstReplyAt: true },
-      }),
-    ]);
+    // Sequential, not Promise.all: these all run on this one interactive-tx
+    // connection, so concurrent issue is unsupported by Prisma (and gives no
+    // real parallelism anyway — a single connection serializes them regardless).
+    const byStatus = await tx.ticket.groupBy({ by: ["status"], where: { tenantId }, _count: true });
+    const byPriority = await tx.ticket.groupBy({ by: ["priority"], where: { tenantId }, _count: true });
+    const total = await tx.ticket.count({ where: { tenantId } });
+    const unassigned = await tx.ticket.count({
+      where: { tenantId, assignedToId: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+    });
+    const tickets = await tx.ticket.findMany({
+      where: { tenantId, firstReplyAt: { not: null } },
+      select: { createdAt: true, firstReplyAt: true },
+    });
 
     const avgFirstResponseHours =
       tickets.length > 0

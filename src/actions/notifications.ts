@@ -29,11 +29,39 @@ export async function listNotifications() {
   }));
 }
 
-export async function getUnreadNotificationCount() {
+/**
+ * List + unread count in a SINGLE transaction. The bell polls both every 30s;
+ * fetching them as two parallel server actions meant two transactions racing
+ * for the same pooled connection, so the second reliably threw P2028 ("unable
+ * to start a transaction in time") whenever the pool was busy. One round-trip
+ * removes that self-inflicted contention entirely.
+ */
+export async function getNotificationSnapshot() {
   const session = await requireSession();
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.notification.count({ where: { tenantId: session.tenantId, userId: session.id, isRead: false } })
-  );
+  const ctx = { tenantId: session.tenantId, userId: session.id, role: session.role };
+  const { notifications, unreadCount } = await withRls(ctx, async (tx) => {
+    // Run sequentially, not via Promise.all: both queries share this one
+    // interactive-transaction connection, and issuing them concurrently on the
+    // same tx client is unsupported by Prisma. Two indexed reads are cheap.
+    const notifications = await tx.notification.findMany({
+      where: { tenantId: session.tenantId, userId: session.id },
+      orderBy: { createdAt: "desc" },
+      take: LIST_LIMIT,
+    });
+    const unreadCount = await tx.notification.count({
+      where: { tenantId: session.tenantId, userId: session.id, isRead: false },
+    });
+    return { notifications, unreadCount };
+  });
+
+  const ticketBase = session.role === "CLIENT" ? "/portal/tickets" : "/agent/tickets";
+  return {
+    unreadCount,
+    notifications: notifications.map((n) => ({
+      ...n,
+      href: n.ticketId ? `${ticketBase}/${n.ticketId}` : null,
+    })),
+  };
 }
 
 export async function markNotificationRead(notificationId: string) {
