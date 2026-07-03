@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { sendChatMessage, escalateChatToTicket } from "@/actions/chat";
 import { Button } from "@/components/ui/button";
 import { ChatIcon, CloseIcon } from "@/components/icons";
+import { useToast } from "@/components/ui/toast";
 
 type WidgetMessage = { role: "CLIENT" | "BOT"; body: string; citations?: string[] };
 
 export function ChatWidget() {
   const router = useRouter();
+  const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<WidgetMessage[]>([]);
@@ -50,6 +52,7 @@ export function ChatWidget() {
     if (!conversationId) return;
     startTransition(async () => {
       await escalateChatToTicket(conversationId);
+      toast({ title: "Ticket created from chat", variant: "success" });
       router.push("/portal");
       router.refresh();
     });

@@ -5,10 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { login } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -21,6 +23,7 @@ export function LoginForm() {
       });
       if (result.error) {
         setError(result.error);
+        toast({ title: "Couldn't log in", description: result.error, variant: "error" });
         return;
       }
       router.push(params.get("next") ?? result.redirectTo ?? "/portal");

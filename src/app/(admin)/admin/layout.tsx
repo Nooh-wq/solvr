@@ -39,7 +39,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       profileHref="/admin/profile"
       banner={user.isImpersonating ? <ImpersonationBanner tenantName={tenant.name} /> : undefined}
     >
-      <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+      <main className="mx-auto max-w-screen-2xl px-6 py-8">{children}</main>
     </Sidebar>
   );
 }

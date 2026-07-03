@@ -25,7 +25,7 @@ export default async function AgentLayout({ children }: { children: React.ReactN
       avatarUrl={user.avatarUrl}
       profileHref="/agent/profile"
     >
-      <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
+      <main className="mx-auto max-w-screen-2xl px-6 py-8">{children}</main>
     </Sidebar>
   );
 }

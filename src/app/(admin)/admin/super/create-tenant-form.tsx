@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { createTenant } from "@/actions/super";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function CreateTenantForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -15,18 +17,22 @@ export function CreateTenantForm() {
   function onSubmit(formData: FormData) {
     setError(null);
     setTempPassword(null);
+    const name = String(formData.get("name"));
     startTransition(async () => {
       try {
         const result = await createTenant({
-          name: String(formData.get("name")),
+          name,
           slug: String(formData.get("slug")),
           adminName: String(formData.get("adminName")),
           adminEmail: String(formData.get("adminEmail")),
         });
         setTempPassword(result.tempPassword);
+        toast({ title: "Tenant created", description: name, variant: "success" });
         router.refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not create tenant.");
+        const message = e instanceof Error ? e.message : "Could not create tenant.";
+        setError(message);
+        toast({ title: "Couldn't create tenant", description: message, variant: "error" });
       }
     });
   }

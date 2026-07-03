@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { postAgentReply } from "@/actions/tickets";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function AgentReplyBox({ ticketId }: { ticketId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [body, setBody] = useState("");
   const [isInternal, setIsInternal] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -15,9 +17,14 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
   function onSubmit() {
     if (!body.trim()) return;
     startTransition(async () => {
-      await postAgentReply({ ticketId, body, isInternal });
-      setBody("");
-      router.refresh();
+      try {
+        await postAgentReply({ ticketId, body, isInternal });
+        setBody("");
+        toast({ title: isInternal ? "Internal note added" : "Reply sent", variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't send", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 

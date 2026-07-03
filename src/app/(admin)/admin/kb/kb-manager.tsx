@@ -5,19 +5,26 @@ import { useRouter } from "next/navigation";
 import { upsertKbArticle, deleteKbArticle } from "@/actions/kb";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 type Article = { id: string; title: string; body: string; isPublished: boolean; updatedAt: string };
 
 export function KbManager({ articles }: { articles: Article[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [editing, setEditing] = useState<Article | null>(null);
   const [creating, setCreating] = useState(false);
   const [pending, startTransition] = useTransition();
 
-  function remove(id: string) {
+  function remove(id: string, title: string) {
     startTransition(async () => {
-      await deleteKbArticle(id);
-      router.refresh();
+      try {
+        await deleteKbArticle(id);
+        toast({ title: "Article deleted", description: title, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't delete article", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
@@ -32,10 +39,15 @@ export function KbManager({ articles }: { articles: Article[] }) {
         }}
         onSave={(values) => {
           startTransition(async () => {
-            await upsertKbArticle({ id: editing?.id, ...values });
-            setEditing(null);
-            setCreating(false);
-            router.refresh();
+            try {
+              await upsertKbArticle({ id: editing?.id, ...values });
+              toast({ title: editing ? "Article updated" : "Article created", description: values.title, variant: "success" });
+              setEditing(null);
+              setCreating(false);
+              router.refresh();
+            } catch (e) {
+              toast({ title: "Couldn't save article", description: e instanceof Error ? e.message : undefined, variant: "error" });
+            }
           });
         }}
       />
@@ -76,7 +88,7 @@ export function KbManager({ articles }: { articles: Article[] }) {
                     {new Date(a.updatedAt).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3">
-                    <Button variant="secondary" size="sm" disabled={pending} onClick={() => remove(a.id)}>
+                    <Button variant="secondary" size="sm" disabled={pending} onClick={() => remove(a.id, a.title)}>
                       Delete
                     </Button>
                   </td>

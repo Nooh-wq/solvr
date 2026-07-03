@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { registerClient } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function RegisterForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<{ autoApproved: boolean } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -23,6 +25,7 @@ export function RegisterForm() {
       });
       if (result.ok !== true) {
         setError(result.error);
+        toast({ title: "Couldn't create account", description: result.error, variant: "error" });
         return;
       }
       setSubmitted({ autoApproved: result.autoApproved });

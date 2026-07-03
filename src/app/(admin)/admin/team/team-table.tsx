@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { updateUser } from "@/actions/admin";
 import { Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import type { Role, UserStatus } from "@/generated/prisma";
 
 type TeamMember = { id: string; name: string; email: string; role: Role; status: UserStatus };
@@ -19,19 +20,30 @@ const STATUS_LABEL: Record<UserStatus, string> = {
 
 export function TeamTable({ users }: { users: TeamMember[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pending, startTransition] = useTransition();
 
-  function changeRole(userId: string, role: AssignableRole) {
+  function changeRole(userId: string, name: string, role: AssignableRole) {
     startTransition(async () => {
-      await updateUser({ userId, role });
-      router.refresh();
+      try {
+        await updateUser({ userId, role });
+        toast({ title: "Role updated", description: `${name} is now ${role.toLowerCase()}`, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't update role", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
-  function toggleActive(userId: string, isActive: boolean) {
+  function toggleActive(userId: string, name: string, isActive: boolean) {
     startTransition(async () => {
-      await updateUser({ userId, status: isActive ? "SUSPENDED" : "ACTIVE" });
-      router.refresh();
+      try {
+        await updateUser({ userId, status: isActive ? "SUSPENDED" : "ACTIVE" });
+        toast({ title: isActive ? "User deactivated" : "User reactivated", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't update status", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
@@ -51,13 +63,13 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
         <tbody>
           {users.map((u) => (
             <tr key={u.id} className="border-t border-[var(--color-neutral-100)]">
-              <td className="px-4 py-3">{u.name}</td>
-              <td className="px-4 py-3 text-[var(--color-neutral-600)]">{u.email}</td>
+              <td className="px-4 py-3 whitespace-nowrap">{u.name}</td>
+              <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
               <td className="px-4 py-3">
                 <Select
                   value={u.role}
                   disabled={pending}
-                  onChange={(e) => changeRole(u.id, e.target.value as AssignableRole)}
+                  onChange={(e) => changeRole(u.id, u.name, e.target.value as AssignableRole)}
                   className="h-8 text-[13px] w-32"
                 >
                   <option value="CLIENT">Client</option>
@@ -71,7 +83,7 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
                   variant="secondary"
                   size="sm"
                   disabled={pending}
-                  onClick={() => toggleActive(u.id, u.status === "ACTIVE")}
+                  onClick={() => toggleActive(u.id, u.name, u.status === "ACTIVE")}
                 >
                   {u.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
                 </Button>

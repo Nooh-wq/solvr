@@ -6,18 +6,25 @@ import { postClientReply } from "@/actions/tickets";
 import { TicketMessageList, type ThreadMessage } from "@/components/ticket-message-list";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function TicketThread({ messages, ticketId }: { messages: ThreadMessage[]; ticketId: string }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [body, setBody] = useState("");
   const [pending, startTransition] = useTransition();
 
   function onSubmit() {
     if (!body.trim()) return;
     startTransition(async () => {
-      await postClientReply({ ticketId, body });
-      setBody("");
-      router.refresh();
+      try {
+        await postClientReply({ ticketId, body });
+        setBody("");
+        toast({ title: "Reply sent", variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't send reply", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 

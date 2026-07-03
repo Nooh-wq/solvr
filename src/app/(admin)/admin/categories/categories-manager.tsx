@@ -5,34 +5,52 @@ import { useRouter } from "next/navigation";
 import { upsertCategory } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 type Category = { id: string; name: string; isActive: boolean };
 
 export function CategoriesManager({ categories }: { categories: Category[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [newName, setNewName] = useState("");
   const [pending, startTransition] = useTransition();
 
   function toggle(cat: Category) {
     startTransition(async () => {
-      await upsertCategory({ id: cat.id, name: cat.name, isActive: !cat.isActive });
-      router.refresh();
+      try {
+        await upsertCategory({ id: cat.id, name: cat.name, isActive: !cat.isActive });
+        toast({ title: cat.isActive ? "Category disabled" : "Category enabled", description: cat.name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't update category", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
   function rename(cat: Category, name: string) {
     startTransition(async () => {
-      await upsertCategory({ id: cat.id, name, isActive: cat.isActive });
-      router.refresh();
+      try {
+        await upsertCategory({ id: cat.id, name, isActive: cat.isActive });
+        toast({ title: "Category renamed", variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't rename category", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
   function addCategory() {
     if (!newName.trim()) return;
+    const name = newName.trim();
     startTransition(async () => {
-      await upsertCategory({ name: newName.trim(), isActive: true });
-      setNewName("");
-      router.refresh();
+      try {
+        await upsertCategory({ name, isActive: true });
+        setNewName("");
+        toast({ title: "Category added", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't add category", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 

@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateTicket } from "@/actions/tickets";
 import { Label, Select } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import type { TicketStatus, Priority } from "@/generated/prisma";
 
 const STATUS_OPTIONS: Record<TicketStatus, TicketStatus[]> = {
@@ -28,12 +29,23 @@ export function AgentControls({
   agents: { id: string; name: string }[];
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pending, startTransition] = useTransition();
 
   function apply(patch: Partial<{ status: TicketStatus; priority: Priority; assignedToId: string | null }>) {
     startTransition(async () => {
-      await updateTicket({ ticketId, ...patch });
-      router.refresh();
+      try {
+        await updateTicket({ ticketId, ...patch });
+        if (patch.status) toast({ title: "Status updated", description: patch.status.replace("_", " "), variant: "success" });
+        else if (patch.priority) toast({ title: "Priority updated", description: patch.priority, variant: "success" });
+        else if ("assignedToId" in patch) {
+          const agentName = agents.find((a) => a.id === patch.assignedToId)?.name;
+          toast({ title: agentName ? "Ticket assigned" : "Ticket unassigned", description: agentName, variant: "success" });
+        }
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't update ticket", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
