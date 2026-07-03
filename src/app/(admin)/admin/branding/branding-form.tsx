@@ -46,7 +46,7 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
         return;
       }
       set("logoUrl", result.url);
-      toast({ title: "Logo uploaded", variant: "success" });
+      toast({ title: "Logo ready — click Save branding to apply", variant: "info" });
     });
     e.target.value = "";
   }
