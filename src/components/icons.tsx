@@ -132,6 +132,35 @@ export function ChatIcon(props: IconProps) {
   );
 }
 
+export function CheckCircleIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M6.8 10.2 9 12.3l4.2-4.6" />
+    </svg>
+  );
+}
+
+export function AlertCircleIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 6.5v4" />
+      <circle cx="10" cy="13.2" r="0.15" fill="currentColor" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+export function InfoCircleIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 9.2v4.3" />
+      <circle cx="10" cy="6.7" r="0.15" fill="currentColor" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
 export function CloseIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

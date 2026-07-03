@@ -4,24 +4,36 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { approveUser, rejectUser } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 
 type PendingUser = { id: string; name: string; email: string; company: string | null; createdAt: string };
 
 export function PendingApprovals({ users }: { users: PendingUser[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pending, startTransition] = useTransition();
 
-  function approve(userId: string) {
+  function approve(userId: string, name: string) {
     startTransition(async () => {
-      await approveUser({ userId });
-      router.refresh();
+      try {
+        await approveUser({ userId });
+        toast({ title: "Registration approved", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't approve registration", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
-  function reject(userId: string) {
+  function reject(userId: string, name: string) {
     startTransition(async () => {
-      await rejectUser({ userId });
-      router.refresh();
+      try {
+        await rejectUser({ userId });
+        toast({ title: "Registration rejected", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't reject registration", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
@@ -45,10 +57,10 @@ export function PendingApprovals({ users }: { users: PendingUser[] }) {
                 </div>
               </td>
               <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-                <Button variant="secondary" size="sm" disabled={pending} onClick={() => reject(u.id)}>
+                <Button variant="secondary" size="sm" disabled={pending} onClick={() => reject(u.id, u.name)}>
                   Reject
                 </Button>
-                <Button size="sm" disabled={pending} onClick={() => approve(u.id)}>
+                <Button size="sm" disabled={pending} onClick={() => approve(u.id, u.name)}>
                   Approve
                 </Button>
               </td>

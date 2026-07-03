@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { updateProfile, changeMyPassword, uploadProfilePicture } from "@/actions/profile";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import type { Role } from "@/generated/prisma";
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -25,6 +26,7 @@ function initialsOf(name: string) {
 }
 
 export function ProfileForm({ profile }: { profile: Profile }) {
+  const { toast } = useToast();
   const [name, setName] = useState(profile.name);
   const [company, setCompany] = useState(profile.company ?? "");
   const [profileSaved, setProfileSaved] = useState(false);
@@ -51,9 +53,11 @@ export function ProfileForm({ profile }: { profile: Profile }) {
       const result = await uploadProfilePicture(formData);
       if (!result.ok) {
         setAvatarError(result.error);
+        toast({ title: "Couldn't upload photo", description: result.error, variant: "error" });
         return;
       }
       setAvatarUrl(result.url);
+      toast({ title: "Profile photo updated", variant: "success" });
     });
     e.target.value = "";
   }
@@ -63,6 +67,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
     startProfileTransition(async () => {
       await updateProfile({ name, company: company || undefined });
       setProfileSaved(true);
+      toast({ title: "Profile saved", variant: "success" });
     });
   }
 
@@ -73,11 +78,13 @@ export function ProfileForm({ profile }: { profile: Profile }) {
       const result = await changeMyPassword({ currentPassword, newPassword });
       if (result.ok !== true) {
         setPasswordError(result.error);
+        toast({ title: "Couldn't update password", description: result.error, variant: "error" });
         return;
       }
       setCurrentPassword("");
       setNewPassword("");
       setPasswordSaved(true);
+      toast({ title: "Password updated", description: "Other sessions have been signed out.", variant: "success" });
     });
   }
 

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { setTenantStatus, startImpersonation } from "@/actions/super";
 import { Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 
 type Tenant = {
   id: string;
@@ -19,18 +20,28 @@ type Tenant = {
 
 export function TenantList({ tenants }: { tenants: Tenant[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [pending, startTransition] = useTransition();
 
-  function changeStatus(id: string, status: string) {
+  function changeStatus(id: string, name: string, status: string) {
     startTransition(async () => {
-      await setTenantStatus(id, status as "ACTIVE" | "SUSPENDED" | "TRIAL");
-      router.refresh();
+      try {
+        await setTenantStatus(id, status as "ACTIVE" | "SUSPENDED" | "TRIAL");
+        toast({ title: "Tenant status updated", description: `${name} → ${status}`, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't update tenant status", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
   function impersonate(id: string) {
     startTransition(async () => {
-      await startImpersonation(id);
+      try {
+        await startImpersonation(id);
+      } catch (e) {
+        toast({ title: "Couldn't start impersonation", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
     });
   }
 
@@ -63,7 +74,7 @@ export function TenantList({ tenants }: { tenants: Tenant[] }) {
                   <Select
                     value={t.status}
                     disabled={pending}
-                    onChange={(e) => changeStatus(t.id, e.target.value)}
+                    onChange={(e) => changeStatus(t.id, t.name, e.target.value)}
                     className="h-8 text-[13px] w-28"
                   >
                     <option value="ACTIVE">Active</option>

@@ -6,10 +6,12 @@ import Link from "next/link";
 import { confirmPasswordReset } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function ConfirmResetForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const { toast } = useToast();
   const token = params.get("token") ?? "";
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -33,8 +35,10 @@ export function ConfirmResetForm() {
       const result = await confirmPasswordReset({ token, newPassword });
       if ("error" in result) {
         setError(result.error);
+        toast({ title: "Couldn't reset password", description: result.error, variant: "error" });
         return;
       }
+      toast({ title: "Password updated", variant: "success" });
       router.push(result.redirectTo ?? "/portal");
       router.refresh();
     });

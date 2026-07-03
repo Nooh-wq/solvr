@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { createTicket } from "@/actions/tickets";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea, Select } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function NewTicketForm({ categories }: { categories: { id: string; name: string }[] }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -22,8 +24,10 @@ export function NewTicketForm({ categories }: { categories: { id: string; name: 
       });
       if ("error" in result && result.error) {
         setError(result.error as string);
+        toast({ title: "Couldn't create ticket", description: result.error as string, variant: "error" });
         return;
       }
+      toast({ title: "Ticket created", description: "We'll follow up soon.", variant: "success" });
       router.push("/portal");
     });
   }

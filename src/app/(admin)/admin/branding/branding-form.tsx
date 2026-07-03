@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { updateBranding, uploadBrandingLogo } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 type BrandingValues = {
   productName: string;
@@ -17,6 +18,7 @@ type BrandingValues = {
 
 export function BrandingForm({ initial }: { initial: BrandingValues }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [values, setValues] = useState(initial);
   const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,9 +41,11 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
       const result = await uploadBrandingLogo(formData);
       if (!result.ok) {
         setUploadError(result.error);
+        toast({ title: "Logo upload failed", description: result.error, variant: "error" });
         return;
       }
       set("logoUrl", result.url);
+      toast({ title: "Logo uploaded", variant: "success" });
     });
     e.target.value = "";
   }
@@ -53,9 +57,16 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
       try {
         const result = await updateBranding(values);
         if (result.contrastWarning) setWarning(result.contrastWarning);
+        toast({
+          title: "Branding saved",
+          description: result.contrastWarning ?? undefined,
+          variant: result.contrastWarning ? "info" : "success",
+        });
         router.refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save branding.");
+        const message = e instanceof Error ? e.message : "Could not save branding.";
+        setError(message);
+        toast({ title: "Couldn't save branding", description: message, variant: "error" });
       }
     });
   }

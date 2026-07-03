@@ -9,6 +9,7 @@ import {
   markAllNotificationsRead,
 } from "@/actions/notifications";
 import { BellIcon } from "@/components/icons";
+import { useToast } from "@/components/ui/toast";
 
 type Notification = {
   id: string;
@@ -51,16 +52,44 @@ export function NotificationBell({
   const [unreadCount, setUnreadCount] = useState(0);
   const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+  // IDs already seen (toasted or otherwise known about), so a poll only alerts
+  // on notifications that are genuinely new since the last check — not on
+  // every poll tick, and not on the very first load (nothing "arrived" then,
+  // it was just already there).
+  const seenIds = useRef<Set<string> | null>(null);
 
   const refreshCount = useCallback(() => {
     getUnreadNotificationCount().then(setUnreadCount);
   }, []);
 
+  // Separate from the dropdown's on-open fetch: this runs every POLL_MS
+  // regardless of whether the dropdown is open, purely to catch newly-arrived
+  // notifications and surface them as toasts (the "alert when a new
+  // notification comes in" requirement) — independent of the unread count.
+  const checkForNew = useCallback(async () => {
+    const latest = await listNotifications();
+    if (seenIds.current === null) {
+      // First check ever: just record what's already there, don't toast it.
+      seenIds.current = new Set(latest.map((n) => n.id));
+      return;
+    }
+    const fresh = latest.filter((n) => !seenIds.current!.has(n.id));
+    for (const n of fresh) {
+      toast({ title: n.title, description: n.body ?? undefined, variant: "info" });
+      seenIds.current.add(n.id);
+    }
+  }, [toast]);
+
   useEffect(() => {
     refreshCount();
-    const interval = setInterval(refreshCount, POLL_MS);
+    checkForNew();
+    const interval = setInterval(() => {
+      refreshCount();
+      checkForNew();
+    }, POLL_MS);
     return () => clearInterval(interval);
-  }, [refreshCount]);
+  }, [refreshCount, checkForNew]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {

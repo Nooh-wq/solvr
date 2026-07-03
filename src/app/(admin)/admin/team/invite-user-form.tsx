@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { inviteUser } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 
 export function InviteUserForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -15,17 +17,21 @@ export function InviteUserForm() {
   function onSubmit(formData: FormData) {
     setError(null);
     setTempPassword(null);
+    const name = String(formData.get("name"));
     startTransition(async () => {
       try {
         const result = await inviteUser({
-          name: String(formData.get("name")),
+          name,
           email: String(formData.get("email")),
           role: formData.get("role") as "CLIENT" | "AGENT" | "ADMIN",
         });
         setTempPassword(result.tempPassword);
+        toast({ title: "Invite sent", description: `${name} can now log in.`, variant: "success" });
         router.refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not invite user.");
+        const message = e instanceof Error ? e.message : "Could not invite user.";
+        setError(message);
+        toast({ title: "Couldn't send invite", description: message, variant: "error" });
       }
     });
   }
