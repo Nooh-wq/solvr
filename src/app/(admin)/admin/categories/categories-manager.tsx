@@ -18,7 +18,11 @@ export function CategoriesManager({ categories }: { categories: Category[] }) {
   function toggle(cat: Category) {
     startTransition(async () => {
       try {
-        await upsertCategory({ id: cat.id, name: cat.name, isActive: !cat.isActive });
+        const result = await upsertCategory({ id: cat.id, name: cat.name, isActive: !cat.isActive });
+        if (!result.ok) {
+          toast({ title: "Couldn't update category", description: result.error, variant: "error" });
+          return;
+        }
         toast({ title: cat.isActive ? "Category disabled" : "Category enabled", description: cat.name, variant: "success" });
         router.refresh();
       } catch (e) {
@@ -30,7 +34,12 @@ export function CategoriesManager({ categories }: { categories: Category[] }) {
   function rename(cat: Category, name: string) {
     startTransition(async () => {
       try {
-        await upsertCategory({ id: cat.id, name, isActive: cat.isActive });
+        const result = await upsertCategory({ id: cat.id, name, isActive: cat.isActive });
+        if (!result.ok) {
+          toast({ title: "Couldn't rename category", description: result.error, variant: "error" });
+          router.refresh(); // revert the input to the last-saved name
+          return;
+        }
         toast({ title: "Category renamed", variant: "success" });
         router.refresh();
       } catch (e) {
@@ -44,7 +53,11 @@ export function CategoriesManager({ categories }: { categories: Category[] }) {
     const name = newName.trim();
     startTransition(async () => {
       try {
-        await upsertCategory({ name, isActive: true });
+        const result = await upsertCategory({ name, isActive: true });
+        if (!result.ok) {
+          toast({ title: "Couldn't add category", description: result.error, variant: "error" });
+          return;
+        }
         setNewName("");
         toast({ title: "Category added", description: name, variant: "success" });
         router.refresh();

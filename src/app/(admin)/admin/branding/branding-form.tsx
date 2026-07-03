@@ -6,6 +6,7 @@ import { updateBranding, uploadBrandingLogo } from "@/actions/admin";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { HomeIcon, TicketIcon, UsersIcon, BellIcon } from "@/components/icons";
 
 type BrandingValues = {
   productName: string;
@@ -139,31 +140,115 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
 
       <div>
         <p className="uppercase-label text-[11px] text-[var(--color-neutral-600)] mb-2">Live preview</p>
-        <div className="bg-white border border-[var(--color-neutral-300)] rounded overflow-hidden">
-          <div className="h-12 border-b border-[var(--color-neutral-300)] flex items-center px-4 gap-2">
+        <p className="text-[12px] text-[var(--color-neutral-500)] mb-3">
+          A snapshot of the platform with your changes — updates instantly as you edit.
+        </p>
+        <PlatformPreview values={values} />
+      </div>
+    </div>
+  );
+}
+
+const PREVIEW_NAV = [
+  { label: "Overview", icon: HomeIcon },
+  { label: "Queue", icon: TicketIcon },
+  { label: "Team", icon: UsersIcon },
+];
+
+const PREVIEW_TICKETS: { ref: string; title: string; status: string }[] = [
+  { ref: "SO-2481", title: "Can't reset my password", status: "Open" },
+  { ref: "SO-2480", title: "Invoice question for March", status: "Pending" },
+  { ref: "SO-2477", title: "Feature request: dark mode", status: "In progress" },
+];
+
+/**
+ * A miniature, non-interactive mockup of the real app shell (browser chrome +
+ * sidebar + queue list), styled with the in-progress form values so it reads
+ * as "here's what the product will actually look like" rather than an
+ * abstract swatch of button/badge/text like the old preview.
+ */
+function PlatformPreview({ values }: { values: BrandingValues }) {
+  const slug = (values.productName.toLowerCase().replace(/[^a-z0-9]+/g, "") || "yourcompany") + ".solvr.app";
+
+  return (
+    <div className="rounded-2xl border border-[var(--color-neutral-300)] shadow-[0_16px_48px_-12px_rgba(0,0,0,0.18)] overflow-hidden bg-white select-none">
+      {/* Browser chrome */}
+      <div className="h-8 bg-[var(--color-neutral-100)] border-b border-[var(--color-neutral-200)] flex items-center gap-1.5 px-3 shrink-0">
+        <span className="h-2.5 w-2.5 rounded-full bg-red-300" />
+        <span className="h-2.5 w-2.5 rounded-full bg-yellow-300" />
+        <span className="h-2.5 w-2.5 rounded-full bg-green-300" />
+        <div className="ml-2 flex-1 h-5 rounded-full bg-white border border-[var(--color-neutral-200)] flex items-center px-2.5 min-w-0">
+          <span className="text-[10px] text-[var(--color-neutral-500)] truncate">{slug}</span>
+        </div>
+      </div>
+
+      <div className="flex h-[360px]">
+        {/* Mini sidebar */}
+        <div className="w-[112px] shrink-0 border-r border-[var(--color-neutral-200)] bg-white flex flex-col">
+          <div className="h-11 flex items-center gap-1.5 px-2.5 border-b border-black/5 min-w-0">
             {values.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={values.logoUrl} alt="" className="h-5 w-5 object-contain" />
+              <img src={values.logoUrl} alt="" className="h-4 w-4 shrink-0 object-contain rounded" />
             ) : (
-              <div className="h-5 w-5 rounded" style={{ backgroundColor: values.accentColor }} />
+              <div className="h-4 w-4 shrink-0 rounded" style={{ backgroundColor: values.accentColor }} />
             )}
-            <span className="text-[13px] font-semibold">{values.productName}</span>
+            <span className="text-[10px] font-semibold truncate">{values.productName || "Support"}</span>
           </div>
-          <div className="p-5 space-y-3">
-            <button
-              className="rounded-full px-4 py-2 text-[13px] font-medium text-white"
+          <div className="flex-1 py-2 px-2 space-y-1">
+            {PREVIEW_NAV.map((item, i) => (
+              <div
+                key={item.label}
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[9px] font-medium"
+                style={
+                  i === 1
+                    ? { backgroundColor: values.primaryColor, color: "#fff" }
+                    : { color: "var(--color-neutral-600)" }
+                }
+              >
+                <item.icon className="h-3 w-3 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="px-2 py-2 border-t border-black/5">
+            <div className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[9px] font-medium text-[var(--color-neutral-600)]">
+              <BellIcon className="h-3 w-3 shrink-0" />
+              <span className="truncate">Notifications</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Main content */}
+        <div className="flex-1 min-w-0 flex flex-col bg-[var(--color-neutral-50,#fafafa)]">
+          <div className="h-11 flex items-center justify-between px-3.5 border-b border-black/5 bg-white shrink-0">
+            <span className="text-[11px] font-semibold">Queue</span>
+            <span
+              className="rounded-full px-2.5 py-1 text-[9px] font-medium text-white"
               style={{ backgroundColor: values.primaryColor }}
             >
-              Primary button
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ backgroundColor: values.primaryColor + "22", color: values.primaryColor }}>
-                Sample badge
-              </span>
-            </div>
-            <p className="text-sm" style={{ color: values.accentColor }}>
-              Sample text in the accent color.
-            </p>
+              + New ticket
+            </span>
+          </div>
+          <div className="flex-1 p-3 space-y-2 overflow-hidden">
+            {PREVIEW_TICKETS.map((t) => (
+              <div
+                key={t.ref}
+                className="bg-white border border-[var(--color-neutral-200)] rounded-lg px-3 py-2 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-[9px] font-mono" style={{ color: values.primaryColor }}>
+                    {t.ref}
+                  </p>
+                  <p className="text-[10px] font-medium truncate">{t.title}</p>
+                </div>
+                <span
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[9px] font-medium"
+                  style={{ backgroundColor: values.accentColor + "1a", color: values.accentColor }}
+                >
+                  {t.status}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
