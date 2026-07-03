@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { prisma, withRls } from "@/lib/db";
 import { getSessionPayload, getImpersonationPayload } from "@/lib/session";
 import type { Role } from "@/generated/prisma";
@@ -26,7 +27,7 @@ export type SessionUser = {
  * admin's, so every audit-logged mutation made while impersonating still
  * attributes correctly to the real actor, not a tenant user that doesn't exist.
  */
-export async function getSessionUser(): Promise<SessionUser | null> {
+export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const payload = await getSessionPayload();
   if (!payload) return null;
 
@@ -82,7 +83,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     role: "ADMIN",
     isImpersonating: true,
   };
-}
+});
 
 export function roleAtLeast(role: Role, min: Role): boolean {
   const order: Role[] = ["CLIENT", "AGENT", "ADMIN", "SUPER_ADMIN"];

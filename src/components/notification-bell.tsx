@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   listNotifications,
-  getUnreadNotificationCount,
+  getNotificationSnapshot,
   markNotificationRead,
   markAllNotificationsRead,
 } from "@/actions/notifications";
@@ -59,22 +59,28 @@ export function NotificationBell({
   // it was just already there).
   const seenIds = useRef<Set<string> | null>(null);
 
-  const refreshCount = useCallback(() => {
-    getUnreadNotificationCount().then(setUnreadCount);
-  }, []);
-
-  // Separate from the dropdown's on-open fetch: this runs every POLL_MS
-  // regardless of whether the dropdown is open, purely to catch newly-arrived
-  // notifications and surface them as toasts (the "alert when a new
-  // notification comes in" requirement) — independent of the unread count.
-  const checkForNew = useCallback(async () => {
-    const latest = await listNotifications();
-    if (seenIds.current === null) {
-      // First check ever: just record what's already there, don't toast it.
-      seenIds.current = new Set(latest.map((n) => n.id));
+  // One poll = one server action = one DB transaction. This both refreshes the
+  // unread badge count AND detects newly-arrived notifications to toast, so the
+  // bell never fires two transactions racing for the same pooled connection
+  // (the old refreshCount + checkForNew pair was the main source of the P2028
+  // errors when opening/hitting notifications).
+  const poll = useCallback(async () => {
+    let snapshot;
+    try {
+      snapshot = await getNotificationSnapshot();
+    } catch {
+      // A transient network/DB hiccup shouldn't surface as an error toast on a
+      // background poll — just skip this tick; the next one recovers.
       return;
     }
-    const fresh = latest.filter((n) => !seenIds.current!.has(n.id));
+    setUnreadCount(snapshot.unreadCount);
+
+    if (seenIds.current === null) {
+      // First check ever: just record what's already there, don't toast it.
+      seenIds.current = new Set(snapshot.notifications.map((n) => n.id));
+      return;
+    }
+    const fresh = snapshot.notifications.filter((n) => !seenIds.current!.has(n.id));
     for (const n of fresh) {
       toast({ title: n.title, description: n.body ?? undefined, variant: "info" });
       seenIds.current.add(n.id);
@@ -82,14 +88,10 @@ export function NotificationBell({
   }, [toast]);
 
   useEffect(() => {
-    refreshCount();
-    checkForNew();
-    const interval = setInterval(() => {
-      refreshCount();
-      checkForNew();
-    }, POLL_MS);
+    poll();
+    const interval = setInterval(poll, POLL_MS);
     return () => clearInterval(interval);
-  }, [refreshCount, checkForNew]);
+  }, [poll]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {

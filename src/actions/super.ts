@@ -27,17 +27,20 @@ export async function listTenantsWithHealth() {
   const session = await requireHostSuperAdmin();
 
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    // Three fixed queries instead of 2N+1: the old per-tenant Promise.all fired
+    // a pair of counts concurrently for every tenant on the same interactive-tx
+    // connection — both an unsupported Prisma pattern and O(tenants) round-trips.
+    // groupBy rolls all the counts into one query each.
     const tenants = await tx.tenant.findMany({ orderBy: { createdAt: "asc" } });
-    const health = await Promise.all(
-      tenants.map(async (t) => {
-        const [userCount, ticketCount] = await Promise.all([
-          tx.user.count({ where: { tenantId: t.id } }),
-          tx.ticket.count({ where: { tenantId: t.id } }),
-        ]);
-        return { ...t, userCount, ticketCount };
-      })
-    );
-    return health;
+    const userCounts = await tx.user.groupBy({ by: ["tenantId"], _count: true });
+    const ticketCounts = await tx.ticket.groupBy({ by: ["tenantId"], _count: true });
+    const userByTenant = new Map(userCounts.map((u) => [u.tenantId, u._count]));
+    const ticketByTenant = new Map(ticketCounts.map((t) => [t.tenantId, t._count]));
+    return tenants.map((t) => ({
+      ...t,
+      userCount: userByTenant.get(t.id) ?? 0,
+      ticketCount: ticketByTenant.get(t.id) ?? 0,
+    }));
   });
 }
 

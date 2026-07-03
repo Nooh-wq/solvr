@@ -37,10 +37,25 @@ export async function withRls<T>(
   ctx: RlsContext,
   fn: (tx: Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">) => Promise<T>
 ): Promise<T> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantId}, true)`;
-    await tx.$executeRaw`SELECT set_config('app.user_id', ${ctx.userId ?? ""}, true)`;
-    await tx.$executeRaw`SELECT set_config('app.role', ${ctx.role ?? ""}, true)`;
-    return fn(tx);
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      // All three RLS session vars are set in a single round-trip. Doing them
+      // as three sequential $executeRaw calls tripled the time each connection
+      // was held open just for setup — under the pooler's limited connection
+      // budget that widened the window for concurrent requests to collide and
+      // time out (P2028). set_config(..., true) scopes each to this tx.
+      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantId}, true), set_config('app.user_id', ${ctx.userId ?? ""}, true), set_config('app.role', ${ctx.role ?? ""}, true)`;
+      return fn(tx);
+    },
+    {
+      // Defaults (maxWait 2s / timeout 5s) are too tight once requests queue on
+      // a small pooled connection budget across regions: a caller waiting for a
+      // free connection would give up after 2s and throw "Unable to start a
+      // transaction in the given time" (P2028) even though it would have
+      // succeeded moments later. These give real headroom without masking a
+      // genuinely stuck query.
+      maxWait: 15_000,
+      timeout: 20_000,
+    }
+  );
 }

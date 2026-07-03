@@ -328,11 +328,15 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
       }
       if (data.assignedToId !== undefined && data.assignedToId !== ticket.assignedToId) {
         // Store the agents' names (not their raw IDs) so the audit log reads
-        // "Unassigned → Jordan Reyes" rather than a meaningless cuid.
-        const [fromAgent, toAgent] = await Promise.all([
-          ticket.assignedToId ? tx.user.findUnique({ where: { id: ticket.assignedToId }, select: { name: true } }) : null,
-          data.assignedToId ? tx.user.findUnique({ where: { id: data.assignedToId }, select: { name: true } }) : null,
-        ]);
+        // "Unassigned → Jordan Reyes" rather than a meaningless cuid. Sequential
+        // (not Promise.all): concurrent queries on one interactive-tx client are
+        // unsupported by Prisma.
+        const fromAgent = ticket.assignedToId
+          ? await tx.user.findUnique({ where: { id: ticket.assignedToId }, select: { name: true } })
+          : null;
+        const toAgent = data.assignedToId
+          ? await tx.user.findUnique({ where: { id: data.assignedToId }, select: { name: true } })
+          : null;
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
