@@ -25,6 +25,11 @@ export function InviteUserForm() {
           email: String(formData.get("email")),
           role: formData.get("role") as "CLIENT" | "AGENT" | "ADMIN",
         });
+        if (!result.ok) {
+          setError(result.error);
+          toast({ title: "Couldn't send invite", description: result.error, variant: "error" });
+          return;
+        }
         setTempPassword(result.tempPassword);
         toast({ title: "Invite sent", description: `${name} can now log in.`, variant: "success" });
         router.refresh();

@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const inviteUserSchema = z.object({
-  name: z.string().min(1).max(120),
-  email: z.string().email(),
+  name: z.string().trim().min(1, "Enter a name.").max(120, "Name is too long."),
+  email: z.string().trim().email("Enter a valid email address (e.g. name@company.com)."),
   role: z.enum(["CLIENT", "AGENT", "ADMIN"]),
   company: z.string().max(120).optional(),
 });
@@ -18,9 +18,21 @@ export const updateUserSchema = z.object({
 
 export const userIdSchema = z.object({ userId: z.string().cuid() });
 
+// Letters (any language), digits, spaces, and a small set of punctuation
+// that shows up in real category names ("Bugs & Fixes", "Tier-1 Support",
+// "Billing/Invoices"). Rejects strings made entirely of symbols
+// (e.g. "&^#@@^$*@@%") since it requires at least one letter.
+const CATEGORY_NAME_CHARSET = /^[\p{L}\p{N} &'/.,()-]+$/u;
+
 export const upsertCategorySchema = z.object({
   id: z.string().cuid().optional(),
-  name: z.string().min(1).max(60),
+  name: z
+    .string()
+    .trim()
+    .min(2, "Category name must be at least 2 characters.")
+    .max(60, "Category name is too long (max 60 characters).")
+    .regex(CATEGORY_NAME_CHARSET, "Category name can only contain letters, numbers, spaces, and & ' / . , ( ) -")
+    .refine((v) => /\p{L}/u.test(v), "Category name must contain at least one letter."),
   isActive: z.boolean().default(true),
 });
 

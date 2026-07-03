@@ -41,39 +41,60 @@ export async function listPendingUsers() {
   );
 }
 
+type InviteUserResult = { ok: true; tempPassword: string } | { ok: false; error: string };
+
 /** Admin creates a user directly (no external invite-acceptance flow yet) with a generated temp password. Admin-invited users skip the registration approval gate — the admin creating them *is* the approval. */
-export async function inviteUser(input: z.infer<typeof inviteUserSchema>) {
+export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promise<InviteUserResult> {
   const session = await requireSession({ minRole: "ADMIN" });
-  const data = inviteUserSchema.parse(input);
+
+  // safeParse (not .parse) so a validation failure — e.g. the native <input
+  // type="email"> lets through addresses like "te@e" that HTML5 accepts but
+  // Zod rejects — returns a specific, user-facing message instead of
+  // throwing. A thrown error from a Server Action gets its message redacted
+  // by Next.js in production ("An error occurred in the Server Components
+  // render..."), which is what was surfacing here.
+  const parsed = inviteUserSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
+
   const tempPassword = generateTempPassword();
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  const { user, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
-    async (tx) => {
-      const existing = await tx.user.findUnique({
-        where: { tenantId_email: { tenantId: session.tenantId, email: data.email } },
-      });
-      if (existing) throw new Error("An account with this email already exists.");
+  let user: { id: string; email: string };
+  let branding: Awaited<ReturnType<typeof getBranding>>;
+  try {
+    ({ user, branding } = await withRls(
+      { tenantId: session.tenantId, userId: session.id, role: session.role },
+      async (tx) => {
+        const existing = await tx.user.findUnique({
+          where: { tenantId_email: { tenantId: session.tenantId, email: data.email } },
+        });
+        if (existing) throw new Error("EXISTS");
 
-      const user = await tx.user.create({
-        data: {
-          tenantId: session.tenantId,
-          name: data.name,
-          email: data.email,
-          role: data.role,
-          company: data.company,
-          passwordHash,
-          status: "ACTIVE",
-        },
-      });
-      await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_USER", toValue: user.email },
-      });
-      const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { user, branding };
+        const user = await tx.user.create({
+          data: {
+            tenantId: session.tenantId,
+            name: data.name,
+            email: data.email,
+            role: data.role,
+            company: data.company,
+            passwordHash,
+            status: "ACTIVE",
+          },
+        });
+        await tx.auditLog.create({
+          data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_USER", toValue: user.email },
+        });
+        const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+        return { user, branding };
+      }
+    ));
+  } catch (e) {
+    if (e instanceof Error && e.message === "EXISTS") {
+      return { ok: false, error: "An account with this email already exists." };
     }
-  );
+    throw e;
+  }
 
   await sendAgentInviteEmail(user.email, tempPassword, branding);
 
@@ -194,9 +215,17 @@ export async function listAllCategories() {
   );
 }
 
-export async function upsertCategory(input: z.infer<typeof upsertCategorySchema>) {
+export async function upsertCategory(
+  input: z.infer<typeof upsertCategorySchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession({ minRole: "ADMIN" });
-  const data = upsertCategorySchema.parse(input);
+
+  // safeParse: a rejected name (garbage/symbols-only, wrong charset, etc.)
+  // needs to reach the client as a specific message — a thrown ZodError gets
+  // redacted by Next.js in production into a generic, useless message.
+  const parsed = upsertCategorySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid category name." };
+  const data = parsed.data;
 
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
     if (data.id) {
@@ -204,7 +233,7 @@ export async function upsertCategory(input: z.infer<typeof upsertCategorySchema>
         where: { id: data.id, tenantId: session.tenantId },
         data: { name: data.name, isActive: data.isActive },
       });
-      if (category.count === 0) throw new Error("NOT_FOUND");
+      if (category.count === 0) return { ok: false, error: "Category not found." };
     } else {
       await tx.category.create({
         data: { tenantId: session.tenantId, name: data.name, isActive: data.isActive },
