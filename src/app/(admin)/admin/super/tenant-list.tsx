@@ -62,7 +62,7 @@ export function TenantList({ tenants }: { tenants: Tenant[] }) {
         <tbody>
           {tenants.map((t) => (
             <tr key={t.id} className="border-t border-[var(--color-neutral-100)]">
-              <td className="px-4 py-3">
+              <td className="px-4 py-3 whitespace-nowrap">
                 <span className="font-medium">{t.name}</span>
                 <span className="text-[var(--color-neutral-600)] font-mono text-[11px] ml-2">{t.slug}</span>
               </td>

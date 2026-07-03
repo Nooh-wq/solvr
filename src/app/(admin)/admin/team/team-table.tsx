@@ -63,8 +63,8 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
         <tbody>
           {users.map((u) => (
             <tr key={u.id} className="border-t border-[var(--color-neutral-100)]">
-              <td className="px-4 py-3">{u.name}</td>
-              <td className="px-4 py-3 text-[var(--color-neutral-600)]">{u.email}</td>
+              <td className="px-4 py-3 whitespace-nowrap">{u.name}</td>
+              <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
               <td className="px-4 py-3">
                 <Select
                   value={u.role}

@@ -102,7 +102,7 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
         status: f.status,
         priority: f.priority,
         categoryId: f.categoryId,
-        assignedToId: f.assignedToId === "unassigned" ? null : f.assignedToId,
+        assignedToId: f.assignedToId === "unassigned" ? null : f.assignedToId || undefined,
         ...(f.search
           ? {
               OR: [
