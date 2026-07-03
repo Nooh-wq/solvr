@@ -1,0 +1,371 @@
+// Stralis Ticketing System — data model
+// See: Stralis_Ticketing_TRD.md §3, Stralis_Build_Spec.md §B-3
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+  // "native" = the dev machine; "debian-openssl-3.0.x" is for the Docker
+  // image (node:*-bookworm-slim, AWS/Azure container option); "rhel-openssl-3.0.x"
+  // is for Vercel's serverless functions (Amazon Linux 2023 runtime). All
+  // three are generated so `prisma generate` at build time works everywhere
+  // this app might run. If you switch the Docker base image to Alpine,
+  // change debian-openssl-3.0.x to "linux-musl-openssl-3.0.x".
+  binaryTargets = ["native", "debian-openssl-3.0.x", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum TenantType {
+  INTERNAL
+  CLIENT
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+}
+
+enum Role {
+  CLIENT
+  AGENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+// PENDING: self-registered, awaiting a tenant admin's approval (see the
+// email flow design doc). ACTIVE: can log in. REJECTED/SUSPENDED: cannot —
+// distinguished so admins can tell "we said no" from "was deactivated later".
+enum UserStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SenderRole {
+  CLIENT
+  AGENT
+  ADMIN
+  SYSTEM
+  BOT
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id           String       @id @default(cuid())
+  name         String
+  slug         String       @unique
+  type         TenantType   @default(CLIENT)
+  status       TenantStatus @default(ACTIVE)
+  customDomain String?      @unique
+  createdAt    DateTime     @default(now())
+
+  branding      TenantBranding?
+  chatbotConfig ChatbotConfig?
+  users         User[]
+  tickets       Ticket[]
+  categories    Category[]
+  kbArticles    KbArticle[]
+  chatConversations ChatConversation[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@map("tenants")
+}
+
+model TenantBranding {
+  tenantId      String  @id
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logoUrl       String?
+  faviconUrl    String?
+  primaryColor  String  @default("#FF6A00")
+  accentColor   String  @default("#000000")
+  productName   String  @default("Support")
+  // The tenant's one dedicated inbound support address (e.g.
+  // support@acme.com) — inbound webhook matches on this to route an email
+  // to the right tenant before any ticket/user exists. Unique so two
+  // tenants can never claim the same inbound mailbox.
+  supportEmail   String? @unique
+  // Provider-side inbound route/webhook id (Resend inbound route), stored
+  // for reference/cleanup — not read by the app at request time.
+  inboundRouteId String?
+  emailFromName String?
+  emailDomain   String?
+  customCss     String?
+
+  @@map("tenant_branding")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  passwordHash String // bcrypt. TODO(decision): swap to Supabase Auth (or another provider) before production.
+  name         String
+  email        String
+  role         Role     @default(CLIENT)
+  company      String?
+  status       UserStatus @default(PENDING)
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  // Set whenever the password changes. Any session JWT issued (iat) before
+  // this instant is rejected in getSessionUser(), so a password change
+  // invalidates all *other* existing sessions (the changing session is
+  // re-issued a fresh cookie). See src/lib/auth.ts + src/actions/profile.ts.
+  passwordChangedAt DateTime?
+
+  tickets       Ticket[]      @relation("ClientTickets")
+  assigned      Ticket[]      @relation("AssignedAgent")
+  messages      Message[]
+  chatConversations ChatConversation[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Category {
+  id       String  @id @default(cuid())
+  tenantId String
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  isActive Boolean @default(true)
+  tickets  Ticket[]
+
+  @@unique([tenantId, name])
+  @@map("categories")
+}
+
+// ---------------------------------------------------------------------------
+// Tickets
+// ---------------------------------------------------------------------------
+
+model Ticket {
+  id           String       @id @default(cuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reference    String
+  // Short numeric id (e.g. "12707664") embedded in every notification
+  // subject as "[#12707664]" — kept separate from `reference` because email
+  // clients mangle subject lines, so inbound reply-matching needs the
+  // simplest possible token to regex out. Globally unique (not per-tenant)
+  // since the inbound webhook doesn't know the tenant until it's resolved
+  // the ticket this number belongs to.
+  ticketNumber String       @unique
+  // Message-ID of the last outbound notification for this ticket, so a
+  // client's email reply can thread back via In-Reply-To/References as a
+  // fallback when the subject tag itself got stripped.
+  emailMessageId String?
+  title        String
+  description  String
+  status       TicketStatus @default(OPEN)
+  priority     Priority     @default(MEDIUM)
+  categoryId   String?
+  category     Category?    @relation(fields: [categoryId], references: [id])
+  clientId     String
+  client       User         @relation("ClientTickets", fields: [clientId], references: [id])
+  assignedToId String?
+  assignedTo   User?        @relation("AssignedAgent", fields: [assignedToId], references: [id])
+  source       String       @default("portal") // portal | chatbot | email
+  firstReplyAt DateTime?
+  resolvedAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  messages    Message[]
+  attachments Attachment[]
+  auditLogs   AuditLog[]
+  chatConversations ChatConversation[]
+  notifications Notification[]
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status, priority])
+  @@map("tickets")
+}
+
+model Message {
+  id         String     @id @default(cuid())
+  tenantId   String
+  ticketId   String
+  ticket     Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId   String?
+  sender     User?      @relation(fields: [senderId], references: [id])
+  senderRole SenderRole
+  body       String
+  isInternal Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+
+  @@index([tenantId, ticketId])
+  @@map("messages")
+}
+
+model Attachment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  ticketId   String
+  ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fileUrl    String
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  uploadedAt DateTime @default(now())
+
+  @@index([tenantId, ticketId])
+  @@map("attachments")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId  String?
+  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  action    String // STATUS_CHANGE | PRIORITY_CHANGE | ASSIGN | REPLY | REOPEN | ...
+  fromValue String?
+  toValue   String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, ticketId])
+  @@map("audit_logs")
+}
+
+// In-app notification bell (nav-bar.tsx). Deliberately separate from the
+// email system (lib/email/) — a notification is a personal, per-user inbox
+// item ("you were assigned a ticket"), not a tenant-wide log like AuditLog
+// or an outbound message like the email templates. Written via createMany()
+// everywhere (see lib/notifications.ts), never .create() — Prisma's
+// .create() always does an implicit RETURNING checked against SELECT
+// policies, and the actor creating a notification (e.g. a client replying)
+// is essentially never the same user as the notification's recipient (the
+// assigned agent), so that RETURNING check would fail under RLS the same
+// way the audit_logs one originally did (see rls_policies.sql). createMany()
+// has no RETURNING, sidestepping the problem entirely — we don't need the
+// created row back anyway.
+model Notification {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String // TICKET_REPLY | STATUS_CHANGE | ASSIGNED | REGISTRATION_PENDING | REGISTRATION_APPROVED | REGISTRATION_REJECTED
+  title     String
+  body      String?
+  ticketId  String?
+  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// AI / Knowledge base / Chatbot
+// ---------------------------------------------------------------------------
+
+model KbArticle {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  isPublished Boolean   @default(false)
+  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime  @default(now())
+  chunks      KbChunk[]
+
+  @@index([tenantId])
+  @@map("kb_articles")
+}
+
+model KbChunk {
+  id        String    @id @default(cuid())
+  tenantId  String
+  articleId String
+  article   KbArticle @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  content   String
+  // TODO(decision): swap to pgvector `vector(1536)` once the AI/M5 milestone
+  // is built and a Postgres with the pgvector extension is provisioned.
+  // Storing as a plain float array keeps local dev unblocked without it.
+  embedding Json?
+
+  @@index([tenantId])
+  @@map("kb_chunks")
+}
+
+model ChatbotConfig {
+  tenantId      String  @id
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  isEnabled     Boolean @default(true)
+  persona       String  @default("a friendly support assistant")
+  systemPrompt  String?
+  deflectFirst  Boolean @default(true)
+  escalateAfter Int     @default(3)
+  allowedTopics String?
+
+  @@map("chatbot_configs")
+}
+
+model ChatConversation {
+  id        String        @id @default(cuid())
+  tenantId  String
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id])
+  status    String        @default("active") // active | escalated | closed
+  ticketId  String?
+  ticket    Ticket?       @relation(fields: [ticketId], references: [id])
+  createdAt DateTime      @default(now())
+  messages  ChatMessage[]
+
+  @@index([tenantId])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           SenderRole
+  body           String
+  citations      Json?
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId])
+  @@map("chat_messages")
+}

@@ -1,0 +1,141 @@
+// Small inline icon set (Heroicons-outline style, 20x20 viewBox, stroke-based)
+// used by the sidebar nav — kept in one file so every icon shares the same
+// stroke width / sizing convention.
+import type { SVGProps } from "react";
+
+type IconProps = SVGProps<SVGSVGElement>;
+
+const base = {
+  viewBox: "0 0 20 20",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.6,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+};
+
+export function HomeIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 8.5 10 3l7 5.5V16a1 1 0 0 1-1 1h-3.5v-5h-5v5H4a1 1 0 0 1-1-1V8.5Z" />
+    </svg>
+  );
+}
+
+export function TicketIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 8a2 2 0 0 0 0 4v2.5A1.5 1.5 0 0 0 4.5 16h11a1.5 1.5 0 0 0 1.5-1.5V12a2 2 0 0 1 0-4V5.5A1.5 1.5 0 0 0 15.5 4h-11A1.5 1.5 0 0 0 3 5.5V8Z" />
+      <path d="M8 4v12" strokeDasharray="1.6 1.6" />
+    </svg>
+  );
+}
+
+export function PlusIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 4v12M4 10h12" />
+    </svg>
+  );
+}
+
+export function UsersIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="7" cy="7" r="2.5" />
+      <path d="M2.5 16c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" />
+      <circle cx="14" cy="8" r="2" />
+      <path d="M13 12c1.9.1 3.5 1.4 3.5 4" />
+    </svg>
+  );
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10.5 3.5h4a1 1 0 0 1 1 1v4a1 1 0 0 1-.3.7l-7 7a1 1 0 0 1-1.4 0l-4.5-4.5a1 1 0 0 1 0-1.4l7-7a1 1 0 0 1 .7-.3Z" />
+      <circle cx="13.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function PaletteIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 3a7 7 0 1 0 0 14h.5a1.5 1.5 0 0 0 1.5-1.5c0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.8.7-1.5 1.5-1.5H14a3 3 0 0 0 3-3c0-3.3-3.1-5.6-7-5.6Z" />
+      <circle cx="6.5" cy="9" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="6.5" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="7.5" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function BookIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 4.5c2-1 4.7-1 6 0v11c-1.3-1-4-1-6 0v-11Z" />
+      <path d="M16 4.5c-2-1-4.7-1-6 0v11c1.3-1 4-1 6 0v-11Z" />
+    </svg>
+  );
+}
+
+export function ClipboardIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="5" y="4" width="10" height="13" rx="1.2" />
+      <path d="M7.5 4V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1" />
+      <path d="M7.5 9h5M7.5 12h5" />
+    </svg>
+  );
+}
+
+export function ShieldIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 2.5 16 5v5c0 4-2.5 6.5-6 7.5-3.5-1-6-3.5-6-7.5V5l6-2.5Z" />
+      <path d="M7.5 10 9 11.5l3.5-3.5" />
+    </svg>
+  );
+}
+
+export function BellIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M15 8a5 5 0 0 0-10 0c0 5.8-2.5 7.5-2.5 7.5h15S15 13.8 15 8Z" />
+      <path d="M11.4 17.5a1.7 1.7 0 0 1-2.9 0" />
+    </svg>
+  );
+}
+
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12.5 4.5 6.5 10l6 5.5" />
+    </svg>
+  );
+}
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+    </svg>
+  );
+}
+
+export function ChatIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 4.5h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8l-3.5 3v-3H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" />
+      <path d="M7 8h6M7 10.5h4" />
+    </svg>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 5l10 10M15 5 5 15" />
+    </svg>
+  );
+}

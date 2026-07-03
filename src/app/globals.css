@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/*
+  Tenant theming: every color below is a CSS variable so a tenant's
+  TenantBranding record can override it at runtime (see lib/tenant.ts).
+  Defaults are the Stralis brand (host tenant).
+*/
+:root {
+  /* Stralis core palette */
+  --color-black: #000000;
+  --color-white: #ffffff;
+  --color-mid-gray: #aeaeae;
+  --color-light-gray: #ebebeb;
+  --color-orange: #ff6a00;
+
+  /* Tonal ramps */
+  --color-orange-wash: #291100;
+  --color-orange-deep: #cc5500;
+  --color-orange-core: #ff6a00;
+  --color-orange-bright: #ff8f40;
+  --color-orange-pale: #fff2e8;
+
+  --color-neutral-900: #1a1a1a;
+  --color-neutral-700: #333333;
+  --color-neutral-600: #4c4c4c;
+  --color-neutral-400: #aeaeae;
+  --color-neutral-300: #cccccc;
+  --color-neutral-100: #ebebeb;
+
+  /* Tenant-overridable theme tokens (TenantBranding) */
+  --color-primary: var(--color-orange);
+  --color-primary-hover: var(--color-orange-deep);
+  --color-accent: var(--color-black);
+
+  --background: #ffffff;
+  --foreground: #000000;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
+  --color-accent: var(--color-accent);
+  --color-orange: var(--color-orange);
+  --color-orange-wash: var(--color-orange-wash);
+  --color-orange-deep: var(--color-orange-deep);
+  --color-orange-core: var(--color-orange-core);
+  --color-orange-bright: var(--color-orange-bright);
+  --color-orange-pale: var(--color-orange-pale);
+  --color-neutral-900: var(--color-neutral-900);
+  --color-neutral-700: var(--color-neutral-700);
+  --color-neutral-600: var(--color-neutral-600);
+  --color-neutral-400: var(--color-neutral-400);
+  --color-neutral-300: var(--color-neutral-300);
+  --color-neutral-100: var(--color-neutral-100);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Sentence case everywhere per brand voice rules; opt back into caps with .uppercase-label */
+.uppercase-label {
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------------
+   Premium/glass polish — reuses the existing palette only (no new hues),
+   just translucency, blur, and motion. See src/components/sidebar.tsx,
+   notification-bell.tsx, user-menu.tsx for where these get used.
+   ------------------------------------------------------------------- */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* App-shell background behind the sidebar-based layouts: two soft, fixed
+   glows in the brand primary/accent colors over the existing light-gray
+   base — depth without introducing new colors. */
+.app-shell-bg {
+  background-color: var(--color-light-gray);
+  background-image:
+    radial-gradient(560px circle at 0% 0%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 60%),
+    radial-gradient(480px circle at 100% 100%, color-mix(in srgb, var(--color-accent) 6%, transparent), transparent 55%);
+  background-attachment: fixed;
+}
+
+.glass-panel {
+  background-color: rgb(255 255 255 / 0.82);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgb(255 255 255 / 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
