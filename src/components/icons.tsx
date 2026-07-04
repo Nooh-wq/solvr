@@ -194,3 +194,12 @@ export function PaperclipIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function MailIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="5" width="14" height="10" rx="1.5" />
+      <path d="m3.5 6 6.5 5 6.5-5" />
+    </svg>
+  );
+}
