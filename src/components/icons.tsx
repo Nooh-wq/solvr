@@ -168,3 +168,29 @@ export function CloseIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function SparklesIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 3.2 11.3 7 15 8.3 11.3 9.6 10 13.4 8.7 9.6 5 8.3 8.7 7 10 3.2Z" />
+      <path d="M15.5 12.5 16 14l1.5.5-1.5.5L15.5 16.5 15 15l-1.5-.5L15 14l.5-1.5Z" />
+    </svg>
+  );
+}
+
+export function SearchIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="8.5" cy="8.5" r="5" />
+      <path d="m16 16-3.8-3.8" />
+    </svg>
+  );
+}
+
+export function PaperclipIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M15 8.5 9.3 14.2a2.5 2.5 0 0 1-3.5-3.5l6-6a1.7 1.7 0 0 1 2.4 2.4l-6 6a0.9 0.9 0 0 1-1.3-1.3l5.3-5.3" />
+    </svg>
+  );
+}

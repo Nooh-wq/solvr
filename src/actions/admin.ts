@@ -368,12 +368,50 @@ export async function getReportStats() {
           )
         : null;
 
+    // 30-day daily series for the "tickets over time" chart. Two lightweight
+    // queries (created and resolved separately, since a ticket resolved in the
+    // window may have been created before it) bucketed by local calendar day.
+    const DAYS = 30;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - (DAYS - 1));
+
+    const createdRows = await tx.ticket.findMany({
+      where: { tenantId, createdAt: { gte: start } },
+      select: { createdAt: true },
+    });
+    const resolvedRows = await tx.ticket.findMany({
+      where: { tenantId, resolvedAt: { gte: start } },
+      select: { resolvedAt: true },
+    });
+
+    const dayKey = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      return x.toISOString().slice(0, 10);
+    };
+    const createdByDay = new Map<string, number>();
+    for (const r of createdRows) createdByDay.set(dayKey(r.createdAt), (createdByDay.get(dayKey(r.createdAt)) ?? 0) + 1);
+    const resolvedByDay = new Map<string, number>();
+    for (const r of resolvedRows) {
+      if (!r.resolvedAt) continue;
+      resolvedByDay.set(dayKey(r.resolvedAt), (resolvedByDay.get(dayKey(r.resolvedAt)) ?? 0) + 1);
+    }
+
+    const dailySeries = Array.from({ length: DAYS }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      return { date: key, created: createdByDay.get(key) ?? 0, resolved: resolvedByDay.get(key) ?? 0 };
+    });
+
     return {
       total,
       unassigned,
       byStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count])),
       byPriority: Object.fromEntries(byPriority.map((p) => [p.priority, p._count])),
       avgFirstResponseHours,
+      dailySeries,
     };
   });
 }
