@@ -39,7 +39,8 @@ secrets / App Service application settings). **Never** bake them into the image.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key | Public-safe |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service key | Server-only — image uploads |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Upstash (§3) | Real rate limiting |
-| `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET` | Resend (§5) | Outbound + inbound email |
+| `AWS_SES_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Amazon SES (§6) | Outbound email. Omit the key pair if the host has an IAM task role with `ses:SendEmail` instead |
+| `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET` | Resend (§6) | Inbound email-to-ticket only |
 | `ANTHROPIC_API_KEY` | **rotated** key | AI copilot + chatbot. Rotate the one pasted in chat. |
 | `APP_BASE_DOMAIN` | e.g. `solvr.app` | For `<slug>.solvr.app` tenant routing |
 | `NEXT_PUBLIC_SITE_URL` | e.g. `https://app.solvr.app` | Absolute URLs in emails |
@@ -117,14 +118,71 @@ The container listens on **port 3000** (`PORT`/`HOSTNAME` are set in the image).
 
 ---
 
-## 6. Email (Resend)
+## 6. Email
 
-1. **Verify your sending domain** in Resend (DNS records) so outbound ticket
-   emails don't land in spam. Set `DEFAULT_EMAIL_DOMAIN` accordingly.
-2. **Inbound (email-to-ticket):** add a Resend inbound route/webhook subscribed
-   to `email.received`, pointing at
-   `https://<your-domain>/api/webhooks/email-inbound`. Copy its signing secret
-   into `RESEND_WEBHOOK_SECRET`. The endpoint rejects unsigned requests.
+Outbound (ticket notifications, invites, OTP codes, password resets) goes
+through **Amazon SES**. Inbound (email-to-ticket) is unrelated infra and
+still goes through **Resend** (§6b) — SES inbound needs its own MX/S3/SNS
+setup, out of scope here. Setting up SES does **not** touch your domain's MX
+record, so it has no effect on Microsoft 365 or any other mailbox you already
+have on the same domain — SES only needs DNS records for sending
+verification (DKIM/SPF), not mail routing.
+
+### 6a. Amazon SES (outbound) — from scratch
+
+1. **Pick a region.** SES is regional — open the
+   [SES console](https://console.aws.amazon.com/ses/) in the region you'll
+   use (e.g. `us-east-1`), and set `AWS_SES_REGION` to match.
+2. **Verify a sending identity.** SES console → *Identities* → *Create
+   identity* → *Domain* → enter the domain (or dedicated subdomain, e.g.
+   `mail.<yourdomain>`) you'll send `from`. Enable **Easy DKIM** (2048-bit).
+3. **Add the DNS records SES shows you** (3 DKIM `CNAME` records) at your DNS
+   provider. This is additive — it doesn't replace or touch your existing
+   MX/SPF records for M365 or any other mailbox on the domain.
+4. **Wait for verification** — the identity flips to "Verified" once DNS
+   propagates (usually minutes, occasionally longer).
+5. **Request production access** — SES console → *Account dashboard* →
+   *Request production access*. New accounts start in the **SES sandbox**,
+   which only sends to individually-verified addresses; you must exit it
+   before real users can receive email. The form asks for a use case
+   (describe: transactional ticket/notification emails) and expected volume —
+   approval is often near-instant, sometimes up to 24h.
+6. **Create credentials:**
+   - *Local dev:* IAM → *Users* → *Create user* → attach a policy scoped to
+     `ses:SendEmail` + `ses:SendRawEmail` (the AWS-managed `AmazonSESFullAccess`
+     works too, just broader) → *Security credentials* → *Create access key*.
+     Set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in `.env`.
+   - *Production (App Runner/ECS):* prefer an **IAM task role** with the same
+     `ses:SendEmail` permission attached to the service/task definition
+     instead of static keys — leave `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
+     unset and only set `AWS_SES_REGION`; the SDK's default credential
+     provider chain picks up the task role automatically (see
+     `src/lib/email/ses.ts`). No long-lived secret to rotate.
+7. Set `DEFAULT_EMAIL_DOMAIN` to the verified domain from step 2.
+8. **Test:** create a ticket or invite a user and confirm the email arrives;
+   SES console → *Reputation & sending health* shows delivery stats.
+
+Minimal IAM policy for the send-only credentials:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["ses:SendEmail", "ses:SendRawEmail"], "Resource": "*" }
+  ]
+}
+```
+
+### 6b. Inbound email-to-ticket (Resend)
+
+1. **Verify your sending domain** in Resend (DNS records) — used only for
+   receiving here, not sending. Set an admin/tenant's support address
+   (`/admin/branding`'s "Support email" field) to an address on that domain.
+2. Add a Resend inbound route/webhook subscribed to `email.received`,
+   pointing at `https://<your-domain>/api/webhooks/email-inbound`. Copy its
+   signing secret into `RESEND_WEBHOOK_SECRET`, and set `RESEND_API_KEY`
+   (needed to fetch a received email's body). The endpoint rejects unsigned
+   requests.
 
 ## 6b. Error tracking (Sentry)
 
@@ -158,7 +216,7 @@ The container listens on **port 3000** (`PORT`/`HOSTNAME` are set in the image).
 1. Load `https://app.<domain>/auth/login` → renders, security headers present
    (`curl -I`).
 2. Log in as an admin → dashboard loads.
-3. Create a portal ticket → confirmation email arrives (Resend live).
+3. Create a portal ticket → confirmation email arrives (SES live).
 4. Change your password → other sessions log out, current stays in.
 5. Use "Forgot password" → email arrives, link sets a new password and logs
    you in, and re-using the same link is rejected as "already been used".

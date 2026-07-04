@@ -3,9 +3,11 @@ import { render } from "@react-email/components";
 import { TicketNotificationEmail } from "./templates/ticket-notification";
 import { SystemNoticeEmail } from "./templates/system-notice";
 import { inngest } from "@/lib/inngest/client";
+import { sesClient, sendViaSes } from "./ses";
 import type { TenantBranding } from "@/generated/prisma";
 
-// Exported so the inbound webhook (lib/email/inbound-handler.ts) can call
+// Inbound-only now — outbound sending goes through SES (see ./ses). Exported
+// so the inbound webhook (lib/email/inbound-handler.ts) can call
 // resend.emails.receiving.get() to fetch a received email's body — the
 // webhook payload itself only carries metadata (see resend's
 // ReceivedEmailEventData type), not text/html.
@@ -20,13 +22,13 @@ function fromAddress(branding: TenantBranding | null) {
   // haven't set one up yet.
   if (branding?.supportEmail) return `${fromName} <${branding.supportEmail}>`;
   const fromDomain = branding?.emailDomain ?? process.env.DEFAULT_EMAIL_DOMAIN ?? "stralis.app";
-  return `${fromName} <support@${fromDomain}>`;
+  return `${fromName} <help@${fromDomain}>`;
 }
 
 /**
- * Degrades to a console log instead of throwing when RESEND_API_KEY isn't
- * set, so whatever triggered this never fails because of email (§10 NFR:
- * "email failures degrade gracefully").
+ * Degrades to a console log instead of throwing when SES isn't configured
+ * (AWS_SES_REGION unset), so whatever triggered this never fails because of
+ * email (§10 NFR: "email failures degrade gracefully").
  *
  * On a real send failure, queues an Inngest retry (src/lib/inngest/functions/retry-email.ts)
  * instead of just logging and giving up — that function gets 3 automatic
@@ -36,13 +38,13 @@ function fromAddress(branding: TenantBranding | null) {
  * mutation that triggered this" principle as the rest of this file).
  */
 async function deliver(to: string, subject: string, html: string, branding: TenantBranding | null): Promise<{ ok: boolean; skipped?: boolean }> {
-  if (!resend) {
-    console.log(`[email:skipped, no RESEND_API_KEY] to=${to} subject="${subject}"`);
+  if (!sesClient) {
+    console.log(`[email:skipped, SES not configured] to=${to} subject="${subject}"`);
     return { ok: true, skipped: true };
   }
   const from = fromAddress(branding);
   try {
-    await resend.emails.send({ from, to, subject, html });
+    await sendViaSes(from, to, subject, html);
     return { ok: true };
   } catch (err) {
     console.error("[email:send failed, queuing retry]", err);

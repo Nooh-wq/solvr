@@ -158,9 +158,10 @@ Admin accounts redirect to `/admin` on login, Super Admin to `/admin/super`
   `src/actions/tickets.ts` (Open → In Progress → Pending → Resolved → Closed,
   with reopen), AuditLog on every mutation, internal notes hidden from
   clients, client portal + agent queue/detail UI.
-- **Email**: `src/lib/email/` — Resend + React Email templates for ticket
-  created/replied/status-changed/agent-invite, tenant-branded sender,
-  degrades to a console log without `RESEND_API_KEY`.
+- **Email**: `src/lib/email/` — Amazon SES (outbound) + React Email templates
+  for ticket created/replied/status-changed/agent-invite, tenant-branded
+  sender, degrades to a console log without `AWS_SES_REGION` set. Inbound
+  (email-to-ticket) still goes through Resend — see "Email-to-ticket" below.
 - **Admin panel** (`src/actions/admin.ts`, `(admin)/admin/*`): invite/manage
   users and roles, categories CRUD, branding editor with live preview and a
   WCAG-AA contrast warning on save, audit log, ticket reports (status/priority
@@ -281,10 +282,14 @@ needs to see two stages for).
 
 ### 3. Inbound email (email-to-ticket)
 
+Inbound receiving still runs through Resend (separate from outbound sending,
+which is Amazon SES — see "Email" above and `src/lib/email/ses.ts`) since SES
+inbound needs its own MX/S3/SNS setup, not done in this build.
+
 **Not wired to a live mailbox yet** — `RESEND_API_KEY` and
 `RESEND_WEBHOOK_SECRET` are both unset in `.env`, so
 `/api/webhooks/email-inbound` accepts signature-verified requests but every
-event resolves to `"skipped: RESEND_API_KEY not configured"` (verified
+event resolves to `"skipped: could not fetch email body"` (verified
 during development by POSTing a hand-signed Svix payload at the route —
 same graceful-degradation pattern as the rest of email/AI in this build).
 To actually receive email:
@@ -297,9 +302,9 @@ To actually receive email:
 2. In the Resend dashboard, add a Webhook subscribed to the `email.received`
    event, pointing at `<NEXT_PUBLIC_SITE_URL>/api/webhooks/email-inbound`.
 3. Copy its signing secret into `RESEND_WEBHOOK_SECRET` in `.env`, and set
-   `RESEND_API_KEY` (needed both for outbound and to fetch a received
-   email's body via `resend.emails.receiving.get()` — the webhook payload
-   itself only carries metadata, not `text`/`html`, per Resend's SDK types).
+   `RESEND_API_KEY` (needed to fetch a received email's body via
+   `resend.emails.receiving.get()` — the webhook payload itself only carries
+   metadata, not `text`/`html`, per Resend's SDK types).
 
 Once configured, `src/lib/email/inbound-handler.ts` handles both cases from
 the design doc:
