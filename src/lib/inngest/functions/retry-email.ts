@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import { sesClient, sendViaSes } from "@/lib/email/ses";
 import { inngest } from "../client";
 
 export type EmailSendFailedEvent = {
@@ -17,18 +17,12 @@ export const retryEmailSend = inngest.createFunction(
   { id: "retry-email-send", retries: 3, triggers: { event: "email/send.failed" } },
   async ({ event, step }) => {
     await step.run("send-email", async () => {
-      if (!process.env.RESEND_API_KEY) {
-        // Nothing more we can do without a Resend key — don't retry forever.
-        console.log(`[email:retry skipped, no RESEND_API_KEY] to=${event.data.to} subject="${event.data.subject}"`);
+      if (!sesClient) {
+        // Nothing more we can do without SES configured — don't retry forever.
+        console.log(`[email:retry skipped, SES not configured] to=${event.data.to} subject="${event.data.subject}"`);
         return;
       }
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      await resend.emails.send({
-        from: event.data.from,
-        to: event.data.to,
-        subject: event.data.subject,
-        html: event.data.html,
-      });
+      await sendViaSes(event.data.from, event.data.to, event.data.subject, event.data.html);
     });
   }
 );
