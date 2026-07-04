@@ -20,9 +20,9 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
             <h1 className="text-2xl font-bold truncate">{ticket.title}</h1>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <PriorityLabel priority={ticket.priority} />
-            <StatusBadge status={ticket.status} />
+          <div className="flex items-center gap-2 shrink-0">
+            <PriorityLabel priority={ticket.priority} size="lg" />
+            <StatusBadge status={ticket.status} size="lg" />
           </div>
         </div>
 
@@ -37,10 +37,8 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             createdAt: m.createdAt.toISOString(),
             sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
           }))}
+          composer={<AgentReplyBox ticketId={ticket.id} />}
         />
-        <div className="mt-4">
-          <AgentReplyBox ticketId={ticket.id} />
-        </div>
       </div>
 
       <div className="lg:col-span-1">

@@ -70,10 +70,13 @@ export function TicketConversation({
   description,
   clientName,
   messages,
+  composer,
 }: {
   description: string;
   clientName: string;
   messages: ConversationMessage[];
+  /** Rendered pinned to the bottom of the same chat box, below a divider — keeps the reply field inside the conversation like a real chat app. */
+  composer?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [showInternal, setShowInternal] = useState(true);
@@ -180,6 +183,8 @@ export function TicketConversation({
           </div>
         ))}
       </div>
+
+      {composer && <div className="border-t border-black/5 p-3">{composer}</div>}
     </div>
   );
 }

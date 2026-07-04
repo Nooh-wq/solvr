@@ -20,7 +20,7 @@ export function TicketMessageList({ messages }: { messages: ThreadMessage[] }) {
         <div
           key={m.id}
           className={cn(
-            "rounded p-4 border text-sm",
+            "rounded-2xl p-4 border text-sm",
             m.isInternal
               ? "bg-[var(--color-orange-pale)] border-[var(--color-orange-core)]/30"
               : m.senderRole === "CLIENT"

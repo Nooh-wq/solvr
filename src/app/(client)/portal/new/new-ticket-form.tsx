@@ -33,7 +33,7 @@ export function NewTicketForm({ categories }: { categories: { id: string; name: 
   }
 
   return (
-    <form action={onSubmit} className="space-y-4 bg-white border border-[var(--color-neutral-300)] rounded p-6">
+    <form action={onSubmit} className="space-y-4 bg-white border border-[var(--color-neutral-300)] rounded-2xl p-6">
       <div className="space-y-1.5">
         <Label htmlFor="title">Title</Label>
         <Input id="title" name="title" required minLength={3} placeholder="Short summary of the issue" />

@@ -31,7 +31,7 @@ export function TicketThread({ messages, ticketId }: { messages: ThreadMessage[]
   return (
     <div>
       <TicketMessageList messages={messages} />
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded p-4">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-4 mt-4">
         <Textarea
           rows={3}
           placeholder="Reply to this ticket…"

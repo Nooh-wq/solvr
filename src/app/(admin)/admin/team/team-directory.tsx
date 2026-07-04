@@ -75,7 +75,7 @@ export function TeamDirectory({ users }: { users: TeamMember[] }) {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="bg-white border border-[var(--color-neutral-300)] rounded-xl p-10 text-center text-sm text-[var(--color-neutral-600)]">
+        <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-10 text-center text-sm text-[var(--color-neutral-600)]">
           No team members match these filters.
         </div>
       ) : (

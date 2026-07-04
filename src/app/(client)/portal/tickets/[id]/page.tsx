@@ -16,14 +16,14 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
           <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
           <h1 className="text-2xl font-bold">{ticket.title}</h1>
         </div>
-        <div className="flex items-center gap-3">
-          <PriorityLabel priority={ticket.priority} />
-          <StatusBadge status={ticket.status} />
+        <div className="flex items-center gap-2">
+          <PriorityLabel priority={ticket.priority} size="lg" />
+          <StatusBadge status={ticket.status} size="lg" />
         </div>
       </div>
       <p className="text-sm text-[var(--color-neutral-600)] mb-6">{ticket.category?.name ?? "Uncategorized"}</p>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5 mb-6">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5 mb-6">
         <p className="text-sm whitespace-pre-wrap">{ticket.description}</p>
       </div>
 

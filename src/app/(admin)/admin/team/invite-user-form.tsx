@@ -61,7 +61,7 @@ export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
         </div>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
         {tempPassword && (
-          <p className="text-[12px] bg-[var(--color-orange-pale)] p-2 rounded">
+          <p className="text-[12px] bg-[var(--color-orange-pale)] p-2 rounded-xl">
             Account created. Temporary password: <span className="font-mono font-semibold">{tempPassword}</span>
             {" — an invite email was also sent (or logged, if email isn't configured)."}
           </p>
@@ -75,7 +75,7 @@ export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
   if (embedded) return form;
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <h3 className="text-[13px] font-semibold mb-4">Invite someone</h3>
       {form}
     </div>
