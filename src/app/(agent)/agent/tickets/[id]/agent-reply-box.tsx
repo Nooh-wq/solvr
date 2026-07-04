@@ -29,7 +29,6 @@ export function AgentReplyBox({ ticketId, mentionNames = [] }: { ticketId: strin
   async function sendReply(body: string, attachmentIds: string[]) {
     try {
       await postAgentReply({ ticketId, body, isInternal: false, attachmentIds });
-      toast({ title: "Reply sent", variant: "success" });
       router.refresh();
     } catch (e) {
       toast({ title: "Couldn't send reply", description: e instanceof Error ? e.message : undefined, variant: "error" });

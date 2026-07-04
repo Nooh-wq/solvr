@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getTicket } from "@/actions/tickets";
+import { getTicket, getTicketMessages } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
@@ -36,6 +36,7 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
           clientName={ticket.client.name}
           ticketId={ticket.id}
           mentionNames={mentionNames}
+          onPoll={getTicketMessages.bind(null, ticket.id)}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,

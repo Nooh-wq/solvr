@@ -15,7 +15,6 @@ export function GuestReplyBox({ token, mentionNames = [] }: { token: string; men
       toast({ title: "Couldn't send reply", description: result.error, variant: "error" });
       return;
     }
-    toast({ title: "Reply sent", variant: "success" });
     router.refresh();
   }
 

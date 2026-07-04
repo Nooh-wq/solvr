@@ -164,6 +164,56 @@ export async function getTicket(ticketId: string) {
   return { ...ticket, messages, attachments };
 }
 
+/**
+ * Lighter sibling of getTicket() — just the messages, shaped exactly like
+ * ConversationThread's ConversationMessage, for the polling loop in
+ * conversation-thread.tsx (see its `onPoll` prop). Polled every few seconds
+ * while a ticket's detail page is open, so a reply from the other side shows
+ * up without a manual refresh; returning only messages (not the whole
+ * ticket + attachments + audit trail) keeps that frequent a query cheap.
+ */
+export async function getTicketMessages(ticketId: string) {
+  const session = await requireSession();
+
+  const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const t = await tx.ticket.findFirst({
+      where: { id: ticketId, tenantId: session.tenantId },
+      select: {
+        clientId: true,
+        messages: {
+          where: session.role === "CLIENT" ? { isInternal: false } : undefined,
+          orderBy: { createdAt: "asc" },
+          include: { sender: true, attachments: true },
+        },
+      },
+    });
+    if (!t) return null;
+    if (session.role === "CLIENT" && t.clientId !== session.id) return null;
+    return t;
+  });
+  if (!ticket) return null;
+
+  return Promise.all(
+    ticket.messages.map(async (m) => ({
+      id: m.id,
+      body: m.body,
+      senderRole: m.senderRole,
+      isInternal: m.isInternal,
+      createdAt: m.createdAt.toISOString(),
+      sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
+      attachments: await Promise.all(
+        m.attachments.map(async (a) => ({
+          id: a.id,
+          fileName: a.fileName,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
+        }))
+      ),
+    }))
+  );
+}
+
 const STATUS_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   OPEN: ["IN_PROGRESS"],
   IN_PROGRESS: ["PENDING", "RESOLVED"],

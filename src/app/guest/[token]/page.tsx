@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { getGuestTicketView } from "@/actions/guest";
+import { getGuestTicketView, getGuestTicketMessages } from "@/actions/guest";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
@@ -56,6 +56,7 @@ export default async function GuestTicketPage({ params }: { params: Promise<{ to
               mySenderRoles={["GUEST"]}
               messages={view.messages}
               mentionNames={mentionNames}
+              onPoll={getGuestTicketMessages.bind(null, token)}
               composer={<GuestReplyBox token={token} mentionNames={mentionNames} />}
             />
           </>

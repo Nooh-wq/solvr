@@ -2,7 +2,7 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useStagedAttachments, StagedAttachmentChips, type UploadResult } from "@/components/staged-attachments";
-import { PlusIcon, AtIcon, SendIcon, BoldIcon, ItalicIcon, UnderlineIcon, ListBulletIcon, ListOrderedIcon } from "@/components/icons";
+import { PaperclipIcon, AtIcon, SendIcon, BoldIcon, ItalicIcon, UnderlineIcon, ListBulletIcon, ListOrderedIcon } from "@/components/icons";
 import { ATTACHMENT_ALLOWED_MIME } from "@/lib/validation/ticket";
 
 /** Matches "@partialname" ending at `pos` in `text`, so both live-typing and the toolbar's @ button can share one mention-detection rule. */
@@ -11,6 +11,15 @@ function mentionMatchAt(text: string, pos: number): { atIndex: number; query: st
   const m = upToCursor.match(/(?:^|\s)@([\w'-]*)$/);
   if (!m) return null;
   return { atIndex: upToCursor.lastIndexOf("@"), query: m[1] };
+}
+
+function initialsOf(name: string) {
+  return name
+    .split(" ")
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 }
 
 function ToolbarButton({
@@ -64,6 +73,7 @@ export function MessageComposer({
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { staged, uploading, addFiles, remove, reset, attachmentIds } = useStagedAttachments(upload);
@@ -131,19 +141,33 @@ export function MessageComposer({
     const next = before + insert + body.slice(pos);
     setBodyAndCaret(next, pos + insert.length);
     setMentionQuery("");
+    setHighlightedIndex(0);
   }
 
   function handleChange(value: string, caret: number) {
     setBody(value);
     const match = mentionMatchAt(value, caret);
     setMentionQuery(match ? match.query : null);
+    setHighlightedIndex(0);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (mentionQuery !== null && filteredMentions.length > 0 && e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      insertMention(filteredMentions[0]);
-      return;
+    if (mentionQuery !== null && filteredMentions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.min(i + 1, filteredMentions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        insertMention(filteredMentions[Math.min(highlightedIndex, filteredMentions.length - 1)]);
+        return;
+      }
     }
     if (mentionQuery !== null && e.key === "Escape") {
       setMentionQuery(null);
@@ -171,7 +195,7 @@ export function MessageComposer({
   return (
     <div>
       <StagedAttachmentChips files={staged} onRemove={remove} />
-      <div className="rounded-2xl border border-[var(--color-neutral-300)] bg-[var(--color-light-gray)]/50 transition-colors duration-150 focus-within:bg-white focus-within:border-[var(--color-primary)] focus-within:ring-4 focus-within:ring-[var(--color-primary)]/12">
+      <div className="relative rounded-2xl border border-[var(--color-neutral-300)] bg-[var(--color-light-gray)]/50 transition-colors duration-150 focus-within:bg-white focus-within:border-[var(--color-primary)] focus-within:ring-4 focus-within:ring-[var(--color-primary)]/12">
         <div className="flex items-center gap-0.5 px-2 pt-1.5">
           <ToolbarButton icon={<BoldIcon className="h-4 w-4" />} label="Bold" onClick={() => wrapSelection("**")} />
           <ToolbarButton icon={<ItalicIcon className="h-4 w-4" />} label="Italic" onClick={() => wrapSelection("*")} />
@@ -192,18 +216,44 @@ export function MessageComposer({
         />
 
         {mentionQuery !== null && filteredMentions.length > 0 && (
-          <div className="mx-3 mb-2 rounded-lg border border-[var(--color-neutral-200)] bg-white shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] overflow-hidden">
-            {filteredMentions.map((name) => (
-              <button
-                key={name}
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertMention(name)}
-                className="w-full text-left px-3 py-1.5 text-[13px] hover:bg-[var(--color-light-gray)] cursor-pointer"
-              >
-                @{name}
-              </button>
-            ))}
+          <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--color-neutral-200)] bg-white shadow-[0_16px_40px_-12px_rgba(0,0,0,0.3)] overflow-hidden z-20">
+            <div className="max-h-56 overflow-y-auto py-1.5">
+              {filteredMentions.map((name, i) => {
+                const active = i === highlightedIndex;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setHighlightedIndex(i)}
+                    onClick={() => insertMention(name)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-left cursor-pointer transition-colors duration-100 ${
+                      active ? "bg-[var(--color-primary)] text-white" : "text-black"
+                    }`}
+                  >
+                    <span
+                      className={`h-6 w-6 shrink-0 rounded-md flex items-center justify-center text-[10px] font-semibold ${
+                        active ? "bg-white/20 text-white" : "bg-[var(--color-orange-pale)] text-[var(--color-orange-deep)]"
+                      }`}
+                    >
+                      {initialsOf(name)}
+                    </span>
+                    <span className="truncate font-medium">{name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-3 px-3 py-1.5 border-t border-black/5 bg-[var(--color-light-gray)]/70 text-[10px] text-[var(--color-neutral-500)]">
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">↑↓</kbd> to navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">↵</kbd> to select
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">esc</kbd> to dismiss
+              </span>
+            </div>
           </div>
         )}
 
@@ -221,7 +271,7 @@ export function MessageComposer({
               }}
             />
             <ToolbarButton
-              icon={<PlusIcon className="h-[18px] w-[18px]" />}
+              icon={<PaperclipIcon className="h-[18px] w-[18px]" />}
               label="Attach a file"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}

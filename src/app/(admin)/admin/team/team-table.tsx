@@ -113,9 +113,9 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
                     onClick={() => setToDelete(u)}
                     title={`Delete ${u.name}`}
                     aria-label={`Delete ${u.name}`}
-                    className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-[var(--color-neutral-500)] hover:bg-red-50 hover:text-red-600 transition-colors duration-150 cursor-pointer"
+                    className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full text-[var(--color-neutral-500)] hover:bg-red-50 hover:text-red-600 transition-colors duration-150 cursor-pointer"
                   >
-                    <TrashIcon className="h-4 w-4" />
+                    <TrashIcon className="h-5 w-5" />
                   </button>
                 </div>
               </td>

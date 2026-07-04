@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getTicket, listAgents } from "@/actions/tickets";
+import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
@@ -37,6 +37,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           clientName={ticket.client.name}
           mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
           mentionNames={mentionNames}
+          onPoll={getTicketMessages.bind(null, ticket.id)}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,

@@ -177,6 +177,46 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
   };
 }
 
+/** Lighter sibling of getGuestTicketView() for the polling loop in conversation-thread.tsx's `onPoll` — same message shape, no ticket metadata. */
+export async function getGuestTicketMessages(rawToken: string): Promise<GuestTicketView["messages"] | null> {
+  const guest = await resolveGuestSession(rawToken);
+  if (!guest) return null;
+
+  const ticket = await withRls({ tenantId: guest.tenantId, userId: null, role: "GUEST", guestTicketId: guest.ticketId }, (tx) =>
+    tx.ticket.findFirst({
+      where: { id: guest.ticketId },
+      select: {
+        messages: {
+          where: { isInternal: false },
+          orderBy: { createdAt: "asc" },
+          include: { sender: { select: { name: true, avatarUrl: true } }, attachments: true },
+        },
+      },
+    })
+  );
+  if (!ticket) return null;
+
+  return Promise.all(
+    ticket.messages.map(async (m) => ({
+      id: m.id,
+      body: m.body,
+      senderRole: m.senderRole,
+      isInternal: m.isInternal,
+      createdAt: m.createdAt.toISOString(),
+      sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : m.guestId ? { name: guest.name ?? guest.email, avatarUrl: null } : null,
+      attachments: await Promise.all(
+        m.attachments.map(async (a) => ({
+          id: a.id,
+          fileName: a.fileName,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
+        }))
+      ),
+    }))
+  );
+}
+
 const guestReplySchema = z.object({
   token: z.string().min(1),
   body: z.string().min(1).max(20000),
