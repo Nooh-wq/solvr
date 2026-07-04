@@ -4,7 +4,12 @@ import { getSessionPayloadFromRequest } from "@/lib/session";
 // Route-group access map. Tenant resolution itself happens lazily in
 // layouts (it needs Prisma, which the Edge runtime can't run) — this
 // middleware's job is coarse auth gating only.
-const PUBLIC_PREFIXES = ["/auth", "/api/webhooks", "/api/inngest", "/_next", "/favicon.ico", "/brand"];
+// /guest is a token-authenticated route (see actions/guest.ts), not a
+// session-cookie one — a real guest arrives with no session at all, so it
+// must never redirect to /auth/login the way every other protected route
+// does. The token itself (and its validity/revocation) is checked inside
+// the page/actions, not here.
+const PUBLIC_PREFIXES = ["/auth", "/guest", "/api/webhooks", "/api/inngest", "/_next", "/favicon.ico", "/brand"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
