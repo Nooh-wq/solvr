@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 
-export function InviteUserForm() {
+export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
   const router = useRouter();
   const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
@@ -41,10 +41,8 @@ export function InviteUserForm() {
     });
   }
 
-  return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5">
-      <h3 className="text-[13px] font-semibold mb-4">Invite someone</h3>
-      <form action={onSubmit} className="space-y-3">
+  const form = (
+    <form action={onSubmit} className="space-y-3">
         <div className="space-y-1">
           <Label htmlFor="name">Name</Label>
           <Input id="name" name="name" required />
@@ -72,6 +70,14 @@ export function InviteUserForm() {
           {pending ? "Inviting…" : "Send invite"}
         </Button>
       </form>
+  );
+
+  if (embedded) return form;
+
+  return (
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5">
+      <h3 className="text-[13px] font-semibold mb-4">Invite someone</h3>
+      {form}
     </div>
   );
 }
