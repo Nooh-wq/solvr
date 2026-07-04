@@ -1,13 +1,22 @@
-// Lightweight, dependency-free SVG charts for the admin Overview. Server
-// components (pure markup, no interactivity beyond native <title> tooltips),
-// styled to the Solvr palette. Kept intentionally small — if charting needs
-// grow (zoom, live updates, legends toggling) swap these for a real lib.
+"use client";
+
+// Lightweight, dependency-free SVG charts for the admin Overview, styled to
+// the Solvr palette. TrendChart needs hover state for its tooltip, so the
+// whole module is a client component — Donut/BarList stay simple markup but
+// render fine from a server component either way. Kept intentionally small —
+// if charting needs grow (zoom, live updates, legends toggling) swap these
+// for a real lib.
+
+import { useRef, useState } from "react";
 
 type TrendPoint = { date: string; created: number; resolved: number };
 
 /**
  * Two-series area/line chart of tickets created vs. resolved over a window.
- * Fixed viewBox + w-full makes it responsive without distortion.
+ * Fixed viewBox + w-full makes it responsive without distortion. Hovering
+ * anywhere over the chart snaps a tooltip to the nearest day, showing both
+ * values in a floating box instead of relying on the native browser title
+ * tooltip (slow to appear, easy to miss).
  */
 export function TrendChart({ data }: { data: TrendPoint[] }) {
   const W = 720;
@@ -18,6 +27,9 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
   const padB = 28;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
 
   const maxVal = Math.max(1, ...data.map((d) => Math.max(d.created, d.resolved)));
   // "Nice" y-axis top rounded up so gridlines land on round numbers.
@@ -36,48 +48,85 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
   const step = Math.max(1, Math.round(n / 5));
   const xLabels = data.map((d, i) => ({ i, d })).filter(({ i }) => i % step === 0 || i === n - 1);
 
+  function onMove(e: React.MouseEvent<HTMLDivElement>) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || n === 0) return;
+    const fracX = (e.clientX - rect.left) / rect.width;
+    const i = Math.min(n - 1, Math.max(0, Math.round(fracX * (n - 1))));
+    setHover(i);
+  }
+
+  const hovered = hover !== null ? data[hover] : null;
+  // Tooltip position as a percentage of the container, so it tracks the
+  // point regardless of the chart's actual rendered size (viewBox scaling).
+  const tipLeftPct = hover !== null ? (x(hover) / W) * 100 : 0;
+  const tipTopPct = hovered ? (Math.min(y(hovered.created), y(hovered.resolved)) / H) * 100 : 0;
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Tickets created and resolved over time">
-      <defs>
-        <linearGradient id="trend-created" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0" />
-        </linearGradient>
-      </defs>
+    <div ref={containerRef} className="relative" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" role="img" aria-label="Tickets created and resolved over time">
+        <defs>
+          <linearGradient id="trend-created" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
 
-      {gridLines.map((g) => {
-        const gy = padT + innerH - g * innerH;
-        return (
-          <g key={g}>
-            <line x1={padL} y1={gy} x2={W - padR} y2={gy} stroke="var(--color-neutral-100)" strokeWidth="1" />
-            <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize="9" fill="var(--color-neutral-400)">
-              {Math.round(g * niceMax)}
-            </text>
+        {gridLines.map((g) => {
+          const gy = padT + innerH - g * innerH;
+          return (
+            <g key={g}>
+              <line x1={padL} y1={gy} x2={W - padR} y2={gy} stroke="var(--color-neutral-100)" strokeWidth="1" />
+              <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize="9" fill="var(--color-neutral-400)">
+                {Math.round(g * niceMax)}
+              </text>
+            </g>
+          );
+        })}
+
+        <path d={createdArea} fill="url(#trend-created)" />
+        <path d={createdLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        <path d={resolvedLine} fill="none" stroke="var(--color-neutral-700)" strokeWidth="1.5" strokeDasharray="4 3" strokeLinejoin="round" strokeLinecap="round" />
+
+        {hover !== null && (
+          <line x1={x(hover)} y1={padT} x2={x(hover)} y2={padT + innerH} stroke="var(--color-neutral-300)" strokeWidth="1" strokeDasharray="3 3" />
+        )}
+
+        {data.map((d, i) => (
+          <g key={d.date}>
+            <circle cx={x(i)} cy={y(d.created)} r={hover === i ? 4 : 2.5} fill="var(--color-primary)" className="transition-[r] duration-100" />
+            <circle cx={x(i)} cy={y(d.resolved)} r={hover === i ? 3.5 : 2} fill="var(--color-neutral-700)" className="transition-[r] duration-100" />
           </g>
-        );
-      })}
+        ))}
 
-      <path d={createdArea} fill="url(#trend-created)" />
-      <path d={createdLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      <path d={resolvedLine} fill="none" stroke="var(--color-neutral-700)" strokeWidth="1.5" strokeDasharray="4 3" strokeLinejoin="round" strokeLinecap="round" />
+        {xLabels.map(({ i, d }) => (
+          <text key={d.date} x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--color-neutral-400)">
+            {fmtDay(d.date)}
+          </text>
+        ))}
+      </svg>
 
-      {data.map((d, i) => (
-        <g key={d.date}>
-          <circle cx={x(i)} cy={y(d.created)} r="2.5" fill="var(--color-primary)" />
-          <circle cx={x(i)} cy={y(d.resolved)} r="2" fill="var(--color-neutral-700)" />
-          {/* Full-height hover target with a native tooltip. */}
-          <rect x={x(i) - innerW / (2 * n)} y={padT} width={innerW / n} height={innerH} fill="transparent">
-            <title>{`${fmtDay(d.date)} · ${d.created} created · ${d.resolved} resolved`}</title>
-          </rect>
-        </g>
-      ))}
-
-      {xLabels.map(({ i, d }) => (
-        <text key={d.date} x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--color-neutral-400)">
-          {fmtDay(d.date)}
-        </text>
-      ))}
-    </svg>
+      {hovered && (
+        <div
+          className="absolute z-10 pointer-events-none bg-black text-white rounded-xl px-3 py-2 text-[11px] shadow-[0_8px_24px_-6px_rgba(0,0,0,0.4)] whitespace-nowrap"
+          style={{
+            left: `${tipLeftPct}%`,
+            top: `${Math.max(tipTopPct, 6)}%`,
+            transform: "translate(-50%, -120%)",
+          }}
+        >
+          <p className="font-semibold mb-1">{fmtDay(hovered.date)}</p>
+          <p className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]" />
+            {hovered.created} created
+          </p>
+          <p className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+            {hovered.resolved} resolved
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

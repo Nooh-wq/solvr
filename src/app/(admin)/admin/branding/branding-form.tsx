@@ -74,7 +74,7 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
 
   return (
     <div className="grid grid-cols-2 gap-6 max-w-3xl">
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5 space-y-3">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5 space-y-3">
         <div className="space-y-1">
           <Label htmlFor="productName">Product name</Label>
           <Input id="productName" value={values.productName} onChange={(e) => set("productName", e.target.value)} />

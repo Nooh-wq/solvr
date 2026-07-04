@@ -3,7 +3,7 @@ import { TrendChart, DonutChart, BarList } from "@/components/charts";
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-xl p-5">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <p className="uppercase-label text-[11px] text-[var(--color-neutral-600)] mb-2">{label}</p>
       <p className="text-2xl font-bold font-mono">{value}</p>
       {sub && <p className="text-[11px] text-[var(--color-neutral-500)] mt-1">{sub}</p>}
@@ -50,7 +50,7 @@ export default async function AdminOverviewPage() {
         />
       </div>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-xl p-5 mb-6">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold">Tickets over time</h2>
           <div className="flex items-center gap-4 text-[11px] text-[var(--color-neutral-600)]">
@@ -67,11 +67,11 @@ export default async function AdminOverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white border border-[var(--color-neutral-300)] rounded-xl p-5">
+        <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
           <h2 className="text-[13px] font-semibold mb-4">By status</h2>
           <DonutChart segments={statusSegments} total={stats.total} />
         </div>
-        <div className="bg-white border border-[var(--color-neutral-300)] rounded-xl p-5">
+        <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
           <h2 className="text-[13px] font-semibold mb-4">By priority</h2>
           <BarList items={prioritySegments} />
         </div>

@@ -90,7 +90,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
 
   return (
     <div className="space-y-8 max-w-md">
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded p-6 space-y-4">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
         <h2 className="text-[15px] font-semibold">Your details</h2>
         <div className="flex items-center gap-4">
           {avatarUrl ? (
@@ -144,7 +144,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
         </Button>
       </div>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded p-6 space-y-4">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
         <h2 className="text-[15px] font-semibold">Change password</h2>
         <div className="space-y-1.5">
           <Label htmlFor="currentPassword">Current password</Label>

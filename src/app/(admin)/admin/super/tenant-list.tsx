@@ -46,7 +46,7 @@ export function TenantList({ tenants }: { tenants: Tenant[] }) {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded overflow-hidden">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
       <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-[var(--color-light-gray)] text-[11px] uppercase-label text-[var(--color-neutral-700)]">

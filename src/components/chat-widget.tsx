@@ -92,8 +92,8 @@ export function ChatWidget() {
             key={i}
             className={
               m.role === "CLIENT"
-                ? "ml-8 bg-[var(--color-light-gray)] rounded px-3 py-2 text-[13px]"
-                : "mr-8 bg-[var(--color-orange-pale)] rounded px-3 py-2 text-[13px]"
+                ? "ml-8 bg-[var(--color-light-gray)] rounded-2xl px-3 py-2 text-[13px]"
+                : "mr-8 bg-[var(--color-orange-pale)] rounded-2xl px-3 py-2 text-[13px]"
             }
           >
             <p className="whitespace-pre-wrap">{m.body}</p>
@@ -118,7 +118,7 @@ export function ChatWidget() {
         )}
         <div className="flex gap-2">
           <input
-            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded"
+            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl"
             placeholder="Type a message…"
             value={input}
             onChange={(e) => setInput(e.target.value)}

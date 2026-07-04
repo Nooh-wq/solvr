@@ -61,7 +61,7 @@ export function KbManager({ articles }: { articles: Article[] }) {
           New article
         </Button>
       </div>
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded overflow-hidden">
+      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {articles.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">No articles yet.</p>
         ) : (
@@ -119,7 +119,7 @@ function ArticleEditor({
   const [isPublished, setIsPublished] = useState(initial?.isPublished ?? false);
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5 max-w-2xl space-y-3">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5 max-w-2xl space-y-3">
       <div className="space-y-1">
         <Label htmlFor="kbTitle">Title</Label>
         <Input id="kbTitle" value={title} onChange={(e) => setTitle(e.target.value)} />

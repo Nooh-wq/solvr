@@ -38,7 +38,7 @@ export function CreateTenantForm() {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-5">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <h3 className="text-[13px] font-semibold mb-4">Provision a tenant</h3>
       <form action={onSubmit} className="space-y-3">
         <div className="space-y-1">
@@ -60,7 +60,7 @@ export function CreateTenantForm() {
         </div>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
         {tempPassword && (
-          <p className="text-[12px] bg-[var(--color-orange-pale)] p-2 rounded">
+          <p className="text-[12px] bg-[var(--color-orange-pale)] p-2 rounded-xl">
             Tenant created. Admin temp password: <span className="font-mono font-semibold">{tempPassword}</span>
           </p>
         )}

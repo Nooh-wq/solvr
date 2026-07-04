@@ -38,7 +38,7 @@ export function CopilotPanel({ ticketId }: { ticketId: string }) {
   return (
     <div className="mt-6 rounded-2xl border border-[var(--color-primary)]/30 bg-gradient-to-b from-[var(--color-orange-pale)] to-white shadow-[0_8px_30px_-12px_var(--color-primary)] overflow-hidden">
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--color-primary)]/15">
-        <span className="h-8 w-8 rounded-xl bg-[var(--color-primary)] text-white flex items-center justify-center shadow-[0_4px_12px_-2px_var(--color-primary)] shrink-0">
+        <span className="h-8 w-8 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-[0_4px_12px_-2px_var(--color-primary)] shrink-0">
           <SparklesIcon className="h-[18px] w-[18px]" />
         </span>
         <div className="min-w-0">
@@ -58,7 +58,7 @@ export function CopilotPanel({ ticketId }: { ticketId: string }) {
               <button
                 onClick={runSummarize}
                 disabled={pending}
-                className="flex items-center justify-center gap-1.5 h-10 rounded-xl bg-[var(--color-primary)] text-white text-[13px] font-semibold shadow-[0_4px_14px_-4px_var(--color-primary)] hover:brightness-105 active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex items-center justify-center gap-1.5 h-10 rounded-full bg-[var(--color-primary)] text-white text-[13px] font-semibold shadow-[0_4px_14px_-4px_var(--color-primary)] hover:brightness-105 active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <SparklesIcon className="h-4 w-4" />
                 {pending && action === "summary" ? "Summarizing…" : "Summarize"}
@@ -66,7 +66,7 @@ export function CopilotPanel({ ticketId }: { ticketId: string }) {
               <button
                 onClick={runSuggestReply}
                 disabled={pending}
-                className="flex items-center justify-center gap-1.5 h-10 rounded-xl bg-white border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[13px] font-semibold hover:bg-[var(--color-orange-pale)] active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex items-center justify-center gap-1.5 h-10 rounded-full bg-white border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[13px] font-semibold hover:bg-[var(--color-orange-pale)] active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <SparklesIcon className="h-4 w-4" />
                 {pending && action === "reply" ? "Drafting…" : "Suggest reply"}
