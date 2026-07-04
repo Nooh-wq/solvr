@@ -44,11 +44,16 @@ enum Role {
 // PENDING: self-registered, awaiting a tenant admin's approval (see the
 // email flow design doc). ACTIVE: can log in. REJECTED/SUSPENDED: cannot —
 // distinguished so admins can tell "we said no" from "was deactivated later".
+// INVITED: an admin created this account directly (Team > Invite) — the
+// person has an email link to accept but hasn't set their own password yet,
+// so they can't log in normally until they do (see actions/admin.ts's
+// inviteUser() and actions/auth.ts's acceptInvite()).
 enum UserStatus {
   PENDING
   ACTIVE
   REJECTED
   SUSPENDED
+  INVITED
 }
 
 enum TicketStatus {
@@ -72,6 +77,10 @@ enum SenderRole {
   ADMIN
   SYSTEM
   BOT
+  // A person added to one ticket via a guest invite link (see TicketGuest) —
+  // never has a User row, so Message.senderId stays null for these and
+  // Message.guestId identifies who wrote it instead.
+  GUEST
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +105,7 @@ model Tenant {
   chatConversations ChatConversation[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  ticketGuests  TicketGuest[]
 
   @@map("tenants")
 }
@@ -148,9 +158,12 @@ model User {
   tickets       Ticket[]      @relation("ClientTickets")
   assigned      Ticket[]      @relation("AssignedAgent")
   messages      Message[]
+  uploadedAttachments Attachment[]
   chatConversations ChatConversation[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  invitedGuests TicketGuest[]
+  loginOtps     LoginOtp[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -210,6 +223,7 @@ model Ticket {
   auditLogs   AuditLog[]
   chatConversations ChatConversation[]
   notifications Notification[]
+  guests      TicketGuest[]
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -217,16 +231,22 @@ model Ticket {
 }
 
 model Message {
-  id         String     @id @default(cuid())
+  id         String      @id @default(cuid())
   tenantId   String
   ticketId   String
-  ticket     Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticket     Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   senderId   String?
-  sender     User?      @relation(fields: [senderId], references: [id])
+  sender     User?       @relation(fields: [senderId], references: [id])
+  // Set instead of senderId when a GUEST (see TicketGuest) wrote this message
+  // — a guest never gets a User row, so this is how the message is attributed.
+  guestId    String?
+  guest      TicketGuest? @relation(fields: [guestId], references: [id])
   senderRole SenderRole
   body       String
-  isInternal Boolean    @default(false)
-  createdAt  DateTime   @default(now())
+  isInternal Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+
+  attachments Attachment[]
 
   @@index([tenantId, ticketId])
   @@map("messages")
@@ -237,6 +257,17 @@ model Attachment {
   tenantId   String
   ticketId   String
   ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  // Null until the composer's "Send" actually posts the message the file was
+  // staged for (see actions/attachments.ts uploadTicketAttachment /
+  // actions/tickets.ts's postAgentReply|postClientReply) — an uploaded-but-
+  // never-sent file just stays unlinked, still visible in Files & Links.
+  messageId  String?
+  message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  uploadedById String?
+  uploadedBy   User?  @relation(fields: [uploadedById], references: [id])
+  // Storage object PATH, not a public URL — this bucket is private (ticket
+  // attachments aren't "public by nature" like branding logos/avatars are).
+  // Resolved to a short-lived signed URL on read; see lib/storage.ts.
   fileUrl    String
   fileName   String
   mimeType   String
@@ -244,7 +275,56 @@ model Attachment {
   uploadedAt DateTime @default(now())
 
   @@index([tenantId, ticketId])
+  @@index([messageId])
   @@map("attachments")
+}
+
+// A person added to exactly one ticket via an emailed magic link — no
+// account, no password, no session cookie. invitedById is the staff/client
+// User who added them; the guest's own identity is just email (+ optional
+// name) carried on this row and denormalized onto any Message they send
+// (Message.guestId). tokenHash is sha256 of the raw token that goes in the
+// email; only the hash is ever stored (same pattern as password-reset,
+// except this one needs server-side state since it's revocable/long-lived
+// rather than a short single-use JWT).
+model TicketGuest {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId    String
+  ticket      Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  email       String
+  name        String?
+  tokenHash   String    @unique
+  invitedById String?
+  invitedBy   User?     @relation(fields: [invitedById], references: [id])
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  messages Message[]
+
+  @@index([tenantId, ticketId])
+  @@map("ticket_guests")
+}
+
+// Server-side state for the one-time email code verified at invite
+// acceptance (first login only — see actions/auth.ts's acceptInvite() /
+// verifyLoginOtp()). Deliberately NOT a JWT like session/reset tokens,
+// since a code needs to be matched against a value already emailed out
+// (can't just re-derive/re-verify a signature the way a stateless token
+// works) and single-use tracked independent of any password change.
+model LoginOtp {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("login_otps")
 }
 
 model AuditLog {

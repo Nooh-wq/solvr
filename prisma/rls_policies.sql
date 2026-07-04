@@ -10,9 +10,13 @@
 -- (the migration-owning role) — see src/lib/db.ts.
 --
 -- Session vars (set per-request via lib/db.ts withRls()):
---   app.tenant_id  -- current tenant's id
---   app.user_id    -- current user's id ('' for anonymous/chatbot)
---   app.role       -- CLIENT | AGENT | ADMIN | SUPER_ADMIN
+--   app.tenant_id      -- current tenant's id
+--   app.user_id        -- current user's id ('' for anonymous/chatbot)
+--   app.role           -- CLIENT | AGENT | ADMIN | SUPER_ADMIN | GUEST
+--   app.guest_ticket_id -- set only when app.role = 'GUEST': the ONE ticket
+--                          this guest link was invited to (see
+--                          lib/guest-access.ts) — GUEST never gets the
+--                          tenant-wide access every other role has.
 --
 -- Safe to re-run: policies are dropped and recreated each time.
 
@@ -27,6 +31,10 @@ $$ language sql stable;
 
 create or replace function app_current_role() returns text as $$
   select nullif(current_setting('app.role', true), '');
+$$ language sql stable;
+
+create or replace function app_current_guest_ticket_id() returns text as $$
+  select nullif(current_setting('app.guest_ticket_id', true), '');
 $$ language sql stable;
 
 -- tenants: readable by anyone — resolving a Tenant by host/slug is how
@@ -56,7 +64,8 @@ begin
   for t in select unnest(array[
     'tenant_branding','users','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
-    'chatbot_configs','chat_conversations','chat_messages','notifications'
+    'chatbot_configs','chat_conversations','chat_messages','notifications',
+    'ticket_guests','login_otps'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -113,9 +122,17 @@ create policy super_admin_write on categories
 -- health" ticket-volume view — deliberately select-only (not `for all`,
 -- unlike the provisioning tables above), since Super-Admin has no product
 -- reason to mutate another tenant's tickets.
+--
+-- GUEST is deliberately excluded from tenant_isolation/client_sees_own_tickets
+-- below (every other role gets tenant-wide-or-own-ticket access just by
+-- matching tenantId) and instead gets its own guest_sees_own_ticket policy,
+-- scoped to the exact one ticket in app.guest_ticket_id — a guest session
+-- still carries a real app.tenant_id (see lib/guest-access.ts), so without
+-- this exclusion it would inherit the same tenant-wide visibility as a
+-- normal CLIENT/AGENT session.
 drop policy if exists tenant_isolation on tickets;
 create policy tenant_isolation on tickets
-  using ("tenantId" = app_current_tenant_id());
+  using ("tenantId" = app_current_tenant_id() and app_current_role() <> 'GUEST');
 drop policy if exists super_admin_read on tickets;
 create policy super_admin_read on tickets
   for select using (app_current_role() = 'SUPER_ADMIN');
@@ -123,30 +140,101 @@ drop policy if exists client_sees_own_tickets on tickets;
 create policy client_sees_own_tickets on tickets
   for select using (
     "tenantId" = app_current_tenant_id()
+    and app_current_role() <> 'GUEST'
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
       or "clientId" = app_current_user_id()
     )
   );
+drop policy if exists guest_sees_own_ticket on tickets;
+create policy guest_sees_own_ticket on tickets
+  for select using (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and id = app_current_guest_ticket_id()
+  );
 
--- messages: clients never see isInternal=true rows.
+-- messages: clients never see isInternal=true rows. Same GUEST exclusion
+-- reasoning as tickets above — a guest may only see/post non-internal
+-- messages on the one ticket they were invited to.
 drop policy if exists tenant_isolation on messages;
 create policy tenant_isolation on messages
-  using ("tenantId" = app_current_tenant_id());
+  using ("tenantId" = app_current_tenant_id() and app_current_role() <> 'GUEST');
 drop policy if exists client_sees_non_internal_messages on messages;
 create policy client_sees_non_internal_messages on messages
   for select using (
     "tenantId" = app_current_tenant_id()
+    and app_current_role() <> 'GUEST'
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
       or "isInternal" = false
     )
   );
+drop policy if exists guest_sees_ticket_messages on messages;
+create policy guest_sees_ticket_messages on messages
+  for select using (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+    and "isInternal" = false
+  );
+drop policy if exists guest_insert_message on messages;
+create policy guest_insert_message on messages
+  for insert with check (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+    and "isInternal" = false
+  );
 
--- attachments
+-- attachments: NOTE — scoped only by tenantId, same as every role today
+-- (including plain CLIENT); real per-ticket scoping is enforced at the app
+-- layer (every attachment query filters by ticketId). GUEST rides on this
+-- same pre-existing, already-app-layer-enforced pattern rather than a new
+-- RLS carve-out, since attachments never had ticket-level RLS scoping to
+-- begin with — see actions/attachments.ts for the query-level enforcement.
 drop policy if exists tenant_isolation on attachments;
 create policy tenant_isolation on attachments
   using ("tenantId" = app_current_tenant_id());
+
+-- ticket_guests: readable tenant-wide (same app-layer-scoping note as
+-- attachments above); adding/revoking a guest is restricted to staff, or a
+-- client acting on their own ticket.
+drop policy if exists ticket_guest_read on ticket_guests;
+create policy ticket_guest_read on ticket_guests
+  for select using ("tenantId" = app_current_tenant_id());
+drop policy if exists ticket_guest_write on ticket_guests;
+create policy ticket_guest_write on ticket_guests
+  for insert with check (
+    "tenantId" = app_current_tenant_id()
+    and (
+      app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
+      or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
+    )
+  );
+drop policy if exists ticket_guest_revoke on ticket_guests;
+create policy ticket_guest_revoke on ticket_guests
+  for update using (
+    "tenantId" = app_current_tenant_id()
+    and (
+      app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
+      or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
+    )
+  );
+
+-- login_otps: strictly personal, same shape as notifications — a user (or,
+-- during the invite-accept flow before a real session exists, the verified
+-- invite-token's own userId claim — see actions/auth.ts) only ever
+-- reads/consumes their own OTP rows.
+drop policy if exists login_otp_read on login_otps;
+create policy login_otp_read on login_otps
+  for select using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+drop policy if exists login_otp_insert on login_otps;
+create policy login_otp_insert on login_otps
+  for insert with check ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+drop policy if exists login_otp_update on login_otps;
+create policy login_otp_update on login_otps
+  for update using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
 
 -- audit_logs: readable by agents/admins (the tenant's full activity log),
 -- OR by the row's own actor — the latter isn't for browsing, it's because

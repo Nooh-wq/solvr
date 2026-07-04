@@ -16,6 +16,7 @@ const STATUS_LABEL: Record<UserStatus, string> = {
   ACTIVE: "Active",
   REJECTED: "Rejected",
   SUSPENDED: "Deactivated",
+  INVITED: "Invite sent",
 };
 
 export function TeamTable({ users }: { users: TeamMember[] }) {

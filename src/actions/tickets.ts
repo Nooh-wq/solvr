@@ -20,6 +20,7 @@ import {
 } from "@/lib/email/events";
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
+import { getAttachmentSignedUrl } from "@/lib/storage";
 
 /** FR-2: client creates a ticket. Status defaults to Open; fires the "received" email. */
 export async function createTicket(input: z.infer<typeof createTicketSchema>) {
@@ -120,22 +121,22 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
   );
 }
 
-/** Returns the ticket + messages, filtering internal notes for clients. */
+/** Returns the ticket + messages, filtering internal notes for clients. Every attachment's fileUrl comes back as a ready-to-use, short-lived signed URL (the DB only ever stores the private storage path). */
 export async function getTicket(ticketId: string) {
   const session = await requireSession();
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
     const ticket = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
       include: {
         category: true,
         client: true,
         assignedTo: true,
-        attachments: true,
+        attachments: { orderBy: { uploadedAt: "desc" }, include: { uploadedBy: { select: { name: true } } } },
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
-          include: { sender: true },
+          include: { sender: true, attachments: true },
         },
       },
     });
@@ -143,6 +144,24 @@ export async function getTicket(ticketId: string) {
     if (session.role === "CLIENT" && ticket.clientId !== session.id) return null;
     return ticket;
   });
+  if (!ticket) return null;
+
+  // Resolving signed URLs is an external Storage call, not a DB query — done
+  // outside the transaction above so the interactive tx isn't held open
+  // waiting on it (same reasoning as withRls's own docs on connection budget).
+  const [messages, attachments] = await Promise.all([
+    Promise.all(
+      ticket.messages.map(async (m) => ({
+        ...m,
+        attachments: await Promise.all(
+          m.attachments.map(async (a) => ({ ...a, fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl }))
+        ),
+      }))
+    ),
+    Promise.all(ticket.attachments.map(async (a) => ({ ...a, fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl }))),
+  ]);
+
+  return { ...ticket, messages, attachments };
 }
 
 const STATUS_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
@@ -166,7 +185,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
       });
       if (!ticket) throw new Error("NOT_FOUND");
 
-      await tx.message.create({
+      const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
@@ -175,6 +194,15 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
           body: data.body,
         },
       });
+      if (data.attachmentIds && data.attachmentIds.length > 0) {
+        // messageId: null guard — a client can only claim their OWN
+        // just-uploaded, not-yet-attached files, never re-parent an
+        // attachment that's already linked to some other message.
+        await tx.attachment.updateMany({
+          where: { id: { in: data.attachmentIds }, ticketId: ticket.id, tenantId: session.tenantId, messageId: null },
+          data: { messageId: message.id },
+        });
+      }
 
       let updatedTicket = ticket;
       if (ticket.status === "PENDING") {
@@ -226,7 +254,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
 
-      await tx.message.create({
+      const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
@@ -236,6 +264,12 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
           isInternal: data.isInternal,
         },
       });
+      if (data.attachmentIds && data.attachmentIds.length > 0) {
+        await tx.attachment.updateMany({
+          where: { id: { in: data.attachmentIds }, ticketId: ticket.id, tenantId: session.tenantId, messageId: null },
+          data: { messageId: message.id },
+        });
+      }
 
       if (!data.isInternal && !ticket.firstReplyAt) {
         await tx.ticket.update({ where: { id: ticket.id }, data: { firstReplyAt: new Date() } });

@@ -103,7 +103,7 @@ export async function sendStatusChangeEmail(ticket: TicketRef, clientEmail: stri
   });
 }
 
-/** §8.2 event → email matrix, agent invite. */
+/** §8.2 event → email matrix, agent invite. Still used for tenant provisioning's first-admin account (actions/super.ts) — Team's own invite flow (actions/admin.ts's inviteUser()) uses sendUserInviteEmail below instead, since that one goes through the accept-invite + OTP flow rather than a temp password. */
 export async function sendAgentInviteEmail(
   toEmail: string,
   tempPassword: string,
@@ -118,6 +118,52 @@ export async function sendAgentInviteEmail(
     body: `An admin created an account for you.\n\nEmail: ${toEmail}\nTemporary password: ${tempPassword}\n\nLog in and change your password from your account settings.`,
     ctaLabel: "Log in",
     ctaUrl: `${siteUrl()}/auth/login`,
+  });
+}
+
+/** Team > Invite (actions/admin.ts's inviteUser()) — no temp password; the link lets the invitee set their own password, then verifies a one-time emailed code before their first session is created. */
+export async function sendUserInviteEmail(toEmail: string, acceptUrl: string, branding: TenantBranding | null) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toEmail,
+    branding,
+    subject: `You've been invited to ${productName}`,
+    heading: `You've been invited to ${productName}`,
+    body: `An admin created an account for you on ${productName}. Use the link below to set your password and get started.`,
+    ctaLabel: "Accept invite",
+    ctaUrl: acceptUrl,
+  });
+}
+
+/** The one-time code entered at the end of acceptInvite() to verify a first login. */
+export async function sendLoginOtpEmail(toEmail: string, code: string, branding: TenantBranding | null) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toEmail,
+    branding,
+    subject: `Your ${productName} verification code`,
+    heading: "Verify it's you",
+    body: `Your verification code is:\n\n${code}\n\nThis code expires in 10 minutes. If you didn't request this, you can ignore this email.`,
+  });
+}
+
+/** Sent when someone adds a guest to a ticket — a magic link scoped to that one ticket, no account needed. */
+export async function sendTicketGuestInviteEmail(
+  toEmail: string,
+  guestUrl: string,
+  ticketReference: string,
+  invitedByName: string,
+  branding: TenantBranding | null
+) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toEmail,
+    branding,
+    subject: `${invitedByName} added you to ${productName} ticket ${ticketReference}`,
+    heading: `You've been added to a conversation`,
+    body: `${invitedByName} added you to ticket ${ticketReference} on ${productName}. Use the link below to view and reply — no account needed.`,
+    ctaLabel: "View ticket",
+    ctaUrl: guestUrl,
   });
 }
 

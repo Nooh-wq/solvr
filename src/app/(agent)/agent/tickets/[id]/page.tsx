@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
 import { getTicket, listAgents } from "@/actions/tickets";
+import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
-import { TicketConversation } from "./ticket-conversation";
+import { ConversationThread } from "@/components/conversation-thread";
+import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
+import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { ClientProfileCard } from "./client-profile-card";
 import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
@@ -9,7 +12,7 @@ import { CopilotPanel } from "./copilot-panel";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [ticket, agents] = await Promise.all([getTicket(id), listAgents()]);
+  const [ticket, agents, guests] = await Promise.all([getTicket(id), listAgents(), listTicketGuests(id)]);
   if (!ticket) notFound();
 
   return (
@@ -26,9 +29,10 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           </div>
         </div>
 
-        <TicketConversation
+        <ConversationThread
           description={ticket.description}
           clientName={ticket.client.name}
+          mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,
@@ -36,6 +40,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             isInternal: m.isInternal,
             createdAt: m.createdAt.toISOString(),
             sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
+            attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
           }))}
           composer={<AgentReplyBox ticketId={ticket.id} />}
         />
@@ -62,6 +67,21 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             source: ticket.source,
             category: ticket.category?.name ?? null,
           }}
+        />
+
+        <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
+
+        <FilesAndLinksPanel
+          files={ticket.attachments.map((a) => ({
+            id: a.id,
+            fileName: a.fileName,
+            mimeType: a.mimeType,
+            sizeBytes: a.sizeBytes,
+            url: a.fileUrl,
+            uploadedAt: a.uploadedAt.toISOString(),
+            uploadedByName: a.uploadedBy?.name ?? null,
+          }))}
+          messages={ticket.messages.map((m) => ({ body: m.body, createdAt: m.createdAt.toISOString() }))}
         />
 
         <CopilotPanel ticketId={ticket.id} />

@@ -24,7 +24,15 @@ export type RlsContext = {
   // Optional: the `users` table policy doesn't check role, so
   // getSessionUser() can establish tenant scope from the session JWT alone,
   // before the DB has told us the caller's role.
-  role?: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN";
+  role?: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN" | "GUEST";
+  // Required (and only meaningful) when role is "GUEST" — the one ticket a
+  // guest-invite link grants access to. RLS policies for tickets/messages
+  // exclude GUEST from their normal tenant-wide/own-ticket clauses and
+  // instead check this against the row's ticketId, so a guest session never
+  // inherits the same tenant-wide visibility a real CLIENT/AGENT session
+  // gets just by tenantId matching. See prisma/rls_policies.sql and
+  // lib/guest-access.ts.
+  guestTicketId?: string;
 };
 
 /**
@@ -39,12 +47,12 @@ export async function withRls<T>(
 ): Promise<T> {
   return prisma.$transaction(
     async (tx) => {
-      // All three RLS session vars are set in a single round-trip. Doing them
-      // as three sequential $executeRaw calls tripled the time each connection
-      // was held open just for setup — under the pooler's limited connection
-      // budget that widened the window for concurrent requests to collide and
+      // All four RLS session vars are set in a single round-trip. Doing them
+      // as sequential $executeRaw calls multiplies how long each connection
+      // is held open just for setup — under the pooler's limited connection
+      // budget that widens the window for concurrent requests to collide and
       // time out (P2028). set_config(..., true) scopes each to this tx.
-      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantId}, true), set_config('app.user_id', ${ctx.userId ?? ""}, true), set_config('app.role', ${ctx.role ?? ""}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.tenant_id', ${ctx.tenantId}, true), set_config('app.user_id', ${ctx.userId ?? ""}, true), set_config('app.role', ${ctx.role ?? ""}, true), set_config('app.guest_ticket_id', ${ctx.guestTicketId ?? ""}, true)`;
       return fn(tx);
     },
     {

@@ -16,6 +16,7 @@ export const createTicketSchema = z.object({
 export const replySchema = z.object({
   ticketId: z.string().cuid(),
   body: z.string().min(1).max(20000),
+  attachmentIds: z.array(z.string().cuid()).max(10).optional(),
 });
 
 export const agentReplySchema = replySchema.extend({

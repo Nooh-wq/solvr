@@ -106,19 +106,41 @@ export function BrandingForm({ initial }: { initial: BrandingValues }) {
           </div>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="logoUrl">Logo</Label>
-          <div className="flex gap-2 items-center">
-            <Input id="logoUrl" value={values.logoUrl} onChange={(e) => set("logoUrl", e.target.value)} placeholder="https://…" />
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={onFileSelected}
-            />
-            <Button type="button" variant="secondary" size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-              {uploading ? "Uploading…" : "Upload"}
-            </Button>
+          <Label>Logo</Label>
+          <div className="flex items-center gap-3">
+            {values.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={values.logoUrl}
+                alt="Logo preview"
+                className="h-14 w-14 rounded-xl border border-[var(--color-neutral-300)] bg-white object-contain p-1.5 shrink-0"
+              />
+            ) : (
+              <div className="h-14 w-14 rounded-xl border border-dashed border-[var(--color-neutral-300)] flex items-center justify-center text-[10px] text-[var(--color-neutral-400)] text-center leading-tight shrink-0">
+                No logo
+              </div>
+            )}
+            <div className="flex flex-col items-start gap-1">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={onFileSelected}
+              />
+              <Button type="button" variant="secondary" size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+                {uploading ? "Uploading…" : values.logoUrl ? "Change logo" : "Upload logo"}
+              </Button>
+              {values.logoUrl && (
+                <button
+                  type="button"
+                  onClick={() => set("logoUrl", "")}
+                  className="text-[11px] text-red-600 hover:underline cursor-pointer"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
           <p className="text-[11px] text-[var(--color-neutral-500)]">PNG, JPEG, or WEBP — up to 2MB.</p>
           {uploadError && <p className="text-[12px] text-red-600">{uploadError}</p>}

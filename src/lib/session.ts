@@ -189,3 +189,68 @@ export async function verifyPasswordResetToken(token: string): Promise<PasswordR
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Invite accept + first-login OTP (Team > Invite — see actions/admin.ts's
+// inviteUser() / actions/auth.ts's acceptInvite()/verifyLoginOtp()).
+//
+// Two short-lived stateless JWTs chain the flow together without ever
+// needing a real session cookie until the very end:
+//   invite token (7 days, emailed)      -> acceptInvite() verifies it, sets
+//                                          the user's own password, mints...
+//   otp-verify token (15 min, in-memory) -> ...which the client holds while
+//                                          entering the emailed code;
+//                                          verifyLoginOtp() checks it against
+//                                          LoginOtp (the one piece of actual
+//                                          server-side state in this flow,
+//                                          since a code has to be matched
+//                                          against a value already sent out,
+//                                          unlike a signature-verified JWT)
+//                                          and only THEN creates the real
+//                                          session cookie.
+// ---------------------------------------------------------------------------
+
+const INVITE_DURATION_SECONDS = 60 * 60 * 24 * 7; // 7 days — same reasoning as a session's own lifetime
+const OTP_SESSION_DURATION_SECONDS = 60 * 15; // 15 minutes to read the email and type in the code
+
+export type InviteTokenPayload = { userId: string; tenantId: string };
+
+export async function signInviteToken(payload: InviteTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "invite" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${INVITE_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyInviteToken(token: string): Promise<InviteTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "invite") return null;
+    if (typeof payload.userId !== "string" || typeof payload.tenantId !== "string") return null;
+    return { userId: payload.userId, tenantId: payload.tenantId };
+  } catch {
+    return null;
+  }
+}
+
+export type OtpSessionTokenPayload = { userId: string; tenantId: string };
+
+export async function signOtpSessionToken(payload: OtpSessionTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "otp-verify" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${OTP_SESSION_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyOtpSessionToken(token: string): Promise<OtpSessionTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "otp-verify") return null;
+    if (typeof payload.userId !== "string" || typeof payload.tenantId !== "string") return null;
+    return { userId: payload.userId, tenantId: payload.tenantId };
+  } catch {
+    return null;
+  }
+}
