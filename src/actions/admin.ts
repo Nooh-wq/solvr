@@ -288,28 +288,31 @@ export async function updateBranding(input: z.infer<typeof updateBrandingSchema>
   return { ok: true, contrastWarning };
 }
 
-/** Uploads a tenant's logo to Supabase Storage and saves the resulting public URL — see lib/storage.ts. */
+/**
+ * Uploads a tenant's logo image to Supabase Storage and returns its public
+ * URL — WITHOUT persisting it to the branding record. Persisting only happens
+ * when the admin clicks "Save branding" (updateBranding writes logoUrl), so
+ * the returned URL is purely staged into the form's live preview until then.
+ *
+ * Two things make that "stage, don't apply" guarantee hold:
+ *   1. No tenantBranding.update / revalidate here — the DB (and therefore the
+ *      live platform) is untouched by an upload alone.
+ *   2. A unique, timestamped object path per upload instead of a fixed
+ *      "logo.<ext>" upsert path — otherwise the new file would overwrite the
+ *      object the *currently-saved* logoUrl still points to, changing the live
+ *      logo even without a DB write. (Previously both were violated, which is
+ *      why a logo went live before Save was ever clicked.)
+ */
 export async function uploadBrandingLogo(formData: FormData) {
   const session = await requireSession({ minRole: "ADMIN" });
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return { ok: false as const, error: "No file provided." };
 
   const ext = file.name.split(".").pop()?.toLowerCase() || "png";
-  const result = await uploadImage("branding-logos", `${session.tenantId}/logo.${ext}`, file);
+  const result = await uploadImage("branding-logos", `${session.tenantId}/logo-${Date.now()}.${ext}`, file);
   if (!result.ok) return { ok: false as const, error: result.error };
 
-  // Fixed storage path (upsert) means the public URL never changes, so a
-  // cache-busting query param is needed or browsers keep showing the old
-  // logo after a re-upload.
-  const url = `${result.url}?v=${Date.now()}`;
-
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.tenantBranding.update({ where: { tenantId: session.tenantId }, data: { logoUrl: url } })
-  );
-
-  revalidatePath("/admin/branding");
-  revalidatePath("/", "layout");
-  return { ok: true as const, url };
+  return { ok: true as const, url: result.url };
 }
 
 // ---------------------------------------------------------------------------
