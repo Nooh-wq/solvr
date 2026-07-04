@@ -29,7 +29,7 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded p-4">
+    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-4">
       <Textarea
         rows={3}
         placeholder={isInternal ? "Internal note (not visible to client)…" : "Reply to client…"}
