@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { postAgentReply } from "@/actions/tickets";
+import { uploadTicketAttachment } from "@/actions/attachments";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
+import { useStagedAttachments, StagedAttachmentChips } from "@/components/staged-attachments";
+import { PaperclipIcon } from "@/components/icons";
+import { ATTACHMENT_ALLOWED_MIME } from "@/lib/validation/ticket";
 
 /**
- * Rendered as the composer slot inside TicketConversation, so it lives at the
+ * Rendered as the composer slot inside ConversationThread, so it lives at the
  * bottom of the chat box like a real messaging app instead of a separate
  * card below it. Internal notes are a distinct action (a small button that
  * opens a popup), not a checkbox on the main composer — keeps "reply to
@@ -21,6 +25,8 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
   const { toast } = useToast();
   const [body, setBody] = useState("");
   const [pending, startTransition] = useTransition();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { staged, uploading, addFiles, remove, reset, attachmentIds } = useStagedAttachments((fd) => uploadTicketAttachment(ticketId, fd));
 
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteBody, setNoteBody] = useState("");
@@ -30,8 +36,9 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
     if (!body.trim()) return;
     startTransition(async () => {
       try {
-        await postAgentReply({ ticketId, body, isInternal: false });
+        await postAgentReply({ ticketId, body, isInternal: false, attachmentIds });
         setBody("");
+        reset();
         toast({ title: "Reply sent", variant: "success" });
         router.refresh();
       } catch (e) {
@@ -57,7 +64,28 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
 
   return (
     <>
+      <StagedAttachmentChips files={staged} onRemove={remove} />
       <div className="flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={ATTACHMENT_ALLOWED_MIME.join(",")}
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.length) addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          title="Attach a file"
+          className="h-9 w-9 shrink-0 flex items-center justify-center rounded-full text-[var(--color-neutral-600)] hover:bg-black/[0.05] hover:text-black transition-colors duration-150 cursor-pointer disabled:opacity-50"
+        >
+          <PaperclipIcon className="h-[18px] w-[18px]" />
+        </button>
         <Textarea
           rows={2}
           placeholder="Reply to client…"
@@ -71,7 +99,7 @@ export function AgentReplyBox({ ticketId }: { ticketId: string }) {
           }}
           className="flex-1 resize-none border-0 bg-[var(--color-light-gray)]/60 focus:bg-white transition-colors"
         />
-        <Button onClick={sendReply} disabled={pending || !body.trim()}>
+        <Button onClick={sendReply} disabled={pending || uploading || !body.trim()}>
           {pending ? "Sending…" : "Send reply"}
         </Button>
       </div>

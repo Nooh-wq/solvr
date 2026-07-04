@@ -1,7 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { SearchIcon } from "@/components/icons";
+import { SearchIcon, PaperclipIcon } from "@/components/icons";
+
+export type MessageAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  fileUrl: string; // already a ready-to-use (signed) URL
+};
 
 export type ConversationMessage = {
   id: string;
@@ -10,7 +18,40 @@ export type ConversationMessage = {
   isInternal: boolean;
   createdAt: string; // ISO
   sender: { name: string; avatarUrl: string | null } | null;
+  attachments?: MessageAttachment[];
 };
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Inline attachment: an actual thumbnail for images, a file chip (name + size) for everything else. */
+function AttachmentPreview({ attachment, onLight }: { attachment: MessageAttachment; onLight: boolean }) {
+  if (attachment.mimeType.startsWith("image/")) {
+    return (
+      <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer" className="block mt-2 max-w-[220px]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={attachment.fileUrl} alt={attachment.fileName} className="rounded-lg border border-black/10 max-h-40 object-cover" />
+      </a>
+    );
+  }
+  return (
+    <a
+      href={attachment.fileUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`mt-2 flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] transition-colors duration-150 ${
+        onLight ? "bg-white/15 hover:bg-white/25 text-white" : "bg-black/5 hover:bg-black/10 text-black"
+      }`}
+    >
+      <PaperclipIcon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate font-medium">{attachment.fileName}</span>
+      <span className={`shrink-0 ${onLight ? "text-white/70" : "text-[var(--color-neutral-500)]"}`}>{formatBytes(attachment.sizeBytes)}</span>
+    </a>
+  );
+}
 
 function initials(name: string) {
   return name
@@ -61,25 +102,33 @@ function highlight(text: string, q: string) {
 }
 
 /**
- * Chat-style ticket conversation for the agent workspace. "Our side"
- * (agent/admin) bubbles align right, the client aligns left, and internal
- * notes render as a distinct full-width card that never looks like a client
- * message. Includes in-thread search and a toggle to hide internal notes.
+ * Shared chat-style conversation thread, used by both the agent workspace
+ * and the client portal so the two sides render identically (just mirrored).
+ * `mySenderRoles` decides which messages align right ("our side") for
+ * whoever is currently looking at the screen — an agent passes
+ * ["AGENT","ADMIN","SUPER_ADMIN"], a client passes ["CLIENT"]. The opening
+ * ticket description is always authored by the client, so it's positioned
+ * via the same isOurSide("CLIENT") check as any other message — meaning a
+ * client sees their own opening message on the right, while an agent sees
+ * it on the left, exactly like every reply that follows.
  */
-export function TicketConversation({
+export function ConversationThread({
   description,
   clientName,
   messages,
+  mySenderRoles,
   composer,
 }: {
   description: string;
   clientName: string;
   messages: ConversationMessage[];
-  /** Rendered pinned to the bottom of the same chat box, below a divider — keeps the reply field inside the conversation like a real chat app. */
+  mySenderRoles: string[];
   composer?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [showInternal, setShowInternal] = useState(true);
+
+  const isOurSide = (role: string) => mySenderRoles.includes(role);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -101,11 +150,11 @@ export function TicketConversation({
     else groups.push({ day, items: [m] });
   }
 
-  const isOurSide = (role: string) => role === "AGENT" || role === "ADMIN" || role === "SUPER_ADMIN";
-
   return (
     <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden flex flex-col">
-      {/* Toolbar: search + internal toggle */}
+      {/* Toolbar: search + internal toggle (the toggle only ever renders when
+          there are internal notes to hide — never the case for a client
+          viewer, since getTicket() already filters those out server-side). */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-black/5 bg-white/60">
         <div className="relative flex-1 max-w-xs">
           <SearchIcon className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-neutral-400)]" />
@@ -133,7 +182,7 @@ export function TicketConversation({
       <div className="p-4 space-y-4 max-h-[560px] overflow-y-auto">
         {/* Original request as the opening client message */}
         {!query && (
-          <Bubble side="left" name={clientName} initials={initials(clientName)}>
+          <Bubble side={isOurSide("CLIENT") ? "right" : "left"} name={clientName} initials={initials(clientName)}>
             <p className="whitespace-pre-wrap">{description}</p>
           </Bubble>
         )}
@@ -163,6 +212,9 @@ export function TicketConversation({
                       <span className="text-[11px] text-[var(--color-neutral-400)] ml-auto">{timeLabel(m.createdAt)}</span>
                     </div>
                     <p className="text-[13px] whitespace-pre-wrap">{highlight(m.body, query)}</p>
+                    {m.attachments?.map((a) => (
+                      <AttachmentPreview key={a.id} attachment={a} onLight={false} />
+                    ))}
                   </div>
                 );
               }
@@ -177,6 +229,9 @@ export function TicketConversation({
                   time={timeLabel(m.createdAt)}
                 >
                   <p className="whitespace-pre-wrap">{highlight(m.body, query)}</p>
+                  {m.attachments?.map((a) => (
+                    <AttachmentPreview key={a.id} attachment={a} onLight={ours} />
+                  ))}
                 </Bubble>
               );
             })}

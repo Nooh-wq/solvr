@@ -6,10 +6,11 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
-import { sendAgentInviteEmail, sendRegistrationApprovedEmail, sendRegistrationRejectedEmail } from "@/lib/email/events";
+import { sendUserInviteEmail, sendRegistrationApprovedEmail, sendRegistrationRejectedEmail } from "@/lib/email/events";
 import { contrastRatio } from "@/lib/color";
 import { notify } from "@/lib/notifications";
 import { uploadImage } from "@/lib/storage";
+import { signInviteToken } from "@/lib/session";
 import {
   inviteUserSchema,
   updateUserSchema,
@@ -41,9 +42,18 @@ export async function listPendingUsers() {
   );
 }
 
-type InviteUserResult = { ok: true; tempPassword: string } | { ok: false; error: string };
+type InviteUserResult = { ok: true } | { ok: false; error: string };
 
-/** Admin creates a user directly (no external invite-acceptance flow yet) with a generated temp password. Admin-invited users skip the registration approval gate — the admin creating them *is* the approval. */
+/**
+ * Admin creates a user directly with status INVITED — a placeholder password
+ * hash goes in (random, never emailed, unusable) since the column can't be
+ * null, but nobody can actually log in with it: login() rejects INVITED
+ * accounts outright. Instead this emails an accept-invite link; the user
+ * sets their own password there and verifies a one-time emailed code before
+ * their first session is ever created (see acceptInvite()/verifyLoginOtp()
+ * in actions/auth.ts). Admin-invited users skip the registration approval
+ * gate — the admin creating them *is* the approval.
+ */
 export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promise<InviteUserResult> {
   const session = await requireSession({ minRole: "ADMIN" });
 
@@ -57,8 +67,7 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
 
-  const tempPassword = generateTempPassword();
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  const placeholderHash = await bcrypt.hash(generateTempPassword(), 10);
 
   let user: { id: string; email: string };
   let branding: Awaited<ReturnType<typeof getBranding>>;
@@ -78,8 +87,8 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
             email: data.email,
             role: data.role,
             company: data.company,
-            passwordHash,
-            status: "ACTIVE",
+            passwordHash: placeholderHash,
+            status: "INVITED",
           },
         });
         await tx.auditLog.create({
@@ -96,10 +105,12 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
     throw e;
   }
 
-  await sendAgentInviteEmail(user.email, tempPassword, branding);
+  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
+  await sendUserInviteEmail(user.email, acceptUrl, branding);
 
   revalidatePath("/admin/team");
-  return { ok: true, tempPassword };
+  return { ok: true };
 }
 
 export async function updateUser(input: z.infer<typeof updateUserSchema>) {

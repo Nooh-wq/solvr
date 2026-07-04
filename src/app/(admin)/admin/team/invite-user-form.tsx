@@ -11,27 +11,24 @@ export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
   const router = useRouter();
   const { toast } = useToast();
   const [error, setError] = useState<string | null>(null);
-  const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function onSubmit(formData: FormData) {
     setError(null);
-    setTempPassword(null);
+    setSentTo(null);
     const name = String(formData.get("name"));
+    const email = String(formData.get("email"));
     startTransition(async () => {
       try {
-        const result = await inviteUser({
-          name,
-          email: String(formData.get("email")),
-          role: formData.get("role") as "CLIENT" | "AGENT" | "ADMIN",
-        });
+        const result = await inviteUser({ name, email, role: formData.get("role") as "CLIENT" | "AGENT" | "ADMIN" });
         if (!result.ok) {
           setError(result.error);
           toast({ title: "Couldn't send invite", description: result.error, variant: "error" });
           return;
         }
-        setTempPassword(result.tempPassword);
-        toast({ title: "Invite sent", description: `${name} can now log in.`, variant: "success" });
+        setSentTo(email);
+        toast({ title: "Invite sent", description: `${name} will get an email to set up their account.`, variant: "success" });
         router.refresh();
       } catch (e) {
         const message = e instanceof Error ? e.message : "Could not invite user.";
@@ -60,10 +57,9 @@ export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
           </Select>
         </div>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
-        {tempPassword && (
+        {sentTo && (
           <p className="text-[12px] bg-[var(--color-orange-pale)] p-2 rounded-xl">
-            Account created. Temporary password: <span className="font-mono font-semibold">{tempPassword}</span>
-            {" — an invite email was also sent (or logged, if email isn't configured)."}
+            Invite sent to <span className="font-medium">{sentTo}</span> — they&apos;ll set their own password and verify a one-time code before their first login.
           </p>
         )}
         <Button type="submit" className="w-full" disabled={pending}>
