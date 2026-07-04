@@ -77,13 +77,13 @@ function timeLabel(iso: string) {
 }
 
 /** Highlights case-insensitive matches of `q` within `text`. */
-function highlight(text: string, q: string) {
-  if (!q) return text;
+function highlightPlain(text: string, q: string, keyOffset = 0): React.ReactNode[] {
+  if (!q) return [text];
   const parts: React.ReactNode[] = [];
   const lower = text.toLowerCase();
   const ql = q.toLowerCase();
   let i = 0;
-  let key = 0;
+  let key = keyOffset;
   while (i < text.length) {
     const idx = lower.indexOf(ql, i);
     if (idx === -1) {
@@ -99,6 +99,103 @@ function highlight(text: string, q: string) {
     i = idx + q.length;
   }
   return parts;
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Inline formatting written by MessageComposer (**bold**, *italic*,
+ * __underline__) plus @mentions of known participants, layered with the
+ * existing search highlight — all in one left-to-right scan so they compose
+ * instead of clobbering each other. Deliberately builds React elements
+ * directly (never dangerouslySetInnerHTML), so arbitrary HTML in a message
+ * body is never a rendering concern.
+ */
+function renderInline(text: string, query: string, mentionNames: string[]): React.ReactNode[] {
+  if (!text) return [];
+  const mentionAlt = mentionNames.length
+    ? mentionNames
+        .slice()
+        .sort((a, b) => b.length - a.length)
+        .map(escapeRegExp)
+        .join("|")
+    : null;
+  const pattern = new RegExp(`\\*\\*(.+?)\\*\\*|__(.+?)__|\\*(.+?)\\*${mentionAlt ? `|@(${mentionAlt})` : ""}`, "g");
+
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text))) {
+    if (m.index > last) {
+      nodes.push(...highlightPlain(text.slice(last, m.index), query, key));
+      key += 1000;
+    }
+    if (m[1] !== undefined) nodes.push(<strong key={key++}>{m[1]}</strong>);
+    else if (m[2] !== undefined) nodes.push(<u key={key++}>{m[2]}</u>);
+    else if (m[3] !== undefined) nodes.push(<em key={key++}>{m[3]}</em>);
+    else if (m[4] !== undefined)
+      nodes.push(
+        <span key={key++} className="font-semibold text-[var(--color-primary)] bg-[var(--color-orange-pale)] rounded px-1">
+          @{m[4]}
+        </span>
+      );
+    last = pattern.lastIndex;
+  }
+  if (last < text.length) nodes.push(...highlightPlain(text.slice(last), query, key));
+  return nodes;
+}
+
+/** "- "/"1. " lines (written by MessageComposer's list buttons) render as real <ul>/<ol>; everything else is a paragraph line. */
+function renderMessageBody(text: string, query: string, mentionNames: string[]): React.ReactNode {
+  const lines = text.split("\n");
+  const blocks: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const isBullet = (l: string) => /^[•-]\s+/.test(l);
+    const isOrdered = (l: string) => /^\d+\.\s+/.test(l);
+    if (isBullet(lines[i])) {
+      const items: string[] = [];
+      while (i < lines.length && isBullet(lines[i])) {
+        items.push(lines[i].replace(/^[•-]\s+/, ""));
+        i++;
+      }
+      blocks.push(
+        <ul key={key++} className="list-disc pl-4 my-1 space-y-0.5">
+          {items.map((it, idx) => (
+            <li key={idx}>{renderInline(it, query, mentionNames)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+    if (isOrdered(lines[i])) {
+      const items: string[] = [];
+      while (i < lines.length && isOrdered(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s+/, ""));
+        i++;
+      }
+      blocks.push(
+        <ol key={key++} className="list-decimal pl-4 my-1 space-y-0.5">
+          {items.map((it, idx) => (
+            <li key={idx}>{renderInline(it, query, mentionNames)}</li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+    blocks.push(
+      <span key={key++}>
+        {renderInline(lines[i], query, mentionNames)}
+        {i < lines.length - 1 ? <br /> : null}
+      </span>
+    );
+    i++;
+  }
+  return blocks;
 }
 
 /**
@@ -118,12 +215,15 @@ export function ConversationThread({
   messages,
   mySenderRoles,
   composer,
+  mentionNames = [],
 }: {
   description: string;
   clientName: string;
   messages: ConversationMessage[];
   mySenderRoles: string[];
   composer?: React.ReactNode;
+  /** Known participant display names — used only to recognize @mentions already written into a message body when rendering it back. See page.tsx's participantNames(), which also feeds MessageComposer's autocomplete list. */
+  mentionNames?: string[];
 }) {
   const [query, setQuery] = useState("");
   const [showInternal, setShowInternal] = useState(true);
@@ -183,7 +283,7 @@ export function ConversationThread({
         {/* Original request as the opening client message */}
         {!query && (
           <Bubble side={isOurSide("CLIENT") ? "right" : "left"} name={clientName} initials={initials(clientName)}>
-            <p className="whitespace-pre-wrap">{description}</p>
+            <div className="whitespace-pre-wrap">{renderMessageBody(description, "", mentionNames)}</div>
           </Bubble>
         )}
 
@@ -211,7 +311,7 @@ export function ConversationThread({
                       <span className="text-[11px] text-[var(--color-neutral-600)]">{name}</span>
                       <span className="text-[11px] text-[var(--color-neutral-400)] ml-auto">{timeLabel(m.createdAt)}</span>
                     </div>
-                    <p className="text-[13px] whitespace-pre-wrap">{highlight(m.body, query)}</p>
+                    <div className="text-[13px] whitespace-pre-wrap">{renderMessageBody(m.body, query, mentionNames)}</div>
                     {m.attachments?.map((a) => (
                       <AttachmentPreview key={a.id} attachment={a} onLight={false} />
                     ))}
@@ -228,7 +328,7 @@ export function ConversationThread({
                   avatarUrl={m.sender?.avatarUrl ?? null}
                   time={timeLabel(m.createdAt)}
                 >
-                  <p className="whitespace-pre-wrap">{highlight(m.body, query)}</p>
+                  <div className="whitespace-pre-wrap">{renderMessageBody(m.body, query, mentionNames)}</div>
                   {m.attachments?.map((a) => (
                     <AttachmentPreview key={a.id} attachment={a} onLight={ours} />
                   ))}

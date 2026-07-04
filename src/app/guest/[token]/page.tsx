@@ -2,6 +2,7 @@ import Image from "next/image";
 import { getGuestTicketView } from "@/actions/guest";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { ConversationThread } from "@/components/conversation-thread";
+import { participantNames } from "@/lib/participants";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { GuestReplyBox } from "./guest-reply-box";
 import type { TicketStatus, Priority } from "@/generated/prisma";
@@ -11,6 +12,7 @@ export default async function GuestTicketPage({ params }: { params: Promise<{ to
   const [view, tenant] = await Promise.all([getGuestTicketView(token), getCurrentTenant()]);
   const productName = tenant.branding?.productName ?? "solvr";
   const logoUrl = tenant.branding?.logoUrl;
+  const mentionNames = view ? participantNames(view.clientName, view.messages) : [];
 
   return (
     <div className="min-h-screen app-shell-bg px-4 py-10">
@@ -53,7 +55,8 @@ export default async function GuestTicketPage({ params }: { params: Promise<{ to
               clientName={view.clientName}
               mySenderRoles={["GUEST"]}
               messages={view.messages}
-              composer={<GuestReplyBox token={token} />}
+              mentionNames={mentionNames}
+              composer={<GuestReplyBox token={token} mentionNames={mentionNames} />}
             />
           </>
         )}

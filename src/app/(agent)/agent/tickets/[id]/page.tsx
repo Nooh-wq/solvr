@@ -3,6 +3,7 @@ import { getTicket, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
+import { participantNames } from "@/lib/participants";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { ClientProfileCard } from "./client-profile-card";
@@ -14,6 +15,8 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const [ticket, agents, guests] = await Promise.all([getTicket(id), listAgents(), listTicketGuests(id)]);
   if (!ticket) notFound();
+
+  const mentionNames = participantNames(ticket.client.name, ticket.messages);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -33,6 +36,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           description={ticket.description}
           clientName={ticket.client.name}
           mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
+          mentionNames={mentionNames}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,
@@ -42,7 +46,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
             attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
           }))}
-          composer={<AgentReplyBox ticketId={ticket.id} />}
+          composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} />}
         />
       </div>
 

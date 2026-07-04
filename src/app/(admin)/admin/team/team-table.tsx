@@ -1,11 +1,13 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { updateUser } from "@/actions/admin";
+import { updateUser, deleteUser } from "@/actions/admin";
 import { Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
+import { TrashIcon } from "@/components/icons";
 import type { Role, UserStatus } from "@/generated/prisma";
 
 type TeamMember = { id: string; name: string; email: string; role: Role; status: UserStatus };
@@ -23,6 +25,8 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
+  const [deletePending, startDeleteTransition] = useTransition();
+  const [toDelete, setToDelete] = useState<TeamMember | null>(null);
 
   function changeRole(userId: string, name: string, role: AssignableRole) {
     startTransition(async () => {
@@ -44,6 +48,21 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
         router.refresh();
       } catch (e) {
         toast({ title: "Couldn't update status", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
+    });
+  }
+
+  function confirmDelete() {
+    if (!toDelete) return;
+    const { id, name } = toDelete;
+    startDeleteTransition(async () => {
+      const result = await deleteUser({ userId: id });
+      if (result.ok) {
+        toast({ title: "Person deleted", description: name, variant: "success" });
+        setToDelete(null);
+        router.refresh();
+      } else {
+        toast({ title: "Couldn't delete", description: result.error, variant: "error" });
       }
     });
   }
@@ -80,20 +99,46 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
               </td>
               <td className="px-4 py-3">{STATUS_LABEL[u.status]}</td>
               <td className="px-4 py-3">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={pending}
-                  onClick={() => toggleActive(u.id, u.name, u.status === "ACTIVE")}
-                >
-                  {u.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => toggleActive(u.id, u.name, u.status === "ACTIVE")}
+                  >
+                    {u.status === "ACTIVE" ? "Deactivate" : "Reactivate"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setToDelete(u)}
+                    title={`Delete ${u.name}`}
+                    aria-label={`Delete ${u.name}`}
+                    className="h-8 w-8 shrink-0 flex items-center justify-center rounded-full text-[var(--color-neutral-500)] hover:bg-red-50 hover:text-red-600 transition-colors duration-150 cursor-pointer"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       </div>
+
+      <Modal open={toDelete !== null} onClose={() => setToDelete(null)} title="Delete this person?">
+        <p className="text-[13px] text-[var(--color-neutral-600)] mb-4">
+          This permanently removes <span className="font-semibold text-black">{toDelete?.name}</span> ({toDelete?.email}). This
+          can&apos;t be undone. If they have ticket history on record, deleting will fail — deactivate them instead.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setToDelete(null)} disabled={deletePending}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={confirmDelete} disabled={deletePending}>
+            {deletePending ? "Deleting…" : "Delete"}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

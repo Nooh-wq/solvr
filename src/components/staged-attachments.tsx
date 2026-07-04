@@ -5,7 +5,7 @@ import { useToast } from "@/components/ui/toast";
 import { PaperclipIcon, CloseIcon } from "@/components/icons";
 
 export type StagedFile = { id: string; fileName: string; mimeType: string; sizeBytes: number; previewUrl: string | null };
-type UploadResult = { ok: true; attachment: StagedFile } | { ok: false; error: string };
+export type UploadResult = { ok: true; attachment: StagedFile } | { ok: false; error: string };
 
 /**
  * Shared "attach a file to this reply" state, used by the agent, client, and

@@ -1,20 +1,24 @@
 "use client";
 
-import { useState, useTransition, useRef, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { sendChatMessage, escalateChatToTicket } from "@/actions/chat";
 import { Button } from "@/components/ui/button";
-import { ChatIcon, CloseIcon } from "@/components/icons";
+import { SparklesIcon } from "@/components/icons";
 import { useToast } from "@/components/ui/toast";
 
 type WidgetMessage = { role: "CLIENT" | "BOT"; body: string; citations?: string[] };
 
-/** Hidden on a ticket's own detail page — that page embeds its own "Ask AI" panel (see ClientAiChatPanel) instead, so there's only one chat surface per page. */
-export function ChatWidget() {
+/**
+ * Client-facing "Ask AI" box — same underlying chat protocol as the
+ * floating ChatWidget (sendChatMessage/escalateChatToTicket), just embedded
+ * in the ticket detail page's right column instead of a floating bubble,
+ * and chat-only (no Summarize/Suggest reply — those read internal ticket
+ * context an external client shouldn't see; see agent's CopilotPanel).
+ */
+export function ClientAiChatPanel() {
   const router = useRouter();
-  const pathname = usePathname();
   const { toast } = useToast();
-  const [open, setOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<WidgetMessage[]>([]);
   const [input, setInput] = useState("");
@@ -36,8 +40,6 @@ export function ChatWidget() {
     startTransition(async () => {
       const result = await sendChatMessage({ conversationId, body });
       if ("error" in result) {
-        // NOT_CONFIGURED / DISABLED are terminal (disable the input);
-        // RATE_LIMITED is transient (let them retry after a moment).
         if (result.error === "RATE_LIMITED") {
           setTransientError("You're sending messages too quickly — please wait a moment and try again.");
         } else {
@@ -60,44 +62,34 @@ export function ChatWidget() {
     });
   }
 
-  if (pathname?.startsWith("/portal/tickets/")) return null;
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 h-12 w-12 rounded-full bg-[var(--color-primary)] text-white shadow-[0_8px_24px_-6px_var(--color-primary)] flex items-center justify-center transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-6px_var(--color-primary)] active:scale-95 cursor-pointer"
-        aria-label="Open chat"
-      >
-        <ChatIcon className="h-5 w-5" />
-      </button>
-    );
-  }
-
   return (
-    <div className="fixed bottom-6 right-6 w-80 glass-panel rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] flex flex-col animate-[fadeIn_150ms_ease-out]" style={{ height: 420 }}>
-      <div className="h-11 border-b border-black/5 flex items-center justify-between px-3">
-        <span className="text-[13px] font-semibold">Chat with us</span>
-        <button
-          onClick={() => setOpen(false)}
-          aria-label="Close chat"
-          className="h-7 w-7 flex items-center justify-center rounded-lg text-[var(--color-neutral-600)] hover:bg-black/[0.045] hover:text-black transition-colors duration-150 cursor-pointer"
-        >
-          <CloseIcon className="h-4 w-4" />
-        </button>
+    <div
+      className="rounded-2xl border border-[var(--color-primary)]/30 bg-gradient-to-b from-[var(--color-orange-pale)] to-white shadow-[0_8px_30px_-12px_var(--color-primary)] overflow-hidden flex flex-col"
+      style={{ height: 360 }}
+    >
+      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--color-primary)]/15 shrink-0">
+        <span className="h-8 w-8 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-[0_4px_12px_-2px_var(--color-primary)] shrink-0">
+          <SparklesIcon className="h-[18px] w-[18px]" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-[14px] font-bold leading-tight">Ask AI</h3>
+          <p className="text-[11px] text-[var(--color-neutral-600)] leading-tight">Answers from our knowledge base</p>
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-2">
-        {messages.length === 0 && (
-          <p className="text-[12px] text-[var(--color-neutral-600)]">Ask a question — we&apos;ll answer from our knowledge base, or help you open a ticket.</p>
+        {messages.length === 0 && !notConfigured && (
+          <p className="text-[12px] text-[var(--color-neutral-600)]">
+            Ask a question — we&apos;ll answer from our knowledge base, or help you open a new ticket.
+          </p>
         )}
         {messages.map((m, i) => (
           <div
             key={i}
             className={
               m.role === "CLIENT"
-                ? "ml-8 bg-[var(--color-light-gray)] rounded-2xl px-3 py-2 text-[13px]"
-                : "mr-8 bg-[var(--color-orange-pale)] rounded-2xl px-3 py-2 text-[13px]"
+                ? "ml-6 bg-white/80 rounded-2xl px-3 py-2 text-[13px]"
+                : "mr-6 bg-white border border-black/5 rounded-2xl px-3 py-2 text-[13px]"
             }
           >
             <p className="whitespace-pre-wrap">{m.body}</p>
@@ -108,21 +100,21 @@ export function ChatWidget() {
         ))}
         {notConfigured && (
           <p className="text-[12px] text-[var(--color-neutral-600)]">
-            The chatbot isn&apos;t configured yet (no Anthropic API key) — please use &quot;New ticket&quot; instead.
+            The AI assistant isn&apos;t configured yet — reply on the ticket directly instead.
           </p>
         )}
         {transientError && <p className="text-[12px] text-red-600">{transientError}</p>}
       </div>
 
-      <div className="border-t border-black/5 p-2 space-y-2">
+      <div className="border-t border-[var(--color-primary)]/15 p-2 space-y-2 shrink-0">
         {conversationId && (
           <Button variant="secondary" size="sm" className="w-full" onClick={escalate} disabled={pending}>
-            Create a ticket from this chat
+            Create a new ticket from this chat
           </Button>
         )}
         <div className="flex gap-2">
           <input
-            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl"
+            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
             placeholder="Type a message…"
             value={input}
             onChange={(e) => setInput(e.target.value)}

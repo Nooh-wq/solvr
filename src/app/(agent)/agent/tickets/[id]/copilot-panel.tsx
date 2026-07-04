@@ -58,17 +58,15 @@ export function CopilotPanel({ ticketId }: { ticketId: string }) {
               <button
                 onClick={runSummarize}
                 disabled={pending}
-                className="flex items-center justify-center gap-1.5 h-10 rounded-full bg-[var(--color-primary)] text-white text-[13px] font-semibold shadow-[0_4px_14px_-4px_var(--color-primary)] hover:brightness-105 active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex items-center justify-center h-10 rounded-full bg-[var(--color-primary)] text-white text-[13px] font-semibold shadow-[0_4px_14px_-4px_var(--color-primary)] hover:brightness-105 active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <SparklesIcon className="h-4 w-4" />
                 {pending && action === "summary" ? "Summarizing…" : "Summarize"}
               </button>
               <button
                 onClick={runSuggestReply}
                 disabled={pending}
-                className="flex items-center justify-center gap-1.5 h-10 rounded-full bg-white border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[13px] font-semibold hover:bg-[var(--color-orange-pale)] active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex items-center justify-center h-10 rounded-full bg-white border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[13px] font-semibold hover:bg-[var(--color-orange-pale)] active:scale-[0.98] transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <SparklesIcon className="h-4 w-4" />
                 {pending && action === "reply" ? "Drafting…" : "Suggest reply"}
               </button>
             </div>

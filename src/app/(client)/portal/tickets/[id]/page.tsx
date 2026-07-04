@@ -4,6 +4,8 @@ import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
+import { ClientAiChatPanel } from "@/components/client-ai-chat-panel";
+import { participantNames } from "@/lib/participants";
 import { TicketThread } from "./ticket-thread";
 import { TicketActions } from "./ticket-actions";
 
@@ -12,50 +14,59 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
   const [ticket, guests] = await Promise.all([getTicket(id), listTicketGuests(id)]);
   if (!ticket) notFound();
 
+  const mentionNames = participantNames(ticket.client.name, ticket.messages);
+
   return (
-    <div className="max-w-3xl">
-      <div className="flex items-start justify-between mb-1">
-        <div>
-          <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
-          <h1 className="text-2xl font-bold">{ticket.title}</h1>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 flex flex-col min-w-0">
+        <div className="flex items-start justify-between mb-1">
+          <div className="min-w-0">
+            <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
+            <h1 className="text-2xl font-bold truncate">{ticket.title}</h1>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <PriorityLabel priority={ticket.priority} size="lg" />
+            <StatusBadge status={ticket.status} size="lg" />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <PriorityLabel priority={ticket.priority} size="lg" />
-          <StatusBadge status={ticket.status} size="lg" />
-        </div>
+        <p className="text-sm text-[var(--color-neutral-600)] mb-6">{ticket.category?.name ?? "Uncategorized"}</p>
+
+        <TicketThread
+          description={ticket.description}
+          clientName={ticket.client.name}
+          ticketId={ticket.id}
+          mentionNames={mentionNames}
+          messages={ticket.messages.map((m) => ({
+            id: m.id,
+            body: m.body,
+            senderRole: m.senderRole,
+            isInternal: m.isInternal,
+            createdAt: m.createdAt.toISOString(),
+            sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
+            attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
+          }))}
+        />
+        <TicketActions ticketId={ticket.id} status={ticket.status} />
       </div>
-      <p className="text-sm text-[var(--color-neutral-600)] mb-6">{ticket.category?.name ?? "Uncategorized"}</p>
 
-      <TicketThread
-        description={ticket.description}
-        clientName={ticket.client.name}
-        ticketId={ticket.id}
-        messages={ticket.messages.map((m) => ({
-          id: m.id,
-          body: m.body,
-          senderRole: m.senderRole,
-          isInternal: m.isInternal,
-          createdAt: m.createdAt.toISOString(),
-          sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
-          attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
-        }))}
-      />
-      <TicketActions ticketId={ticket.id} status={ticket.status} />
+      <div className="lg:col-span-1">
+        <ClientAiChatPanel />
 
-      <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
+        <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
 
-      <FilesAndLinksPanel
-        files={ticket.attachments.map((a) => ({
-          id: a.id,
-          fileName: a.fileName,
-          mimeType: a.mimeType,
-          sizeBytes: a.sizeBytes,
-          url: a.fileUrl,
-          uploadedAt: a.uploadedAt.toISOString(),
-          uploadedByName: a.uploadedBy?.name ?? null,
-        }))}
-        messages={ticket.messages.map((m) => ({ body: m.body, createdAt: m.createdAt.toISOString() }))}
-      />
+        <FilesAndLinksPanel
+          files={ticket.attachments.map((a) => ({
+            id: a.id,
+            fileName: a.fileName,
+            mimeType: a.mimeType,
+            sizeBytes: a.sizeBytes,
+            url: a.fileUrl,
+            uploadedAt: a.uploadedAt.toISOString(),
+            uploadedByName: a.uploadedBy?.name ?? null,
+          }))}
+          messages={ticket.messages.map((m) => ({ body: m.body, createdAt: m.createdAt.toISOString() }))}
+        />
+      </div>
     </div>
   );
 }
