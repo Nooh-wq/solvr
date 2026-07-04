@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { Prisma } from "@/generated/prisma";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { sendUserInviteEmail, sendRegistrationApprovedEmail, sendRegistrationRejectedEmail } from "@/lib/email/events";
@@ -154,6 +155,43 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
     revalidatePath("/admin/team");
     return { ok: true, user: updated };
   });
+}
+
+/**
+ * Permanently removes a user. `tickets.clientId` is `ON DELETE RESTRICT`
+ * (see prisma/migrations/20260701012236_init), so this fails cleanly with a
+ * clear message for any CLIENT who has ever opened a ticket — deleting them
+ * would either silently orphan that ticket's history or require deciding
+ * what to do with it, neither of which "delete a person" should do
+ * implicitly. Agents/admins delete cleanly even with history: their
+ * `messages.senderId`/`audit_logs.actorId`/`tickets.assignedToId` references
+ * are all `ON DELETE SET NULL`, the same "this person left" behavior the
+ * schema already uses.
+ */
+export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+  if (data.userId === session.id) return { ok: false, error: "You can't delete your own account." };
+
+  try {
+    return await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) return { ok: false, error: "User not found." };
+
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "DELETE_USER", toValue: target.email },
+      });
+      await tx.user.delete({ where: { id: target.id } });
+
+      revalidatePath("/admin/team");
+      return { ok: true };
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return { ok: false, error: "Can't delete — this person still has tickets on record. Deactivate them instead." };
+    }
+    throw e;
+  }
 }
 
 /** Approves a PENDING registration (email flow design §"Registration Approval Gate"). */

@@ -221,6 +221,80 @@ export function LinkIcon(props: IconProps) {
   );
 }
 
+export function TrashIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4.5 6h11M8 6V4.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V6" />
+      <path d="M6 6l.6 9.2a1 1 0 0 0 1 .8h4.8a1 1 0 0 0 1-.8L14 6" />
+      <path d="M8.5 9v4M11.5 9v4" />
+    </svg>
+  );
+}
+
+export function SendIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M17 3 3 9.2l5.5 1.8M17 3l-5 14-3.5-6M17 3 8.5 11" />
+    </svg>
+  );
+}
+
+export function BoldIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6.5 4h4.2a2.8 2.8 0 0 1 0 5.6H6.5V4Z" />
+      <path d="M6.5 9.6h4.7a3 3 0 0 1 0 6H6.5V9.6Z" />
+    </svg>
+  );
+}
+
+export function ItalicIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M9 4h5M6 16h5M11 4l-3 12" />
+    </svg>
+  );
+}
+
+export function UnderlineIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5.5 4v5.5a4.5 4.5 0 0 0 9 0V4M4.5 16.5h11" />
+    </svg>
+  );
+}
+
+export function ListBulletIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="4.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="10" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="14.5" r="1" fill="currentColor" stroke="none" />
+      <path d="M8 5.5h8M8 10h8M8 14.5h8" />
+    </svg>
+  );
+}
+
+export function ListOrderedIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 5.5h8M8 10h8M8 14.5h8" />
+      <text x="2.5" y="7" fontSize="4.5" fill="currentColor" stroke="none" fontFamily="sans-serif">1</text>
+      <text x="2.5" y="11.5" fontSize="4.5" fill="currentColor" stroke="none" fontFamily="sans-serif">2</text>
+      <text x="2.5" y="16" fontSize="4.5" fill="currentColor" stroke="none" fontFamily="sans-serif">3</text>
+    </svg>
+  );
+}
+
+export function AtIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10.5" r="3" />
+      <path d="M13 10.5v1.3a1.7 1.7 0 0 0 3.4 0V10.5a6.4 6.4 0 1 0-2.7 5.2" />
+    </svg>
+  );
+}
+
 export function UserPlusIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
