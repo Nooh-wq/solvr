@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SearchIcon, PaperclipIcon } from "@/components/icons";
 
 export type MessageAttachment = {
@@ -209,13 +209,16 @@ function renderMessageBody(text: string, query: string, mentionNames: string[]):
  * client sees their own opening message on the right, while an agent sees
  * it on the left, exactly like every reply that follows.
  */
+const POLL_MS = 4000;
+
 export function ConversationThread({
   description,
   clientName,
-  messages,
+  messages: initialMessages,
   mySenderRoles,
   composer,
   mentionNames = [],
+  onPoll,
 }: {
   description: string;
   clientName: string;
@@ -224,9 +227,40 @@ export function ConversationThread({
   composer?: React.ReactNode;
   /** Known participant display names — used only to recognize @mentions already written into a message body when rendering it back. See page.tsx's participantNames(), which also feeds MessageComposer's autocomplete list. */
   mentionNames?: string[];
+  /** Polled every few seconds so a reply from the other side shows up without a manual refresh — see getTicketMessages()/getGuestTicketMessages(). Omit to disable polling. */
+  onPoll?: () => Promise<ConversationMessage[] | null>;
 }) {
   const [query, setQuery] = useState("");
   const [showInternal, setShowInternal] = useState(true);
+  const [messages, setMessages] = useState(initialMessages);
+  // Tracks the last `initialMessages` reference so a fresh one (e.g. after
+  // router.refresh() on the sender's own send) can override whatever the poll
+  // last fetched — both are equally "current", but this keeps the sender's
+  // own reply appearing instantly instead of waiting for a tick. Adjusting
+  // state directly during render (React's recommended pattern for this,
+  // rather than a useEffect) avoids an extra render pass.
+  const [prevInitialMessages, setPrevInitialMessages] = useState(initialMessages);
+  if (initialMessages !== prevInitialMessages) {
+    setPrevInitialMessages(initialMessages);
+    setMessages(initialMessages);
+  }
+
+  useEffect(() => {
+    if (!onPoll) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const fresh = await onPoll();
+        if (!cancelled && fresh) setMessages(fresh);
+      } catch {
+        // Transient network/DB hiccup — skip this tick, the next one recovers.
+      }
+    }, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [onPoll]);
 
   const isOurSide = (role: string) => mySenderRoles.includes(role);
 

@@ -13,12 +13,14 @@ export function TicketThread({
   messages,
   ticketId,
   mentionNames = [],
+  onPoll,
 }: {
   description: string;
   clientName: string;
   messages: ConversationMessage[];
   ticketId: string;
   mentionNames?: string[];
+  onPoll?: () => Promise<ConversationMessage[] | null>;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -26,7 +28,6 @@ export function TicketThread({
   async function onSend(body: string, attachmentIds: string[]) {
     try {
       await postClientReply({ ticketId, body, attachmentIds });
-      toast({ title: "Reply sent", variant: "success" });
       router.refresh();
     } catch (e) {
       toast({ title: "Couldn't send reply", description: e instanceof Error ? e.message : undefined, variant: "error" });
@@ -40,6 +41,7 @@ export function TicketThread({
       mySenderRoles={["CLIENT"]}
       messages={messages}
       mentionNames={mentionNames}
+      onPoll={onPoll}
       composer={
         <MessageComposer
           placeholder="Reply to this ticket…"
