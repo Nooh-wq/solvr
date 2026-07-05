@@ -1,5 +1,7 @@
 import Image from "next/image";
 import { getCurrentTenant } from "@/lib/current-tenant";
+import { AuthTabs } from "./auth-tabs";
+import { AuthShowcase } from "./auth-showcase";
 
 export default async function AuthLayout({ children }: { children: React.ReactNode }) {
   const tenant = await getCurrentTenant();
@@ -7,22 +9,28 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
   const logoUrl = tenant.branding?.logoUrl;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center app-shell-bg px-4">
-      <div className="w-full max-w-sm animate-[fadeIn_300ms_ease-out]">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          {logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={logoUrl} alt="" className="h-5 w-5 object-contain" />
-          ) : (
-            <>
-              <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={84} height={30} className="dark:hidden" />
-              <Image src="/brand/solvr-wordmark-white.svg" alt={productName} width={84} height={30} className="hidden dark:block" />
-            </>
-          )}
-          {logoUrl && <span className="text-[15px] font-semibold">{productName}</span>}
+    <div className="min-h-screen flex">
+      <div className="flex-1 lg:w-1/2 flex flex-col items-center justify-center app-shell-bg px-4 py-12">
+        <div className="w-full max-w-sm animate-[fadeIn_300ms_ease-out]">
+          <div className="flex items-center gap-2 mb-8 justify-center">
+            {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoUrl} alt="" className="h-5 w-5 object-contain" />
+            ) : (
+              <>
+                <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={84} height={30} className="dark:hidden" />
+                <Image src="/brand/solvr-wordmark-white.svg" alt={productName} width={84} height={30} className="hidden dark:block" />
+              </>
+            )}
+            {logoUrl && <span className="text-[15px] font-semibold">{productName}</span>}
+          </div>
+          <div className="glass-panel rounded-2xl p-8 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.18)]">
+            <AuthTabs />
+            {children}
+          </div>
         </div>
-        <div className="glass-panel rounded-2xl p-8 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.18)]">{children}</div>
       </div>
+      <AuthShowcase />
     </div>
   );
 }
