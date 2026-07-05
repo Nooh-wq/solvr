@@ -14,6 +14,7 @@ type TeamMember = { id: string; name: string; email: string; role: Role; status:
 type AssignableRole = "CLIENT" | "AGENT" | "ADMIN";
 
 const STATUS_LABEL: Record<UserStatus, string> = {
+  UNVERIFIED: "Unverified",
   PENDING: "Pending",
   ACTIVE: "Active",
   REJECTED: "Rejected",

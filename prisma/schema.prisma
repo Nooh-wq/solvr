@@ -48,7 +48,12 @@ enum Role {
 // person has an email link to accept but hasn't set their own password yet,
 // so they can't log in normally until they do (see actions/admin.ts's
 // inviteUser() and actions/auth.ts's acceptInvite()).
+// UNVERIFIED: self-registered but hasn't confirmed the email is theirs yet
+// (see registerClient()/verifyRegistrationOtp() in actions/auth.ts) — never
+// shown in the admin approval queue, since there's no point asking an admin
+// to review a registration nobody's confirmed is a real address yet.
 enum UserStatus {
+  UNVERIFIED
   PENDING
   ACTIVE
   REJECTED

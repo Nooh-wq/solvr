@@ -7,6 +7,7 @@ import { confirmPasswordReset } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PASSWORD_RULES_HINT } from "@/lib/validation/password";
 
 export function ConfirmResetForm() {
   const router = useRouter();
@@ -49,6 +50,7 @@ export function ConfirmResetForm() {
       <div className="space-y-1.5">
         <Label htmlFor="newPassword">New password</Label>
         <Input id="newPassword" name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
+        <p className="text-[11px] text-[var(--color-neutral-500)]">{PASSWORD_RULES_HINT}</p>
       </div>
       {error && <p className="text-[13px] text-red-600">{error}</p>}
       <Button type="submit" className="w-full" disabled={pending}>

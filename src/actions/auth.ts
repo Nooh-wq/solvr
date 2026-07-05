@@ -15,6 +15,7 @@ import {
 } from "@/lib/session";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
+import { passwordSchema } from "@/lib/validation/password";
 import {
   sendRegistrationPendingEmail,
   sendRegistrationApprovedEmail,
@@ -38,45 +39,44 @@ function siteUrl() {
 const registerSchema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email(),
-  password: z.string().min(8).max(72),
+  password: passwordSchema,
   company: z.string().max(120).optional(),
 });
 
+type RegisterResult = { error: string } | { ok: true; otpToken: string };
+
 /**
- * Email flow design §"Registration Approval Gate": new users start PENDING
- * and can't log in until an admin of *this* tenant approves them (never
- * Stralis on a client tenant's behalf — approval is scoped by tenantId same
- * as everything else). Exception: if the registrant's email domain already
- * has an ACTIVE user in this tenant, auto-approve — same company, already
- * trusted once.
+ * Step 1 of registration: creates an UNVERIFIED account and emails a 6-digit
+ * code to confirm the address is real, before it ever reaches an admin's
+ * approval queue or the domain-auto-approval check (verifyRegistrationOtp
+ * does both of those, step 2). Mirrors the invite flow's two-step shape
+ * (acceptInvite -> verifyLoginOtp) and reuses the same LoginOtp/OTP-session-
+ * token infrastructure.
  */
-export async function registerClient(input: z.infer<typeof registerSchema>) {
-  const data = registerSchema.parse(input);
+export async function registerClient(input: z.infer<typeof registerSchema>): Promise<RegisterResult> {
+  // safeParse (not .parse) so a password-complexity failure surfaces its
+  // specific message — a thrown error from a Server Action gets redacted by
+  // Next.js in production (see inviteUser()'s comment in actions/admin.ts).
+  const parsed = registerSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
+
   const tenant = await getCurrentTenant();
 
   const rateLimit = await checkRateLimitWithIp(`register:${tenant.id}`, 20, 10, 60_000);
   if (!rateLimit.allowed) return { error: "Too many registration attempts. Try again shortly." };
 
   const passwordHash = await bcrypt.hash(data.password, 10);
-  const domain = data.email.split("@")[1]?.toLowerCase();
+
+  type TxResult = { failed: true; message: string } | { failed: false; userId: string; email: string; code: string; branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"] };
 
   // No session yet — establish RLS scope from the resolved host tenant alone
   // (same pattern as getSessionUser(); see src/lib/auth.ts).
-  type TxResult =
-    | { failed: true; message: string }
-    | { failed: false; email: string; autoApproved: boolean; admins: { id: string; email: string }[]; branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"] };
-
   const result: TxResult = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
     const existing = await tx.user.findUnique({
       where: { tenantId_email: { tenantId: tenant.id, email: data.email } },
     });
     if (existing) return { failed: true, message: "An account with this email already exists." };
-
-    const domainApproved = domain
-      ? await tx.user.findFirst({
-          where: { tenantId: tenant.id, status: "ACTIVE", email: { endsWith: `@${domain}`, mode: "insensitive" } },
-        })
-      : null;
 
     const user = await tx.user.create({
       data: {
@@ -86,45 +86,142 @@ export async function registerClient(input: z.infer<typeof registerSchema>) {
         email: data.email,
         company: data.company,
         role: "CLIENT",
-        status: domainApproved ? "ACTIVE" : "PENDING",
+        status: "UNVERIFIED",
       },
     });
 
+    // login_otp_insert's RLS policy requires app.user_id to match the row's
+    // userId — this transaction started with userId: null (no session exists
+    // yet, unlike acceptInvite() which already has a real invited userId from
+    // the token), so it has to be updated to the just-created user's id
+    // before inserting their OTP row, the same way withRls() itself sets it
+    // at the start of a transaction.
+    await tx.$executeRaw`SELECT set_config('app.user_id', ${user.id}, true)`;
+
+    // The plaintext code only ever exists transiently in this closure — never
+    // stored, only its bcrypt hash is (verifyRegistrationOtp compares against that).
+    const code = generateOtpCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    await tx.loginOtp.create({
+      data: { tenantId: tenant.id, userId: user.id, codeHash, expiresAt: new Date(Date.now() + OTP_DURATION_MS) },
+    });
+
+    const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });
+    return { failed: false, userId: user.id, email: user.email, code, branding };
+  });
+
+  if (result.failed) return { error: result.message };
+
+  await sendLoginOtpEmail(result.email, result.code, result.branding);
+
+  const otpToken = await signOtpSessionToken({ userId: result.userId, tenantId: tenant.id });
+  return { ok: true, otpToken };
+}
+
+type VerifyRegistrationOtpResult = { error: string } | { ok: true; redirectTo: string } | { ok: true; pending: true };
+
+/**
+ * Step 2 of registration: verifies the emailed code, then applies the same
+ * approval-gate logic registerClient() used to apply immediately (email
+ * flow design §"Registration Approval Gate") — auto-approve if the email's
+ * domain already has an ACTIVE user in this tenant (same company, already
+ * trusted once), otherwise PENDING until an admin of *this* tenant approves
+ * (never Stralis on a client tenant's behalf). Auto-approved users are logged
+ * straight in, same as verifyLoginOtp() does for an accepted invite.
+ */
+export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchema>): Promise<VerifyRegistrationOtpResult> {
+  const parsed = verifyOtpSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
+
+  const payload = await verifyOtpSessionToken(data.otpToken);
+  if (!payload) return { error: "This verification session has expired — please register again." };
+
+  const rateLimit = await checkRateLimitWithIp(`register-otp-verify:${payload.userId}`, 8, 15, 60_000);
+  if (!rateLimit.allowed) {
+    return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
+  }
+
+  type TxResult =
+    | { failed: true; message: string }
+    | {
+        failed: false;
+        autoApproved: boolean;
+        email: string;
+        role: string;
+        name: string;
+        company: string | null;
+        admins: { id: string; email: string }[];
+        branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"];
+      };
+
+  const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
+    const otp = await tx.loginOtp.findFirst({
+      where: { userId: payload.userId, tenantId: payload.tenantId, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!otp) return { failed: true, message: "This code has expired — please register again." };
+
+    const valid = await bcrypt.compare(data.code, otp.codeHash);
+    if (!valid) return { failed: true, message: "Incorrect code. Please try again." };
+
+    const user = await tx.user.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId, status: "UNVERIFIED" } });
+    if (!user) return { failed: true, message: "This registration is no longer valid — please register again." };
+
+    await tx.loginOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+
+    const domain = user.email.split("@")[1]?.toLowerCase();
+    const domainApproved = domain
+      ? await tx.user.findFirst({
+          where: { tenantId: payload.tenantId, status: "ACTIVE", email: { endsWith: `@${domain}`, mode: "insensitive" } },
+        })
+      : null;
+
+    const updated = await tx.user.update({ where: { id: user.id }, data: { status: domainApproved ? "ACTIVE" : "PENDING" } });
+
     const admins = domainApproved
       ? []
-      : await tx.user.findMany({ where: { tenantId: tenant.id, role: { in: ["ADMIN", "SUPER_ADMIN"] }, status: "ACTIVE" } });
+      : await tx.user.findMany({ where: { tenantId: payload.tenantId, role: { in: ["ADMIN", "SUPER_ADMIN"] }, status: "ACTIVE" } });
 
     if (admins.length > 0) {
       await notify(
         tx,
         ...admins.map((a) => ({
-          tenantId: tenant.id,
+          tenantId: payload.tenantId,
           userId: a.id,
           type: "REGISTRATION_PENDING" as const,
-          title: `New registration awaiting approval: ${data.name}`,
-          body: data.email,
+          title: `New registration awaiting approval: ${updated.name}`,
+          body: updated.email,
         }))
       );
     }
 
-    const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });
-
-    return { failed: false, email: user.email, autoApproved: Boolean(domainApproved), admins, branding };
+    const branding = await tx.tenantBranding.findUnique({ where: { tenantId: payload.tenantId } });
+    return {
+      failed: false,
+      autoApproved: Boolean(domainApproved),
+      email: updated.email,
+      role: updated.role,
+      name: updated.name,
+      company: updated.company,
+      admins,
+      branding,
+    };
   });
 
   if (result.failed) return { error: result.message };
 
-  // Sent after the transaction commits — email delivery never blocks/rolls back the mutation.
   if (result.autoApproved) {
     await sendRegistrationApprovedEmail(result.email, result.branding);
-  } else {
-    await sendRegistrationPendingEmail(result.email, result.branding);
-    await Promise.all(
-      result.admins.map((a) => sendNewRegistrationAdminNotice(a.email, { name: data.name, email: data.email, company: data.company ?? null }, result.branding))
-    );
+    await createSessionCookie({ userId: payload.userId, tenantId: payload.tenantId });
+    return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
   }
 
-  return { ok: true as const, autoApproved: result.autoApproved };
+  await sendRegistrationPendingEmail(result.email, result.branding);
+  await Promise.all(
+    result.admins.map((a) => sendNewRegistrationAdminNotice(a.email, { name: result.name, email: result.email, company: result.company }, result.branding))
+  );
+  return { ok: true, pending: true };
 }
 
 const loginSchema = z.object({
@@ -166,6 +263,7 @@ export async function login(input: z.infer<typeof loginSchema>) {
   // Password is correct, so it's safe to be specific about *why* login is
   // blocked (this isn't an enumeration risk once the password has already
   // been proven correct).
+  if (dbUser.status === "UNVERIFIED") return { error: "Please verify your email first — check your inbox for the code, or register again to get a new one." };
   if (dbUser.status === "PENDING") return { error: "Your account is still awaiting admin approval." };
   if (dbUser.status === "REJECTED") return { error: "Your registration request was not approved." };
   if (dbUser.status === "SUSPENDED") return { error: "This account has been deactivated." };
@@ -217,7 +315,7 @@ export async function requestPasswordReset(input: z.infer<typeof resetSchema>) {
 
 const confirmResetSchema = z.object({
   token: z.string().min(1),
-  newPassword: z.string().min(8).max(72),
+  newPassword: passwordSchema,
 });
 
 type ConfirmPasswordResetResult = { error: string } | { ok: true; redirectTo: string };
@@ -226,7 +324,9 @@ type ConfirmPasswordResetResult = { error: string } | { ok: true; redirectTo: st
 export async function confirmPasswordReset(
   input: z.infer<typeof confirmResetSchema>
 ): Promise<ConfirmPasswordResetResult> {
-  const data = confirmResetSchema.parse(input);
+  const parsed = confirmResetSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
 
   const rateLimit = await checkRateLimitWithIp(`reset-confirm:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
@@ -273,14 +373,16 @@ function generateOtpCode() {
 
 const acceptInviteSchema = z.object({
   token: z.string().min(1),
-  password: z.string().min(8).max(72),
+  password: passwordSchema,
 });
 
 type AcceptInviteResult = { error: string } | { ok: true; otpToken: string };
 
 /** Step 1: consumes the emailed invite link, sets the invitee's own password, and emails a one-time code for step 2 (verifyLoginOtp). */
 export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): Promise<AcceptInviteResult> {
-  const data = acceptInviteSchema.parse(input);
+  const parsed = acceptInviteSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
 
   const rateLimit = await checkRateLimitWithIp(`invite-accept:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
