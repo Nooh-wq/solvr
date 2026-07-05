@@ -14,7 +14,9 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
 // Status/priority colors kept within the brand palette (neutral → warm ramp).
 const STATUS_SEGMENTS: { key: string; label: string; color: string }[] = [
   { key: "OPEN", label: "Open", color: "#ff6a00" },
-  { key: "IN_PROGRESS", label: "In progress", color: "#1a1a1a" },
+  // var(--foreground) rather than a fixed dark hex — this segment/dot would
+  // otherwise render nearly invisible against the dark-mode background.
+  { key: "IN_PROGRESS", label: "In progress", color: "var(--foreground)" },
   { key: "PENDING", label: "Pending", color: "#aeaeae" },
   { key: "RESOLVED", label: "Resolved", color: "#ffb380" },
   { key: "CLOSED", label: "Closed", color: "#d6d6d6" },
