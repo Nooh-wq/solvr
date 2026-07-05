@@ -68,7 +68,7 @@ export function CategoriesManager({ categories }: { categories: Category[] }) {
   }
 
   return (
-    <div className="max-w-xl bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
+    <div className="max-w-xl bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <div className="space-y-3 mb-4">
         {categories.map((c) => (
           <div key={c.id} className="flex items-center gap-3">

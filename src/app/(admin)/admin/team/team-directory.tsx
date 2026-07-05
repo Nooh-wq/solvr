@@ -49,7 +49,7 @@ export function TeamDirectory({ users }: { users: TeamMember[] }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search name or email…"
-          className="h-9 px-3 text-sm border border-[var(--color-neutral-300)] rounded-lg w-56 bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+          className="h-9 px-3 text-sm border border-[var(--color-neutral-300)] rounded-lg w-56 bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
         />
         <Select value={role} onChange={(e) => setRole(e.target.value as Role | "ALL")} className="h-9 w-40">
           {ROLE_OPTIONS.map((o) => (
@@ -75,7 +75,7 @@ export function TeamDirectory({ users }: { users: TeamMember[] }) {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-10 text-center text-sm text-[var(--color-neutral-600)]">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-10 text-center text-sm text-[var(--color-neutral-600)]">
           No team members match these filters.
         </div>
       ) : (

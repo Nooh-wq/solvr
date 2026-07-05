@@ -61,7 +61,7 @@ export function FilesAndLinksPanel({
   const total = files.length + links.length;
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl mt-6 overflow-hidden">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl mt-6 overflow-hidden">
       <button
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 cursor-pointer"
@@ -75,16 +75,16 @@ export function FilesAndLinksPanel({
       </button>
 
       {open && (
-        <div className="border-t border-black/5">
+        <div className="border-t border-black/5 dark:border-white/10">
           {total > 0 && (
-            <div className="p-2.5 border-b border-black/5">
+            <div className="p-2.5 border-b border-black/5 dark:border-white/10">
               <div className="relative">
                 <SearchIcon className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-neutral-400)]" />
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search files & links…"
-                  className="h-8 w-full pl-7 pr-3 text-[12px] border border-[var(--color-neutral-300)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+                  className="h-8 w-full pl-7 pr-3 text-[12px] border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[var(--foreground)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
                 />
               </div>
             </div>
@@ -100,7 +100,7 @@ export function FilesAndLinksPanel({
                 href={f.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-black/[0.03] transition-colors duration-150"
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] transition-colors duration-150"
               >
                 <PaperclipIcon className="h-3.5 w-3.5 shrink-0 text-[var(--color-neutral-400)]" />
                 <span className="min-w-0 flex-1">
@@ -117,7 +117,7 @@ export function FilesAndLinksPanel({
                 href={l.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-black/[0.03] transition-colors duration-150"
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] transition-colors duration-150"
               >
                 <LinkIcon className="h-3.5 w-3.5 shrink-0 text-[var(--color-neutral-400)]" />
                 <span className="min-w-0 flex-1 block text-[12px] text-[var(--color-primary)] truncate">{l.url}</span>

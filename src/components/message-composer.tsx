@@ -40,7 +40,7 @@ function ToolbarButton({
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className="h-7 w-7 flex items-center justify-center rounded-md text-[var(--color-neutral-600)] hover:bg-black/[0.06] hover:text-black transition-colors duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+      className="h-7 w-7 flex items-center justify-center rounded-md text-[var(--color-neutral-600)] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:text-[var(--foreground)] transition-colors duration-150 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
     >
       {icon}
     </button>
@@ -195,12 +195,12 @@ export function MessageComposer({
   return (
     <div>
       <StagedAttachmentChips files={staged} onRemove={remove} />
-      <div className="relative rounded-2xl border border-[var(--color-neutral-300)] bg-[var(--color-light-gray)]/50 transition-colors duration-150 focus-within:bg-white focus-within:border-[var(--color-primary)] focus-within:ring-4 focus-within:ring-[var(--color-primary)]/12">
+      <div className="relative rounded-2xl border border-[var(--color-neutral-300)] bg-[var(--color-light-gray)]/50 transition-colors duration-150 focus-within:bg-[var(--color-surface)] focus-within:border-[var(--color-primary)] focus-within:ring-4 focus-within:ring-[var(--color-primary)]/12">
         <div className="flex items-center gap-0.5 px-2 pt-1.5">
           <ToolbarButton icon={<BoldIcon className="h-4 w-4" />} label="Bold" onClick={() => wrapSelection("**")} />
           <ToolbarButton icon={<ItalicIcon className="h-4 w-4" />} label="Italic" onClick={() => wrapSelection("*")} />
           <ToolbarButton icon={<UnderlineIcon className="h-4 w-4" />} label="Underline" onClick={() => wrapSelection("__")} />
-          <span className="w-px h-4 bg-black/10 mx-1" />
+          <span className="w-px h-4 bg-black/10 dark:bg-white/10 mx-1" />
           <ToolbarButton icon={<ListBulletIcon className="h-4 w-4" />} label="Bulleted list" onClick={() => prefixLines(false)} />
           <ToolbarButton icon={<ListOrderedIcon className="h-4 w-4" />} label="Numbered list" onClick={() => prefixLines(true)} />
         </div>
@@ -216,7 +216,7 @@ export function MessageComposer({
         />
 
         {mentionQuery !== null && filteredMentions.length > 0 && (
-          <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--color-neutral-200)] bg-white shadow-[0_16px_40px_-12px_rgba(0,0,0,0.3)] overflow-hidden z-20">
+          <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--color-neutral-200)] bg-[var(--color-surface)] shadow-[0_16px_40px_-12px_rgba(0,0,0,0.3)] overflow-hidden z-20">
             <div className="max-h-56 overflow-y-auto py-1.5">
               {filteredMentions.map((name, i) => {
                 const active = i === highlightedIndex;
@@ -228,7 +228,7 @@ export function MessageComposer({
                     onMouseEnter={() => setHighlightedIndex(i)}
                     onClick={() => insertMention(name)}
                     className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-left cursor-pointer transition-colors duration-100 ${
-                      active ? "bg-[var(--color-primary)] text-white" : "text-black"
+                      active ? "bg-[var(--color-primary)] text-white" : "text-[var(--foreground)]"
                     }`}
                   >
                     <span
@@ -243,15 +243,15 @@ export function MessageComposer({
                 );
               })}
             </div>
-            <div className="flex items-center gap-3 px-3 py-1.5 border-t border-black/5 bg-[var(--color-light-gray)]/70 text-[10px] text-[var(--color-neutral-500)]">
+            <div className="flex items-center gap-3 px-3 py-1.5 border-t border-black/5 dark:border-white/10 bg-[var(--color-light-gray)]/70 text-[10px] text-[var(--color-neutral-500)]">
               <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">↑↓</kbd> to navigate
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">↑↓</kbd> to navigate
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">↵</kbd> to select
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">↵</kbd> to select
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 rounded bg-white border border-black/10 font-mono text-[9px]">esc</kbd> to dismiss
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">esc</kbd> to dismiss
               </span>
             </div>
           </div>

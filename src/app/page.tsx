@@ -15,7 +15,10 @@ export default async function Home() {
           // eslint-disable-next-line @next/next/no-img-element
           <img src={logoUrl} alt="" className="h-7 w-7 object-contain mb-6" />
         ) : (
-          <Image src="/brand/solvr-wordmark-black.svg" alt={productName ?? "solvr"} width={120} height={43} className="mb-6" />
+          <>
+            <Image src="/brand/solvr-wordmark-black.svg" alt={productName ?? "solvr"} width={120} height={43} className="mb-6 dark:hidden" />
+            <Image src="/brand/solvr-wordmark-white.svg" alt={productName ?? "solvr"} width={120} height={43} className="mb-6 hidden dark:block" />
+          </>
         )}
         <h1 className="text-2xl font-bold mb-2">{productName ? `${productName} support, handled.` : "Support, handled."}</h1>
         <p className="text-sm text-[var(--color-neutral-600)] mb-8">

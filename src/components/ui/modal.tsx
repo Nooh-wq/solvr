@@ -47,15 +47,15 @@ export function Modal({
       aria-label={title}
     >
       <div
-        className={`w-full ${widthClass} bg-white/90 backdrop-blur-xl border border-white/60 rounded-2xl shadow-[0_24px_64px_-16px_rgba(0,0,0,0.35)] overflow-hidden animate-[fadeIn_150ms_ease-out]`}
+        className={`w-full ${widthClass} bg-[var(--color-surface)]/90 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-[0_24px_64px_-16px_rgba(0,0,0,0.35)] overflow-hidden animate-[fadeIn_150ms_ease-out]`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/5">
-          <h2 className="text-[15px] font-semibold">{title}</h2>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/5 dark:border-white/10">
+          <h2 className="text-[15px] font-semibold text-[var(--foreground)]">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="h-8 w-8 flex items-center justify-center rounded-full text-[var(--color-neutral-600)] hover:bg-black/[0.05] hover:text-black transition-colors duration-150 cursor-pointer"
+            className="h-8 w-8 flex items-center justify-center rounded-full text-[var(--color-neutral-600)] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] hover:text-[var(--foreground)] transition-colors duration-150 cursor-pointer"
           >
             <CloseIcon className="h-4 w-4" />
           </button>

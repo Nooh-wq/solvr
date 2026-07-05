@@ -33,7 +33,7 @@ function AttachmentPreview({ attachment, onLight }: { attachment: MessageAttachm
     return (
       <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer" className="block mt-2 max-w-[220px]">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={attachment.fileUrl} alt={attachment.fileName} className="rounded-lg border border-black/10 max-h-40 object-cover" />
+        <img src={attachment.fileUrl} alt={attachment.fileName} className="rounded-lg border border-black/10 dark:border-white/10 max-h-40 object-cover" />
       </a>
     );
   }
@@ -43,7 +43,7 @@ function AttachmentPreview({ attachment, onLight }: { attachment: MessageAttachm
       target="_blank"
       rel="noopener noreferrer"
       className={`mt-2 flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] transition-colors duration-150 ${
-        onLight ? "bg-white/15 hover:bg-white/25 text-white" : "bg-black/5 hover:bg-black/10 text-black"
+        onLight ? "bg-white/15 hover:bg-white/25 text-white" : "bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[var(--foreground)]"
       }`}
     >
       <PaperclipIcon className="h-3.5 w-3.5 shrink-0" />
@@ -292,18 +292,18 @@ export function ConversationThread({
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden flex flex-col">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden flex flex-col">
       {/* Toolbar: search + internal toggle (the toggle only ever renders when
           there are internal notes to hide — never the case for a client
           viewer, since getTicket() already filters those out server-side). */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-black/5 bg-white/60">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-black/5 dark:border-white/10 bg-[var(--color-surface)]/60">
         <div className="relative flex-1 max-w-xs">
           <SearchIcon className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-neutral-400)]" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search messages…"
-            className="h-8 w-full pl-8 pr-3 text-[13px] border border-[var(--color-neutral-300)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+            className="h-8 w-full pl-8 pr-3 text-[13px] border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[var(--foreground)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
           />
         </div>
         {internalCount > 0 && (
@@ -312,7 +312,7 @@ export function ConversationThread({
             className={`h-8 px-3 text-[12px] font-medium rounded-lg border transition-colors duration-150 cursor-pointer ${
               showInternal
                 ? "bg-[var(--color-orange-pale)] border-[var(--color-orange-core)]/40 text-[var(--color-orange-deep)]"
-                : "bg-white border-[var(--color-neutral-300)] text-[var(--color-neutral-600)]"
+                : "bg-[var(--color-surface)] border-[var(--color-neutral-300)] text-[var(--color-neutral-600)]"
             }`}
           >
             {showInternal ? "Hide" : "Show"} internal ({internalCount})
@@ -380,7 +380,7 @@ export function ConversationThread({
         ))}
       </div>
 
-      {composer && <div className="border-t border-black/5 p-3">{composer}</div>}
+      {composer && <div className="border-t border-black/5 dark:border-white/10 p-3">{composer}</div>}
     </div>
   );
 }
@@ -424,7 +424,7 @@ function Bubble({
           className={`text-[13px] leading-relaxed px-3.5 py-2.5 rounded-2xl ${
             right
               ? "bg-[var(--color-primary)] text-white rounded-tr-sm"
-              : "bg-[var(--color-light-gray)] text-black rounded-tl-sm"
+              : "bg-[var(--color-light-gray)] text-[var(--foreground)] rounded-tl-sm"
           }`}
         >
           {children}

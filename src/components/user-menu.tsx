@@ -17,7 +17,7 @@ function Avatar({ name, avatarUrl, size = 6 }: { name: string; avatarUrl: string
     .join("")
     .toUpperCase();
   return (
-    <span className={`${dim} rounded-full bg-[var(--color-neutral-300)] font-semibold text-black flex items-center justify-center shrink-0`}>
+    <span className={`${dim} rounded-full bg-[var(--color-neutral-300)] font-semibold text-[var(--foreground)] flex items-center justify-center shrink-0`}>
       {initials}
     </span>
   );
@@ -53,19 +53,19 @@ export function UserMenu({
     <div
       className={`${
         isSidebar ? "absolute left-full bottom-0 ml-2" : "absolute right-0 mt-2"
-      } w-44 bg-white/85 backdrop-blur-xl border border-white/60 rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] z-50 py-1.5 overflow-hidden animate-[fadeIn_150ms_ease-out]`}
+      } w-44 bg-[var(--color-surface)]/85 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] z-50 py-1.5 overflow-hidden animate-[fadeIn_150ms_ease-out]`}
     >
       <Link
         href={profileHref}
         onClick={() => setOpen(false)}
-        className="block px-3.5 py-2 text-[13px] text-black hover:bg-black/[0.045] transition-colors duration-150 cursor-pointer"
+        className="block px-3.5 py-2 text-[13px] text-[var(--foreground)] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] transition-colors duration-150 cursor-pointer"
       >
         Profile
       </Link>
       <form action={logout}>
         <button
           type="submit"
-          className="block w-full text-left px-3.5 py-2 text-[13px] text-black hover:bg-black/[0.045] transition-colors duration-150 cursor-pointer"
+          className="block w-full text-left px-3.5 py-2 text-[13px] text-[var(--foreground)] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] transition-colors duration-150 cursor-pointer"
         >
           Log out
         </button>
@@ -78,7 +78,7 @@ export function UserMenu({
       <div className="relative" ref={containerRef}>
         <button
           onClick={() => setOpen((o) => !o)}
-          className={`flex items-center gap-3 w-full rounded-xl px-3 py-2 text-[13px] font-medium text-[var(--color-neutral-700)] hover:bg-black/[0.045] hover:text-black transition-all duration-150 cursor-pointer ${
+          className={`flex items-center gap-3 w-full rounded-xl px-3 py-2 text-[13px] font-medium text-[var(--color-neutral-700)] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] hover:text-[var(--foreground)] transition-all duration-150 cursor-pointer ${
             collapsed ? "justify-center px-0" : ""
           }`}
         >
@@ -94,7 +94,7 @@ export function UserMenu({
     <div className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 text-[13px] text-[var(--color-neutral-600)] hover:text-black px-2 py-1 rounded-lg transition-colors duration-150 cursor-pointer"
+        className="flex items-center gap-2 text-[13px] text-[var(--color-neutral-600)] hover:text-[var(--foreground)] px-2 py-1 rounded-lg transition-colors duration-150 cursor-pointer"
       >
         <Avatar name={userName} avatarUrl={avatarUrl} />
         {userName}

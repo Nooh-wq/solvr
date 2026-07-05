@@ -50,7 +50,7 @@ export function AgentControls({
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-4 space-y-4">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="status">Status</Label>
         <Select

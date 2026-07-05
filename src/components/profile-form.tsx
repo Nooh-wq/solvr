@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useTheme } from "next-themes";
 import { updateProfile, changeMyPassword, uploadProfilePicture } from "@/actions/profile";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -15,6 +16,12 @@ const ROLE_LABEL: Record<Role, string> = {
   SUPER_ADMIN: "Super Admin",
 };
 
+const THEME_OPTIONS: { value: "light" | "dark" | "system"; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
+
 type Profile = { name: string; email: string; company: string | null; role: Role; avatarUrl: string | null };
 
 function initialsOf(name: string) {
@@ -28,6 +35,15 @@ function initialsOf(name: string) {
 
 export function ProfileForm({ profile }: { profile: Profile }) {
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
+  // next-themes doesn't know the persisted theme until after mount (it reads
+  // localStorage client-side) — rendering the active option before then would
+  // hydrate-mismatch against the server's guess, so nothing is marked active
+  // until `mounted` flips.
+  const [mounted, setMounted] = useState(false);
+  /* eslint-disable react-hooks/set-state-in-effect -- genuinely one-time: flips once after client mount, same pattern as sidebar.tsx's own mounted flag */
+  useEffect(() => setMounted(true), []);
+  /* eslint-enable react-hooks/set-state-in-effect */
   const [name, setName] = useState(profile.name);
   const [company, setCompany] = useState(profile.company ?? "");
   const [profileSaved, setProfileSaved] = useState(false);
@@ -91,14 +107,38 @@ export function ProfileForm({ profile }: { profile: Profile }) {
 
   return (
     <div className="space-y-8 max-w-md">
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
+        <h2 className="text-[15px] font-semibold">Appearance</h2>
+        <p className="text-[13px] text-[var(--color-neutral-600)]">Choose how solvr looks on this device.</p>
+        <div className="flex gap-2">
+          {THEME_OPTIONS.map((opt) => {
+            const active = mounted && theme === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setTheme(opt.value)}
+                className={`flex-1 h-9 rounded-xl text-[13px] font-medium border transition-colors duration-150 cursor-pointer ${
+                  active
+                    ? "bg-[var(--color-primary)] text-white border-[var(--color-primary)]"
+                    : "bg-transparent border-[var(--color-neutral-300)] text-[var(--color-neutral-700)] hover:bg-[var(--color-light-gray)]"
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
         <h2 className="text-[15px] font-semibold">Your details</h2>
         <div className="flex items-center gap-4">
           {avatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={avatarUrl} alt="" className="h-16 w-16 rounded-full object-cover" />
           ) : (
-            <span className="h-16 w-16 rounded-full bg-[var(--color-neutral-300)] text-[18px] font-semibold text-black flex items-center justify-center">
+            <span className="h-16 w-16 rounded-full bg-[var(--color-neutral-300)] text-[18px] font-semibold text-[var(--foreground)] flex items-center justify-center">
               {initialsOf(name)}
             </span>
           )}
@@ -145,7 +185,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
         </Button>
       </div>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
         <h2 className="text-[15px] font-semibold">Change password</h2>
         <div className="space-y-1.5">
           <Label htmlFor="currentPassword">Current password</Label>

@@ -4,6 +4,7 @@ import "./globals.css";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { brandingToCssVars } from "@/lib/tenant";
 import { ToastProvider } from "@/components/ui/toast";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -41,9 +42,12 @@ export default async function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       style={themeVars as React.CSSProperties}
+      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <ToastProvider>{children}</ToastProvider>
+        <ThemeProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

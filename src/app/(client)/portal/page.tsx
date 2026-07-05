@@ -47,7 +47,7 @@ export default async function PortalTicketsPage({
         ))}
       </div>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {tickets.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">No tickets yet.</p>
         ) : (

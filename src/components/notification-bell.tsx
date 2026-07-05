@@ -128,12 +128,12 @@ export function NotificationBell({
     <div
       className={`${
         isSidebar ? "absolute left-0 bottom-full mb-2" : "absolute right-0 mt-2"
-      } w-80 bg-white/85 backdrop-blur-xl border border-white/60 rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] z-50 overflow-hidden animate-[fadeIn_150ms_ease-out]`}
+      } w-80 bg-[var(--color-surface)]/85 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] z-50 overflow-hidden animate-[fadeIn_150ms_ease-out]`}
     >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-black/5">
-        <span className="text-[13px] font-semibold">Notifications</span>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-black/5 dark:border-white/10">
+        <span className="text-[13px] font-semibold text-[var(--foreground)]">Notifications</span>
         {notifications?.some((n) => !n.isRead) && (
-          <button onClick={markAllRead} className="text-[12px] text-[var(--color-neutral-600)] hover:text-black cursor-pointer transition-colors">
+          <button onClick={markAllRead} className="text-[12px] text-[var(--color-neutral-600)] hover:text-[var(--foreground)] cursor-pointer transition-colors">
             Mark all read
           </button>
         )}
@@ -144,11 +144,11 @@ export function NotificationBell({
         {notifications?.map((n) => {
           const body = (
             <div
-              className={`px-4 py-3 border-b border-black/5 last:border-0 transition-colors duration-150 hover:bg-black/[0.03] ${
+              className={`px-4 py-3 border-b border-black/5 dark:border-white/10 last:border-0 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] ${
                 n.isRead ? "" : "bg-[var(--color-orange-pale)]/70"
               }`}
             >
-              <p className="text-[13px] font-medium text-black">{n.title}</p>
+              <p className="text-[13px] font-medium text-[var(--foreground)]">{n.title}</p>
               {n.body && <p className="text-[12px] text-[var(--color-neutral-600)] mt-0.5 line-clamp-2">{n.body}</p>}
               <p className="text-[11px] text-[var(--color-neutral-400)] mt-1">{timeAgo(n.createdAt)}</p>
             </div>
@@ -173,7 +173,7 @@ export function NotificationBell({
         <button
           onClick={toggle}
           aria-label="Notifications"
-          className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium w-full transition-all duration-150 cursor-pointer text-[var(--color-neutral-700)] hover:bg-black/[0.045] hover:text-black ${
+          className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium w-full transition-all duration-150 cursor-pointer text-[var(--color-neutral-700)] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] hover:text-[var(--foreground)] ${
             collapsed ? "justify-center px-0" : ""
           }`}
         >
@@ -197,7 +197,7 @@ export function NotificationBell({
       <button
         onClick={toggle}
         aria-label="Notifications"
-        className="relative h-8 w-8 flex items-center justify-center rounded-full text-[var(--color-neutral-700)] hover:bg-[var(--color-light-gray)] hover:text-black cursor-pointer transition-colors duration-150"
+        className="relative h-8 w-8 flex items-center justify-center rounded-full text-[var(--color-neutral-700)] hover:bg-[var(--color-light-gray)] hover:text-[var(--foreground)] cursor-pointer transition-colors duration-150"
       >
         <BellIcon className="h-[18px] w-[18px]" />
         {unreadCount > 0 && (

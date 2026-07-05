@@ -3,10 +3,10 @@ import type { TicketStatus, Priority } from "@/generated/prisma";
 
 const statusStyles: Record<TicketStatus, string> = {
   OPEN: "bg-[var(--color-orange-pale)] text-[var(--color-orange-deep)]",
-  IN_PROGRESS: "bg-black text-white",
+  IN_PROGRESS: "bg-[var(--foreground)] text-[var(--background)]",
   PENDING: "bg-[var(--color-neutral-100)] text-[var(--color-neutral-700)]",
-  RESOLVED: "bg-[var(--color-neutral-100)] text-black",
-  CLOSED: "bg-white text-[var(--color-neutral-400)] border border-[var(--color-neutral-300)]",
+  RESOLVED: "bg-[var(--color-neutral-100)] text-[var(--foreground)]",
+  CLOSED: "bg-[var(--color-surface)] text-[var(--color-neutral-400)] border border-[var(--color-neutral-300)]",
 };
 
 const statusLabels: Record<TicketStatus, string> = {
@@ -36,7 +36,7 @@ export function StatusBadge({ status, size = "sm" }: { status: TicketStatus; siz
 // ticket title.
 const priorityStyles: Record<Priority, string> = {
   LOW: "bg-[var(--color-neutral-100)] text-[var(--color-neutral-700)]",
-  MEDIUM: "bg-[var(--color-neutral-100)] text-black",
+  MEDIUM: "bg-[var(--color-neutral-100)] text-[var(--foreground)]",
   HIGH: "bg-[var(--color-orange-pale)] text-[var(--color-orange-deep)]",
   URGENT: "bg-[var(--color-primary)] text-white",
 };

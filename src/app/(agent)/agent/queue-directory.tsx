@@ -60,13 +60,13 @@ export function QueueDirectory({ tickets }: { tickets: QueueTicket[] }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search title or client…"
-            className="h-9 pl-9 pr-3 text-sm border border-[var(--color-neutral-300)] rounded-xl w-64 bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+            className="h-9 pl-9 pr-3 text-sm border border-[var(--color-neutral-300)] rounded-xl w-64 bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
           />
         </div>
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value as TicketStatus | "ALL")}
-          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
         >
           {STATUS_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -77,7 +77,7 @@ export function QueueDirectory({ tickets }: { tickets: QueueTicket[] }) {
         <select
           value={priority}
           onChange={(e) => setPriority(e.target.value as Priority | "ALL")}
-          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
         >
           {PRIORITY_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -90,7 +90,7 @@ export function QueueDirectory({ tickets }: { tickets: QueueTicket[] }) {
         </span>
       </div>
 
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {filtered.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">No tickets match these filters.</p>
         ) : (
