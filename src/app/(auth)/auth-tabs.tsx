@@ -15,8 +15,9 @@ export function AuthTabs() {
   return (
     <div className="relative grid grid-cols-2 gap-1 p-1 rounded-xl bg-black/[0.04] dark:bg-white/[0.06] mb-6">
       <span
-        className="absolute inset-y-1 left-1 w-[calc(50%-4px)] rounded-lg bg-[var(--color-surface)] shadow-[0_2px_10px_-2px_rgba(0,0,0,0.15)] transition-transform duration-200 ease-out"
-        style={{ transform: isRegister ? "translateX(calc(100% + 4px))" : "translateX(0)" }}
+        className={`absolute inset-y-1 w-[calc(50%-6px)] rounded-lg bg-[var(--color-surface)] shadow-[0_2px_10px_-2px_rgba(0,0,0,0.15)] transition-[left] duration-200 ease-out ${
+          isRegister ? "left-[calc(50%+2px)]" : "left-1"
+        }`}
       />
       <Link
         href="/auth/login"
