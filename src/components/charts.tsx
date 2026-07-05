@@ -169,7 +169,7 @@ export function DonutChart({ segments, total }: { segments: Segment[]; total: nu
               return el;
             })}
         </g>
-        <text x={size / 2} y={size / 2 - 2} textAnchor="middle" fontSize="26" fontWeight="700" fill="var(--color-black)">
+        <text x={size / 2} y={size / 2 - 2} textAnchor="middle" fontSize="26" fontWeight="700" fill="var(--foreground)">
           {sum}
         </text>
         <text x={size / 2} y={size / 2 + 16} textAnchor="middle" fontSize="10" fill="var(--color-neutral-600)">

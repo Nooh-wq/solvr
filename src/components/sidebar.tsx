@@ -119,11 +119,11 @@ export function Sidebar({
       {banner}
 
       {/* Mobile-only top bar — the sidebar itself is off-canvas below md. */}
-      <div className="md:hidden sticky top-0 z-20 flex items-center gap-3 h-14 px-4 border-b border-black/5 bg-white/80 backdrop-blur-xl">
+      <div className="md:hidden sticky top-0 z-20 flex items-center gap-3 h-14 px-4 border-b border-black/5 dark:border-white/10 bg-[var(--color-surface)]/80 backdrop-blur-xl">
         <button
           onClick={() => setMobileOpen(true)}
           aria-label="Open menu"
-          className="h-9 w-9 flex items-center justify-center rounded-lg text-[var(--color-neutral-700)] hover:bg-black/[0.045] hover:text-black transition-colors duration-150 cursor-pointer"
+          className="h-9 w-9 flex items-center justify-center rounded-lg text-[var(--color-neutral-700)] hover:bg-black/[0.045] dark:hover:bg-white/[0.08] hover:text-[var(--foreground)] transition-colors duration-150 cursor-pointer"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
@@ -131,7 +131,10 @@ export function Sidebar({
           // eslint-disable-next-line @next/next/no-img-element
           <img src={logoUrl} alt={productName} className="h-6 w-6 object-contain rounded" />
         ) : (
-          <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={64} height={23} />
+          <>
+            <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={64} height={23} className="dark:hidden" />
+            <Image src="/brand/solvr-wordmark-white.svg" alt={productName} width={64} height={23} className="hidden dark:block" />
+          </>
         )}
       </div>
 
@@ -144,13 +147,13 @@ export function Sidebar({
       )}
 
       <aside
-        className={`fixed left-0 bottom-0 z-40 flex flex-col border-r border-white/50 bg-white/80 backdrop-blur-xl shadow-[1px_0_24px_rgba(0,0,0,0.04)] w-[248px] transition-[width,transform] duration-200 ${
+        className={`fixed left-0 bottom-0 z-40 flex flex-col border-r border-white/50 dark:border-white/10 bg-[var(--color-surface)]/80 backdrop-blur-xl shadow-[1px_0_24px_rgba(0,0,0,0.04)] w-[248px] transition-[width,transform] duration-200 ${
           banner ? "top-9 md:top-9" : "top-0"
         } ${collapsed ? "md:w-[76px]" : "md:w-[248px]"} ${mobileOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 ${
           mounted ? "" : "duration-0"
         }`}
       >
-        <div className={`flex items-center h-16 px-4 border-b border-black/5 ${collapsed ? "md:justify-center md:px-0" : ""}`}>
+        <div className={`flex items-center h-16 px-4 border-b border-black/5 dark:border-white/10 ${collapsed ? "md:justify-center md:px-0" : ""}`}>
           <Link href="/" className="flex items-center gap-2 min-w-0">
             {logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -162,16 +165,32 @@ export function Sidebar({
                   alt={productName}
                   width={72}
                   height={26}
-                  className={`shrink-0 ${collapsed ? "md:hidden" : ""}`}
+                  className={`shrink-0 dark:hidden ${collapsed ? "md:hidden" : ""}`}
+                />
+                <Image
+                  src="/brand/solvr-wordmark-white.svg"
+                  alt={productName}
+                  width={72}
+                  height={26}
+                  className={`shrink-0 hidden dark:block ${collapsed ? "md:hidden" : ""}`}
                 />
                 {collapsed && (
-                  <Image
-                    src="/brand/s-mark-black.svg"
-                    alt={productName}
-                    width={22}
-                    height={30}
-                    className="hidden md:block shrink-0"
-                  />
+                  <>
+                    <Image
+                      src="/brand/s-mark-black.svg"
+                      alt={productName}
+                      width={22}
+                      height={30}
+                      className="hidden md:block dark:md:hidden shrink-0"
+                    />
+                    <Image
+                      src="/brand/s-mark-white.svg"
+                      alt={productName}
+                      width={22}
+                      height={30}
+                      className="hidden dark:md:block shrink-0"
+                    />
+                  </>
                 )}
               </>
             )}
@@ -193,7 +212,7 @@ export function Sidebar({
                 } ${
                   active
                     ? "bg-[var(--color-primary)] text-white shadow-[0_4px_14px_-4px_var(--color-primary)]"
-                    : "text-[var(--color-neutral-700)] hover:bg-black/[0.045] hover:text-black"
+                    : "text-[var(--color-neutral-700)] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] hover:text-[var(--foreground)]"
                 }`}
               >
                 <Icon className={`h-[18px] w-[18px] shrink-0 transition-transform duration-150 ${!active ? "group-hover:scale-110" : ""}`} />
@@ -203,7 +222,7 @@ export function Sidebar({
           })}
         </nav>
 
-        <div className="border-t border-black/5 px-3 py-3 space-y-1">
+        <div className="border-t border-black/5 dark:border-white/10 px-3 py-3 space-y-1">
           <NotificationBell variant="sidebar" collapsed={collapsed} />
           <UserMenu userName={userName} avatarUrl={avatarUrl} profileHref={profileHref} variant="sidebar" collapsed={collapsed} />
         </div>
@@ -211,7 +230,7 @@ export function Sidebar({
         <button
           onClick={toggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="hidden md:flex absolute -right-3 top-16 h-6 w-6 rounded-full bg-white border border-[var(--color-neutral-300)] shadow-sm items-center justify-center text-[var(--color-neutral-600)] hover:text-black hover:border-black/30 transition-colors duration-150 cursor-pointer"
+          className="hidden md:flex absolute -right-3 top-16 h-6 w-6 rounded-full bg-[var(--color-surface)] border border-[var(--color-neutral-300)] shadow-sm items-center justify-center text-[var(--color-neutral-600)] hover:text-[var(--foreground)] hover:border-black/30 dark:hover:border-white/30 transition-colors duration-150 cursor-pointer"
         >
           <ChevronLeftIcon className={`h-3.5 w-3.5 transition-transform duration-200 ${collapsed ? "rotate-180" : ""}`} />
         </button>

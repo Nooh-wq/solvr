@@ -1,9 +1,20 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (Tailwind v4 defaults to the prefers-color-scheme
+   media query) — driven by next-themes toggling `.dark` on <html> (see
+   src/components/theme-provider.tsx), not the OS setting directly, so
+   in-app Light/Dark/System choices always win. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /*
   Tenant theming: every color below is a CSS variable so a tenant's
   TenantBranding record can override it at runtime (see lib/tenant.ts).
-  Defaults are the Stralis brand (host tenant).
+  Defaults are the Stralis brand (host tenant). The neutral/surface ramp
+  also has a dark-mode counterpart below (`.dark`) — tenant primary/accent
+  colors are left alone in dark mode (see brandingToCssVars in lib/tenant.ts):
+  a brand accent applied sparingly to buttons/badges/links reads fine on
+  both light and dark surfaces, so only the structural palette needs to
+  invert.
 */
 :root {
   /* Stralis core palette */
@@ -23,9 +34,19 @@
   --color-neutral-900: #1a1a1a;
   --color-neutral-700: #333333;
   --color-neutral-600: #4c4c4c;
+  /* Widely referenced across components but never actually defined until now
+     (silently resolved to nothing, inheriting whatever color was ambient —
+     harmless-looking in light mode by luck, not so in dark mode). */
+  --color-neutral-500: #7a7a7a;
   --color-neutral-400: #aeaeae;
   --color-neutral-300: #cccccc;
+  --color-neutral-200: #dedede;
   --color-neutral-100: #ebebeb;
+
+  /* Card/panel surface — distinct from --background so a card can sit
+     visibly on top of the shell background (see .app-shell-bg) in both
+     themes, not just via border color. */
+  --color-surface: #ffffff;
 
   /* Tenant-overridable theme tokens (TenantBranding) */
   --color-primary: var(--color-orange);
@@ -34,6 +55,26 @@
 
   --background: #ffffff;
   --foreground: #000000;
+}
+
+.dark {
+  --color-mid-gray: #6b6b6b;
+  --color-light-gray: #1e2024;
+  --color-orange-pale: #2b1c10;
+
+  --color-neutral-900: #f5f5f5;
+  --color-neutral-700: #d4d4d4;
+  --color-neutral-600: #a3a3a3;
+  --color-neutral-500: #8a8a8a;
+  --color-neutral-400: #6b6b6b;
+  --color-neutral-300: #33353a;
+  --color-neutral-200: #2b2d31;
+  --color-neutral-100: #232529;
+
+  --color-surface: #1a1b1e;
+
+  --background: #121212;
+  --foreground: #f2f2f2;
 }
 
 @theme inline {
@@ -51,9 +92,12 @@
   --color-neutral-900: var(--color-neutral-900);
   --color-neutral-700: var(--color-neutral-700);
   --color-neutral-600: var(--color-neutral-600);
+  --color-neutral-500: var(--color-neutral-500);
   --color-neutral-400: var(--color-neutral-400);
   --color-neutral-300: var(--color-neutral-300);
+  --color-neutral-200: var(--color-neutral-200);
   --color-neutral-100: var(--color-neutral-100);
+  --color-surface: var(--color-surface);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -103,6 +147,11 @@ body {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgb(255 255 255 / 0.6);
+}
+
+.dark .glass-panel {
+  background-color: rgb(26 27 30 / 0.75);
+  border: 1px solid rgb(255 255 255 / 0.08);
 }
 
 @media (prefers-reduced-motion: reduce) {

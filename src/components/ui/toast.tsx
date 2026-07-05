@@ -72,13 +72,13 @@ function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss: () => vo
     >
       <Icon className={`h-5 w-5 shrink-0 mt-0.5 ${iconClass}`} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold text-black">{toast.title}</p>
+        <p className="text-[13px] font-semibold text-[var(--foreground)]">{toast.title}</p>
         {toast.description && <p className="text-[12px] text-[var(--color-neutral-600)] mt-0.5">{toast.description}</p>}
       </div>
       <button
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="h-6 w-6 shrink-0 flex items-center justify-center rounded-lg text-[var(--color-neutral-500)] hover:bg-black/[0.045] hover:text-black transition-colors duration-150 cursor-pointer"
+        className="h-6 w-6 shrink-0 flex items-center justify-center rounded-lg text-[var(--color-neutral-500)] hover:bg-black/[0.045] dark:hover:bg-white/[0.08] hover:text-[var(--foreground)] transition-colors duration-150 cursor-pointer"
       >
         <CloseIcon className="h-3.5 w-3.5" />
       </button>

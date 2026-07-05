@@ -54,7 +54,7 @@ export function TicketPeoplePanel({ ticketId, initialGuests }: { ticketId: strin
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-4 mt-6">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 mt-6">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-[13px] font-semibold">People</h3>
         <button

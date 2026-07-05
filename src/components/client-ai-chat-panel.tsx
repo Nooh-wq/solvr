@@ -64,7 +64,7 @@ export function ClientAiChatPanel() {
 
   return (
     <div
-      className="rounded-2xl border border-[var(--color-primary)]/30 bg-gradient-to-b from-[var(--color-orange-pale)] to-white shadow-[0_8px_30px_-12px_var(--color-primary)] overflow-hidden flex flex-col"
+      className="rounded-2xl border border-[var(--color-primary)]/30 bg-gradient-to-b from-[var(--color-orange-pale)] to-[var(--color-surface)] shadow-[0_8px_30px_-12px_var(--color-primary)] overflow-hidden flex flex-col"
       style={{ height: 360 }}
     >
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--color-primary)]/15 shrink-0">
@@ -88,8 +88,8 @@ export function ClientAiChatPanel() {
             key={i}
             className={
               m.role === "CLIENT"
-                ? "ml-6 bg-white/80 rounded-2xl px-3 py-2 text-[13px]"
-                : "mr-6 bg-white border border-black/5 rounded-2xl px-3 py-2 text-[13px]"
+                ? "ml-6 bg-[var(--color-surface)]/80 rounded-2xl px-3 py-2 text-[13px]"
+                : "mr-6 bg-[var(--color-surface)] border border-black/5 dark:border-white/10 rounded-2xl px-3 py-2 text-[13px]"
             }
           >
             <p className="whitespace-pre-wrap">{m.body}</p>
@@ -114,7 +114,7 @@ export function ClientAiChatPanel() {
         )}
         <div className="flex gap-2">
           <input
-            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
             placeholder="Type a message…"
             value={input}
             onChange={(e) => setInput(e.target.value)}

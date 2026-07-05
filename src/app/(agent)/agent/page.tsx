@@ -16,10 +16,10 @@ export default async function AgentQueuePage() {
         <h1 className="text-2xl font-bold">Queue</h1>
         <div className="flex gap-4 text-[13px] text-[var(--color-neutral-600)]">
           <span>
-            <strong className="text-black">{open}</strong> open
+            <strong className="text-[var(--foreground)]">{open}</strong> open
           </span>
           <span>
-            <strong className="text-black">{unassigned}</strong> unassigned
+            <strong className="text-[var(--foreground)]">{unassigned}</strong> unassigned
           </span>
         </div>
       </div>

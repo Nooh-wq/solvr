@@ -76,12 +76,12 @@ export function ChatWidget() {
 
   return (
     <div className="fixed bottom-6 right-6 w-80 glass-panel rounded-2xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.25)] flex flex-col animate-[fadeIn_150ms_ease-out]" style={{ height: 420 }}>
-      <div className="h-11 border-b border-black/5 flex items-center justify-between px-3">
-        <span className="text-[13px] font-semibold">Chat with us</span>
+      <div className="h-11 border-b border-black/5 dark:border-white/10 flex items-center justify-between px-3">
+        <span className="text-[13px] font-semibold text-[var(--foreground)]">Chat with us</span>
         <button
           onClick={() => setOpen(false)}
           aria-label="Close chat"
-          className="h-7 w-7 flex items-center justify-center rounded-lg text-[var(--color-neutral-600)] hover:bg-black/[0.045] hover:text-black transition-colors duration-150 cursor-pointer"
+          className="h-7 w-7 flex items-center justify-center rounded-lg text-[var(--color-neutral-600)] hover:bg-black/[0.045] dark:hover:bg-white/[0.08] hover:text-[var(--foreground)] transition-colors duration-150 cursor-pointer"
         >
           <CloseIcon className="h-4 w-4" />
         </button>
@@ -114,7 +114,7 @@ export function ChatWidget() {
         {transientError && <p className="text-[12px] text-red-600">{transientError}</p>}
       </div>
 
-      <div className="border-t border-black/5 p-2 space-y-2">
+      <div className="border-t border-black/5 dark:border-white/10 p-2 space-y-2">
         {conversationId && (
           <Button variant="secondary" size="sm" className="w-full" onClick={escalate} disabled={pending}>
             Create a ticket from this chat
@@ -122,7 +122,7 @@ export function ChatWidget() {
         )}
         <div className="flex gap-2">
           <input
-            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] rounded-xl"
+            className="flex-1 h-9 px-2 text-[13px] border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[var(--foreground)] rounded-xl"
             placeholder="Type a message…"
             value={input}
             onChange={(e) => setInput(e.target.value)}

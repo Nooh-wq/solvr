@@ -38,7 +38,7 @@ export function PendingApprovals({ users }: { users: PendingUser[] }) {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
       <div className="px-4 py-2.5 bg-[var(--color-light-gray)] border-b border-[var(--color-neutral-300)]">
         <span className="text-[11px] uppercase-label font-semibold text-[var(--color-neutral-700)]">
           Pending approval ({users.length})

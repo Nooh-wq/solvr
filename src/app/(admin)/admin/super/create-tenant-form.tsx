@@ -38,7 +38,7 @@ export function CreateTenantForm() {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <h3 className="text-[13px] font-semibold mb-4">Provision a tenant</h3>
       <form action={onSubmit} className="space-y-3">
         <div className="space-y-1">

@@ -60,7 +60,7 @@ export function StagedAttachmentChips({ files, onRemove }: { files: StagedFile[]
       {files.map((f) => (
         <span
           key={f.id}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-black/5 pl-2 pr-1 py-1 text-[11px] font-medium max-w-[200px]"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-black/5 dark:bg-white/10 pl-2 pr-1 py-1 text-[11px] font-medium max-w-[200px] text-[var(--foreground)]"
         >
           <PaperclipIcon className="h-3 w-3 shrink-0 text-[var(--color-neutral-500)]" />
           <span className="truncate">{f.fileName}</span>
@@ -69,7 +69,7 @@ export function StagedAttachmentChips({ files, onRemove }: { files: StagedFile[]
             type="button"
             onClick={() => onRemove(f.id)}
             aria-label={`Remove ${f.fileName}`}
-            className="h-4 w-4 shrink-0 flex items-center justify-center rounded-full hover:bg-black/10 cursor-pointer"
+            className="h-4 w-4 shrink-0 flex items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/15 cursor-pointer"
           >
             <CloseIcon className="h-2.5 w-2.5" />
           </button>

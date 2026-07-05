@@ -71,7 +71,7 @@ export function InviteUserForm({ embedded = false }: { embedded?: boolean }) {
   if (embedded) return form;
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl p-5">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <h3 className="text-[13px] font-semibold mb-4">Invite someone</h3>
       {form}
     </div>

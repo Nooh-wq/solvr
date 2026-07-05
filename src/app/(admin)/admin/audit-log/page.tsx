@@ -11,7 +11,7 @@ export default async function AuditLogPage({
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Audit log</h1>
-      <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {entries.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">No activity yet.</p>
         ) : (

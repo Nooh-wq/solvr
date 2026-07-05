@@ -22,7 +22,10 @@ export default async function GuestTicketPage({ params }: { params: Promise<{ to
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logoUrl} alt="" className="h-5 w-5 object-contain" />
           ) : (
-            <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={84} height={30} />
+            <>
+              <Image src="/brand/solvr-wordmark-black.svg" alt={productName} width={84} height={30} className="dark:hidden" />
+              <Image src="/brand/solvr-wordmark-white.svg" alt={productName} width={84} height={30} className="hidden dark:block" />
+            </>
           )}
           {logoUrl && <span className="text-[15px] font-semibold">{productName}</span>}
         </div>

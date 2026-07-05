@@ -69,7 +69,7 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
   }
 
   return (
-    <div className="bg-white border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
       <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-[var(--color-light-gray)] text-[11px] uppercase-label text-[var(--color-neutral-700)]">
@@ -128,7 +128,7 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
 
       <Modal open={toDelete !== null} onClose={() => setToDelete(null)} title="Delete this person?">
         <p className="text-[13px] text-[var(--color-neutral-600)] mb-4">
-          This permanently removes <span className="font-semibold text-black">{toDelete?.name}</span> ({toDelete?.email}). This
+          This permanently removes <span className="font-semibold text-[var(--foreground)]">{toDelete?.name}</span> ({toDelete?.email}). This
           can&apos;t be undone. If they have ticket history on record, deleting will fail — deactivate them instead.
         </p>
         <div className="flex justify-end gap-2">
