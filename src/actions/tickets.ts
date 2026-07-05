@@ -21,6 +21,7 @@ import {
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
 import { getAttachmentSignedUrl } from "@/lib/storage";
+import { resolveMessageSender } from "@/lib/message-sender";
 
 /** FR-2: client creates a ticket. Status defaults to Open; fires the "received" email. */
 export async function createTicket(input: z.infer<typeof createTicketSchema>) {
@@ -136,7 +137,7 @@ export async function getTicket(ticketId: string) {
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
-          include: { sender: true, attachments: true },
+          include: { sender: true, guest: { select: { name: true, email: true } }, attachments: true },
         },
       },
     });
@@ -183,7 +184,7 @@ export async function getTicketMessages(ticketId: string) {
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
-          include: { sender: true, attachments: true },
+          include: { sender: true, guest: { select: { name: true, email: true } }, attachments: true },
         },
       },
     });
@@ -200,7 +201,7 @@ export async function getTicketMessages(ticketId: string) {
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
+      sender: resolveMessageSender(m),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
