@@ -6,6 +6,7 @@ import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { ClientAiChatPanel } from "@/components/client-ai-chat-panel";
 import { participantNames } from "@/lib/participants";
+import { resolveMessageSender } from "@/lib/message-sender";
 import { TicketThread } from "./ticket-thread";
 import { TicketActions } from "./ticket-actions";
 
@@ -43,7 +44,7 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
             senderRole: m.senderRole,
             isInternal: m.isInternal,
             createdAt: m.createdAt.toISOString(),
-            sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : null,
+            sender: resolveMessageSender(m),
             attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
           }))}
         />

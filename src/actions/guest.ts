@@ -9,6 +9,7 @@ import { sendTicketGuestInviteEmail, sendClientReplyNotification } from "@/lib/e
 import { notify } from "@/lib/notifications";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
+import { resolveMessageSender } from "@/lib/message-sender";
 import type { TenantBranding } from "@/generated/prisma";
 import crypto from "node:crypto";
 
@@ -136,7 +137,11 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
           messages: {
             where: { isInternal: false },
             orderBy: { createdAt: "asc" },
-            include: { sender: { select: { name: true, avatarUrl: true } }, attachments: true },
+            include: {
+              sender: { select: { name: true, avatarUrl: true } },
+              guest: { select: { name: true, email: true } },
+              attachments: true,
+            },
           },
         },
       });
@@ -152,7 +157,7 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : m.guestId ? { name: guest.name ?? guest.email, avatarUrl: null } : null,
+      sender: resolveMessageSender(m),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
@@ -189,7 +194,11 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
         messages: {
           where: { isInternal: false },
           orderBy: { createdAt: "asc" },
-          include: { sender: { select: { name: true, avatarUrl: true } }, attachments: true },
+          include: {
+            sender: { select: { name: true, avatarUrl: true } },
+            guest: { select: { name: true, email: true } },
+            attachments: true,
+          },
         },
       },
     })
@@ -203,7 +212,7 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: m.sender ? { name: m.sender.name, avatarUrl: m.sender.avatarUrl } : m.guestId ? { name: guest.name ?? guest.email, avatarUrl: null } : null,
+      sender: resolveMessageSender(m),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
