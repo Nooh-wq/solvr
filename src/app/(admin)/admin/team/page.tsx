@@ -4,7 +4,10 @@ import { PendingApprovals } from "./pending-approvals";
 
 export default async function TeamPage() {
   const [team, pending] = await Promise.all([listTeam(), listPendingUsers()]);
-  const activeTeam = team.filter((u) => u.status !== "PENDING");
+  // UNVERIFIED (hasn't confirmed their email yet — see verifyRegistrationOtp())
+  // is just as transient/not-yet-actionable as PENDING, so it's excluded from
+  // the main directory the same way.
+  const activeTeam = team.filter((u) => u.status !== "PENDING" && u.status !== "UNVERIFIED");
 
   return (
     <div>

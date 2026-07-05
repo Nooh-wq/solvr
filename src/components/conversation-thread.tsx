@@ -209,7 +209,14 @@ function renderMessageBody(text: string, query: string, mentionNames: string[]):
  * client sees their own opening message on the right, while an agent sees
  * it on the left, exactly like every reply that follows.
  */
-const POLL_MS = 4000;
+// 4s was too aggressive for the production DB's connection budget (a
+// session-mode Supabase pooler capped at 15 clients — see DEPLOYMENT.md) and
+// contributed to a real outage: every open ticket page was opening a fresh
+// pooled connection 15x/minute, on top of normal traffic, on a serverless
+// host where connections aren't shared across invocations the way a
+// long-running server would. 15s keeps replies feeling close to live without
+// hammering that budget.
+const POLL_MS = 15_000;
 
 export function ConversationThread({
   description,

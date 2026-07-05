@@ -5,6 +5,7 @@ import { updateProfile, changeMyPassword, uploadProfilePicture } from "@/actions
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PASSWORD_RULES_HINT } from "@/lib/validation/password";
 import type { Role } from "@/generated/prisma";
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -76,7 +77,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
     setPasswordSaved(false);
     startPasswordTransition(async () => {
       const result = await changeMyPassword({ currentPassword, newPassword });
-      if (result.ok !== true) {
+      if ("error" in result && result.error) {
         setPasswordError(result.error);
         toast({ title: "Couldn't update password", description: result.error, variant: "error" });
         return;
@@ -166,6 +167,7 @@ export function ProfileForm({ profile }: { profile: Profile }) {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
           />
+          <p className="text-[11px] text-[var(--color-neutral-500)]">{PASSWORD_RULES_HINT}</p>
         </div>
         {passwordError && <p className="text-[13px] text-red-600">{passwordError}</p>}
         {passwordSaved && <p className="text-[13px] text-green-700">Password updated.</p>}

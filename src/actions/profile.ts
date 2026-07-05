@@ -56,7 +56,9 @@ export async function updateProfile(input: z.infer<typeof updateProfileSchema>) 
 
 export async function changeMyPassword(input: z.infer<typeof changePasswordSchema>) {
   const session = await requireSession();
-  const data = changePasswordSchema.parse(input);
+  const parsed = changePasswordSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  const data = parsed.data;
 
   const result = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
     const user = await tx.user.findUniqueOrThrow({ where: { id: session.id } });

@@ -7,6 +7,7 @@ import { acceptInvite, verifyLoginOtp } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { PASSWORD_RULES_HINT } from "@/lib/validation/password";
 
 export function AcceptInviteForm() {
   const router = useRouter();
@@ -108,6 +109,7 @@ export function AcceptInviteForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
+        <p className="text-[11px] text-[var(--color-neutral-500)]">{PASSWORD_RULES_HINT}</p>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="confirmPassword">Confirm password</Label>

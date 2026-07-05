@@ -26,35 +26,56 @@ function fromAddress(branding: TenantBranding | null) {
 }
 
 /**
- * Degrades to a console log instead of throwing when SES isn't configured
- * (AWS_SES_REGION unset), so whatever triggered this never fails because of
- * email (§10 NFR: "email failures degrade gracefully").
+ * Degrades to a console log instead of throwing when no provider is
+ * configured, so whatever triggered this never fails because of email
+ * (§10 NFR: "email failures degrade gracefully").
  *
- * On a real send failure, queues an Inngest retry (src/lib/inngest/functions/retry-email.ts)
- * instead of just logging and giving up — that function gets 3 automatic
- * retries with backoff. Requires `npx inngest-cli dev` running locally to
- * actually execute; if nothing's listening, the queue attempt itself is
- * wrapped so it can't throw back into the caller (same "never block the
- * mutation that triggered this" principle as the rest of this file).
+ * TEMPORARY BRIDGE: SES is the intended primary provider (see ./ses), but
+ * AWS production access is still pending — while the account is sandboxed,
+ * SES only accepts sends to individually-verified addresses, so a real
+ * invite/notification would otherwise silently never arrive. Falls back to
+ * Resend (RESEND_API_KEY, already configured) whenever SES isn't configured
+ * or a send through it fails. Once AWS approves production access, SES
+ * sends will simply stop failing and this fallback becomes a no-op — safe
+ * to leave in place, or remove once you're confident SES is fully live.
+ *
+ * On a real send failure (through whichever provider was tried last), queues
+ * an Inngest retry (src/lib/inngest/functions/retry-email.ts) instead of
+ * just logging and giving up — that function gets 3 automatic retries with
+ * backoff. Requires `npx inngest-cli dev` running locally to actually
+ * execute; if nothing's listening, the queue attempt itself is wrapped so it
+ * can't throw back into the caller (same "never block the mutation that
+ * triggered this" principle as the rest of this file).
  */
 async function deliver(to: string, subject: string, html: string, branding: TenantBranding | null): Promise<{ ok: boolean; skipped?: boolean }> {
-  if (!sesClient) {
-    console.log(`[email:skipped, SES not configured] to=${to} subject="${subject}"`);
-    return { ok: true, skipped: true };
-  }
   const from = fromAddress(branding);
-  try {
-    await sendViaSes(from, to, subject, html);
-    return { ok: true };
-  } catch (err) {
-    console.error("[email:send failed, queuing retry]", err);
+
+  if (sesClient) {
     try {
-      await inngest.send({ name: "email/send.failed", data: { from, to, subject, html } });
-    } catch (queueErr) {
-      console.error("[email:retry queue unreachable — is `npx inngest-cli dev` running?]", queueErr);
+      await sendViaSes(from, to, subject, html);
+      return { ok: true };
+    } catch (err) {
+      console.error("[email:SES send failed, falling back to Resend]", err);
     }
-    return { ok: false };
   }
+
+  if (resend) {
+    try {
+      await resend.emails.send({ from, to, subject, html });
+      return { ok: true };
+    } catch (err) {
+      console.error("[email:send failed, queuing retry]", err);
+      try {
+        await inngest.send({ name: "email/send.failed", data: { from, to, subject, html } });
+      } catch (queueErr) {
+        console.error("[email:retry queue unreachable — is `npx inngest-cli dev` running?]", queueErr);
+      }
+      return { ok: false };
+    }
+  }
+
+  console.log(`[email:skipped, no provider configured] to=${to} subject="${subject}"`);
+  return { ok: true, skipped: true };
 }
 
 export type SendTicketEmailInput = {
