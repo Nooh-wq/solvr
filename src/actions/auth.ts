@@ -24,13 +24,7 @@ import {
   sendLoginOtpEmail,
 } from "@/lib/email/events";
 import { notify } from "@/lib/notifications";
-
-const REDIRECT_BY_ROLE: Record<string, string> = {
-  CLIENT: "/portal",
-  AGENT: "/agent",
-  ADMIN: "/admin",
-  SUPER_ADMIN: "/admin/super",
-};
+import { REDIRECT_BY_ROLE } from "@/lib/redirect-by-role";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";

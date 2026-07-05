@@ -1,4 +1,5 @@
 import type { SVGProps } from "react";
+import Image from "next/image";
 import { SparklesIcon, CheckCircleIcon, TicketIcon, ChatIcon } from "@/components/icons";
 import { RotatingTaglines } from "./rotating-taglines";
 
@@ -37,7 +38,18 @@ function FloatingCard({
 export function AuthShowcase() {
   return (
     <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden auth-showcase-bg items-center justify-center">
-      <div className="relative w-full max-w-lg px-12 xl:px-16 py-28">
+      <Image
+        src="/brand/auth-ocean.jpg"
+        alt=""
+        fill
+        priority
+        sizes="50vw"
+        className="object-cover"
+      />
+      {/* Darkens the photo so white type/glass cards stay legible — see
+          .auth-showcase-bg in globals.css for why this side is fixed-dark. */}
+      <div className="absolute inset-0 bg-black/25" />
+      <div className="relative z-10 w-full max-w-lg px-12 xl:px-16 py-28">
         <div className="relative z-10">
           <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 border border-white/15 px-3 py-1 text-[12px] font-medium text-white/70 backdrop-blur-md mb-6">
             <SparklesIcon className="h-3.5 w-3.5" />
