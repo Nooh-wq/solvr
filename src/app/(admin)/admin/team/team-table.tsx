@@ -2,25 +2,28 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { updateUser, deleteUser, resendInvite, revokeInvite, reinviteUser } from "@/actions/admin";
+import {
+  updateUser,
+  deleteUser,
+  resendInvite,
+  revokeInvite,
+  reinviteUser,
+  approveUser,
+  rejectUser,
+} from "@/actions/admin";
 import { Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
-import { TrashIcon } from "@/components/icons";
 import { getAvailableActions } from "@/lib/team-matrix";
-import type { Role, UserStatus } from "@/generated/prisma";
+import { RoleBadge } from "./role-badge";
+import { StatusIndicator } from "./status-indicator";
+import { RowActionsMenu, type RowMenuItem } from "./row-actions-menu";
+import type { TeamMember } from "./team-directory";
 
-type TeamMember = {
-  id: string;
-  name: string;
-  email: string;
-  role: Role;
-  status: UserStatus;
-  company: string | null;
-  lastActiveAt: string | null;
-  isLastSuperAdmin: boolean;
-};
+type AssignableRole = "CLIENT" | "AGENT" | "ADMIN";
+type SortKey = "name" | "lastActiveAt";
+type SortDir = "asc" | "desc";
 
 function fmtLastActive(iso: string | null): string {
   if (!iso) return "—";
@@ -36,18 +39,54 @@ function fmtLastActive(iso: string | null): string {
   if (diffMs < 30 * day) return `${Math.floor(diffMs / day)}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
-type AssignableRole = "CLIENT" | "AGENT" | "ADMIN";
 
-const STATUS_LABEL: Record<UserStatus, string> = {
-  UNVERIFIED: "Unverified",
-  PENDING: "Pending approval",
-  ACTIVE: "Active",
-  REJECTED: "Rejected",
-  SUSPENDED: "Deactivated",
-  INVITED: "Invite sent",
-};
+function SortHeader({
+  label,
+  sk,
+  active,
+  dir,
+  onClick,
+}: {
+  label: string;
+  sk: SortKey;
+  active: boolean;
+  dir: SortDir;
+  onClick: (sk: SortKey) => void;
+}) {
+  return (
+    <th
+      onClick={() => onClick(sk)}
+      className="text-left font-semibold px-4 py-2.5 cursor-pointer select-none hover:text-[var(--foreground)]"
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active && <span className="text-[var(--color-neutral-400)]">{dir === "asc" ? "▴" : "▾"}</span>}
+      </span>
+    </th>
+  );
+}
 
-export function TeamTable({ users }: { users: TeamMember[] }) {
+export function TeamTable({
+  users,
+  selectableIds,
+  selected,
+  allSelected,
+  onToggle,
+  onToggleAll,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  users: TeamMember[];
+  selectableIds: string[];
+  selected: Set<string>;
+  allSelected: boolean;
+  onToggle: (id: string) => void;
+  onToggleAll: () => void;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (sk: SortKey) => void;
+}) {
   const router = useRouter();
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
@@ -126,6 +165,30 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
     });
   }
 
+  function approve(userId: string, name: string) {
+    startTransition(async () => {
+      try {
+        await approveUser({ userId });
+        toast({ title: "Registration approved", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't approve", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
+    });
+  }
+
+  function reject(userId: string, name: string) {
+    startTransition(async () => {
+      try {
+        await rejectUser({ userId });
+        toast({ title: "Registration rejected", description: name, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({ title: "Couldn't reject", description: e instanceof Error ? e.message : undefined, variant: "error" });
+      }
+    });
+  }
+
   function confirmDelete() {
     if (!toDelete) return;
     const { id, name } = toDelete;
@@ -144,108 +207,133 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
   return (
     <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
       <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="bg-[var(--color-light-gray)] text-[11px] uppercase-label text-[var(--color-neutral-700)]">
-          <tr>
-            <th className="text-left font-semibold px-4 py-2.5">Name</th>
-            <th className="text-left font-semibold px-4 py-2.5">Email</th>
-            <th className="text-left font-semibold px-4 py-2.5">Company</th>
-            <th className="text-left font-semibold px-4 py-2.5">Role</th>
-            <th className="text-left font-semibold px-4 py-2.5">Status</th>
-            <th className="text-left font-semibold px-4 py-2.5">Last active</th>
-            <th className="text-left font-semibold px-4 py-2.5"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u) => {
-            const actions = getAvailableActions(u.status, { isLastSuperAdmin: u.isLastSuperAdmin });
-            const canChangeRole = actions.includes("changeRole");
-            const canDelete = actions.includes("delete");
-            return (
-              <tr key={u.id} className="border-t border-[var(--color-neutral-100)]">
-                <td className="px-4 py-3 whitespace-nowrap">{u.name}</td>
-                <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
-                <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">
-                  {u.company ?? <span className="text-[var(--color-neutral-400)]">—</span>}
-                </td>
-                <td className="px-4 py-3">
-                  {canChangeRole ? (
-                    <Select
-                      value={u.role}
-                      disabled={pending}
-                      onChange={(e) => changeRole(u.id, u.name, e.target.value as AssignableRole)}
-                      className="h-8 text-[13px] w-32"
-                    >
-                      <option value="CLIENT">Client</option>
-                      <option value="AGENT">Agent</option>
-                      <option value="ADMIN">Admin</option>
-                    </Select>
-                  ) : (
-                    // Super Admin is not in the assignable-role select (can't
-                    // be assigned via UI — only the tenant-provisioning flow
-                    // sets it). We just render its label for the row.
-                    <span
-                      className="text-[13px] text-[var(--color-neutral-700)]"
-                      title={u.isLastSuperAdmin ? "Last Super Admin — role locked" : undefined}
-                    >
-                      {u.role === "SUPER_ADMIN" ? "Super admin" : u.role.charAt(0) + u.role.slice(1).toLowerCase()}
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3">{STATUS_LABEL[u.status]}</td>
-                <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap text-[12px]">
-                  {fmtLastActive(u.lastActiveAt)}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    {actions.includes("deactivate") && (
-                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => deactivate(u.id, u.name)}>
-                        Deactivate
-                      </Button>
-                    )}
-                    {actions.includes("reactivate") && (
-                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => reactivate(u.id, u.name)}>
-                        Reactivate
-                      </Button>
-                    )}
-                    {actions.includes("resendInvite") && (
-                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => resend(u.id, u.name)}>
-                        Resend invite
-                      </Button>
-                    )}
-                    {actions.includes("revokeInvite") && (
-                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => revoke(u.id, u.name)}>
-                        Revoke invite
-                      </Button>
-                    )}
-                    {actions.includes("reinvite") && (
-                      <Button size="sm" disabled={pending} onClick={() => reinvite(u.id, u.name)}>
-                        Re-invite
-                      </Button>
-                    )}
-                    {canDelete && (
-                      <button
-                        type="button"
-                        onClick={() => setToDelete(u)}
-                        title={`Delete ${u.name}`}
-                        aria-label={`Delete ${u.name}`}
-                        className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full text-[var(--color-neutral-500)] hover:bg-red-50 hover:text-red-600 transition-colors duration-150 cursor-pointer"
+        <table className="w-full text-sm">
+          <thead className="bg-[var(--color-light-gray)] text-[11px] uppercase-label text-[var(--color-neutral-700)]">
+            <tr>
+              <th className="w-10 px-4 py-2.5">
+                <input
+                  type="checkbox"
+                  aria-label={allSelected ? "Deselect all" : "Select all"}
+                  checked={allSelected}
+                  disabled={selectableIds.length === 0}
+                  onChange={onToggleAll}
+                  className="h-4 w-4 accent-[var(--color-primary)] cursor-pointer"
+                />
+              </th>
+              <SortHeader label="Name" sk="name" active={sortKey === "name"} dir={sortDir} onClick={onSort} />
+              <th className="text-left font-semibold px-4 py-2.5">Email</th>
+              <th className="text-left font-semibold px-4 py-2.5">Company</th>
+              <th className="text-left font-semibold px-4 py-2.5">Role</th>
+              <th className="text-left font-semibold px-4 py-2.5">Status</th>
+              <SortHeader
+                label="Last active"
+                sk="lastActiveAt"
+                active={sortKey === "lastActiveAt"}
+                dir={sortDir}
+                onClick={onSort}
+              />
+              <th className="text-left font-semibold px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => {
+              const actions = getAvailableActions(u.status, { isLastSuperAdmin: u.isLastSuperAdmin });
+              const canChangeRole = actions.includes("changeRole");
+              const canDelete = actions.includes("delete");
+              const selectable = selectableIds.includes(u.id);
+              const isSelected = selected.has(u.id);
+
+              const menuItems: RowMenuItem[] = [];
+              if (actions.includes("resendInvite")) menuItems.push({ label: "Resend invite", onSelect: () => resend(u.id, u.name) });
+              if (actions.includes("revokeInvite")) menuItems.push({ label: "Revoke invite", onSelect: () => revoke(u.id, u.name), danger: true });
+              if (canDelete) menuItems.push({ label: "Delete", onSelect: () => setToDelete(u), danger: true });
+
+              return (
+                <tr key={u.id} className="border-t border-[var(--color-neutral-100)] hover:bg-black/[0.015] dark:hover:bg-white/[0.02]">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${u.name}`}
+                      checked={isSelected}
+                      disabled={!selectable}
+                      onChange={() => onToggle(u.id)}
+                      className="h-4 w-4 accent-[var(--color-primary)] cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                    />
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap font-medium">{u.name}</td>
+                  <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
+                  <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">
+                    {u.company ?? <span className="text-[var(--color-neutral-400)]">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {canChangeRole ? (
+                      <Select
+                        value={u.role}
+                        disabled={pending}
+                        onChange={(e) => changeRole(u.id, u.name, e.target.value as AssignableRole)}
+                        className="h-8 text-[13px] w-32"
                       >
-                        <TrashIcon className="h-5 w-5" />
-                      </button>
-                    )}
-                    {actions.length === 0 && (
-                      <span className="text-[12px] text-[var(--color-neutral-500)] italic">
-                        {u.isLastSuperAdmin ? "Last Super Admin — locked" : "No actions"}
+                        <option value="CLIENT">Client</option>
+                        <option value="AGENT">Agent</option>
+                        <option value="ADMIN">Admin</option>
+                      </Select>
+                    ) : (
+                      <span title={u.isLastSuperAdmin ? "Last Super Admin — role locked" : undefined}>
+                        <RoleBadge role={u.role} />
                       </span>
                     )}
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusIndicator status={u.status} />
+                  </td>
+                  <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap text-[12px]">
+                    {fmtLastActive(u.lastActiveAt)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-2">
+                      {/* Inline primary/secondary actions per §6: PENDING gets
+                          Approve/Reject as prominent buttons (not hidden in
+                          the kebab); ACTIVE/SUSPENDED get Deactivate/
+                          Reactivate inline; REJECTED gets Re-invite inline.
+                          Delete + Resend/Revoke live only in the kebab. */}
+                      {actions.includes("approve") && (
+                        <Button size="sm" disabled={pending} onClick={() => approve(u.id, u.name)}>
+                          Approve
+                        </Button>
+                      )}
+                      {actions.includes("reject") && (
+                        <Button variant="secondary" size="sm" disabled={pending} onClick={() => reject(u.id, u.name)}>
+                          Reject
+                        </Button>
+                      )}
+                      {actions.includes("deactivate") && (
+                        <Button variant="secondary" size="sm" disabled={pending} onClick={() => deactivate(u.id, u.name)}>
+                          Deactivate
+                        </Button>
+                      )}
+                      {actions.includes("reactivate") && (
+                        <Button variant="secondary" size="sm" disabled={pending} onClick={() => reactivate(u.id, u.name)}>
+                          Reactivate
+                        </Button>
+                      )}
+                      {actions.includes("reinvite") && (
+                        <Button size="sm" disabled={pending} onClick={() => reinvite(u.id, u.name)}>
+                          Re-invite
+                        </Button>
+                      )}
+                      {menuItems.length > 0 && <RowActionsMenu items={menuItems} ariaLabel={`Actions for ${u.name}`} />}
+                      {actions.length === 0 && (
+                        <span className="text-[12px] text-[var(--color-neutral-500)] italic">
+                          {u.isLastSuperAdmin ? "Last Super Admin — locked" : "—"}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       <Modal open={toDelete !== null} onClose={() => setToDelete(null)} title="Delete this person?">

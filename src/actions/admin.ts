@@ -20,6 +20,8 @@ import {
   updateBrandingSchema,
   auditLogFilterSchema,
   analyticsFilterSchema,
+  bulkUserIdsSchema,
+  bulkChangeRoleSchema,
   type AnalyticsFilter,
 } from "@/lib/validation/admin";
 import { COUNTRIES, countryName } from "@/lib/countries";
@@ -444,6 +446,158 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
 
   revalidatePath("/admin/team");
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk actions (spec §4). Each per-user check runs inside the same
+// transaction as the mutation so the row's status/last-super-admin state
+// can't drift between guard and write. Failures are collected into a
+// per-user list rather than short-circuiting — an "8 of 9 succeeded, 1
+// skipped (last Super Admin)" result is more useful than a silent revert.
+// ---------------------------------------------------------------------------
+
+export type BulkActionResult = {
+  succeeded: string[];
+  failed: { userId: string; reason: string }[];
+};
+
+export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>): Promise<BulkActionResult> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkChangeRoleSchema.parse(input);
+
+  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const targets = await tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+    });
+    const found = new Map(targets.map((t) => [t.id, t]));
+
+    const result: BulkActionResult = { succeeded: [], failed: [] };
+    for (const id of data.userIds) {
+      const target = found.get(id);
+      if (!target) {
+        result.failed.push({ userId: id, reason: "User not found." });
+        continue;
+      }
+      if (target.id === session.id) {
+        result.failed.push({ userId: id, reason: "You can't change your own role." });
+        continue;
+      }
+      const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      try {
+        assertActionAllowed("changeRole", target.status, { isLastSuperAdmin: lastSuper });
+      } catch (e) {
+        result.failed.push({ userId: id, reason: e instanceof Error ? e.message : "Not allowed." });
+        continue;
+      }
+      if (target.role === data.role) {
+        result.succeeded.push(id); // Already the target role — no-op counts as success.
+        continue;
+      }
+      await tx.user.update({ where: { id: target.id }, data: { role: data.role } });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.id,
+          action: "ROLE_CHANGE",
+          fromValue: target.role,
+          toValue: data.role,
+        },
+      });
+      result.succeeded.push(id);
+    }
+
+    revalidatePath("/admin/team");
+    return result;
+  });
+}
+
+export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): Promise<BulkActionResult> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkUserIdsSchema.parse(input);
+
+  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const targets = await tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+    });
+    const found = new Map(targets.map((t) => [t.id, t]));
+
+    const result: BulkActionResult = { succeeded: [], failed: [] };
+    for (const id of data.userIds) {
+      const target = found.get(id);
+      if (!target) {
+        result.failed.push({ userId: id, reason: "User not found." });
+        continue;
+      }
+      if (target.id === session.id) {
+        result.failed.push({ userId: id, reason: "You can't deactivate yourself." });
+        continue;
+      }
+      const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      try {
+        assertActionAllowed("deactivate", target.status, { isLastSuperAdmin: lastSuper });
+      } catch (e) {
+        result.failed.push({ userId: id, reason: e instanceof Error ? e.message : "Not allowed." });
+        continue;
+      }
+      await tx.user.update({ where: { id: target.id }, data: { status: "SUSPENDED" } });
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "DEACTIVATE_USER", toValue: target.email },
+      });
+      result.succeeded.push(id);
+    }
+
+    revalidatePath("/admin/team");
+    return result;
+  });
+}
+
+/**
+ * CSV export of the selected users (spec §4). Returns the raw CSV string so
+ * the client can trigger a Blob download — a signed-URL/storage flow would
+ * be over-engineered for team-sized lists (dozens to low hundreds); this
+ * generates the file in the same server-action call. Fields match the spec:
+ * name, email, company, role, status, lastActiveAt.
+ */
+export async function bulkExport(input: z.infer<typeof bulkUserIdsSchema>): Promise<{ ok: true; csv: string; filename: string } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkUserIdsSchema.parse(input);
+
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+    tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+      include: { companyRef: { select: { name: true } } },
+      orderBy: { name: "asc" },
+    })
+  );
+
+  if (rows.length === 0) return { ok: false, error: "No rows found for export." };
+
+  const header = ["Name", "Email", "Company", "Role", "Status", "Last active"];
+  const escape = (v: string | null | undefined) => {
+    if (v == null) return "";
+    const s = String(v);
+    // RFC 4180: fields containing ,/"/newline get quoted, and internal
+    // quotes get doubled. Every field gets quoted here for uniformity.
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const lines = [
+    header.map(escape).join(","),
+    ...rows.map((u) =>
+      [
+        u.name,
+        u.email,
+        u.companyRef?.name ?? u.company,
+        u.role,
+        u.status,
+        u.lastActiveAt ? u.lastActiveAt.toISOString() : "",
+      ]
+        .map(escape)
+        .join(",")
+    ),
+  ];
+  const csv = lines.join("\r\n") + "\r\n";
+  const stamp = new Date().toISOString().slice(0, 10);
+  return { ok: true, csv, filename: `team-export-${stamp}.csv` };
 }
 
 // ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   super: ShieldIcon,
 };
 
-export type NavLink = { href: string; label: string; icon: NavIconKey };
+export type NavLink = { href: string; label: string; icon: NavIconKey; badge?: number };
 
 const COLLAPSE_KEY = "solvr:sidebar-collapsed";
 
@@ -220,6 +220,18 @@ export function Sidebar({
               >
                 <Icon className={`h-[18px] w-[18px] shrink-0 transition-transform duration-150 ${!active ? "group-hover:scale-110" : ""}`} />
                 <span className={`truncate ${collapsed ? "md:hidden" : ""}`}>{l.label}</span>
+                {l.badge !== undefined && l.badge > 0 && (
+                  <span
+                    aria-label={`${l.badge} pending`}
+                    className={`ml-auto inline-flex items-center justify-center rounded-full text-[10px] font-semibold min-w-[18px] h-[18px] px-1.5 ${
+                      active
+                        ? "bg-white/25 text-white"
+                        : "bg-[var(--color-primary)] text-white"
+                    } ${collapsed ? "md:hidden" : ""}`}
+                  >
+                    {l.badge > 99 ? "99+" : l.badge}
+                  </span>
+                )}
               </Link>
             );
           })}
