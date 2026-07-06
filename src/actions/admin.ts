@@ -23,6 +23,7 @@ import {
   type AnalyticsFilter,
 } from "@/lib/validation/admin";
 import { COUNTRIES, countryName } from "@/lib/countries";
+import { assertActionAllowed } from "@/lib/team-matrix";
 import type { Priority } from "@/generated/prisma";
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
@@ -33,6 +34,35 @@ const SLA_THRESHOLD_HOURS: Record<Priority, number> = { URGENT: 1, HIGH: 4, MEDI
 
 function generateTempPassword() {
   return crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
+}
+
+// Prisma's transaction-client type is exported off the value namespace at
+// runtime (Prisma.TransactionClient exists as a type-only property on the
+// generated namespace). Aliased here so the helper below can be typed
+// without repeating the shape inline.
+type Tx = Prisma.TransactionClient;
+
+/**
+ * Lockout guard (spec §1.1). Returns true only when `userId` IS the last
+ * remaining ACTIVE Super Admin on this tenant — i.e. this specific row is
+ * a Super Admin, currently ACTIVE, and no other ACTIVE Super Admins exist.
+ * Any code changing role/status/deletion of a user must consult this to
+ * avoid leaving the tenant with no one able to manage roles.
+ */
+async function isLastSuperAdmin(
+  tx: Tx,
+  userId: string,
+  tenantId: string,
+  role: string,
+  status: string
+): Promise<boolean> {
+  if (role !== "SUPER_ADMIN" || status !== "ACTIVE") return false;
+  const count = await tx.user.count({
+    where: { tenantId, role: "SUPER_ADMIN", status: "ACTIVE" },
+  });
+  // If we're the only one, count is 1 — deactivating/demoting/deleting us
+  // drops it to 0. Any count > 1 is safe.
+  return count <= 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +165,26 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
       throw new Error("Cannot change your own role.");
     }
 
+    // Last-Super-Admin lockout guard (spec §1.1): the only remaining
+    // Super Admin on this tenant cannot be demoted or deactivated — either
+    // would leave the tenant with no one who can manage roles/tenant-wide
+    // settings. Computed here inside the transaction so the count reflects
+    // any concurrent updates.
+    const isTargetLastSuperAdmin = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+    const isRoleChange = data.role !== undefined && data.role !== target.role;
+    const isDeactivate = data.status === "SUSPENDED";
+    const isReactivate = data.status === "ACTIVE";
+
+    if (isRoleChange) {
+      assertActionAllowed("changeRole", target.status, { isLastSuperAdmin: isTargetLastSuperAdmin });
+    }
+    if (isDeactivate) {
+      assertActionAllowed("deactivate", target.status, { isLastSuperAdmin: isTargetLastSuperAdmin });
+    }
+    if (isReactivate) {
+      assertActionAllowed("reactivate", target.status, { isLastSuperAdmin: false });
+    }
+
     const updated = await tx.user.update({
       where: { id: target.id },
       data: { role: data.role, status: data.status },
@@ -187,6 +237,13 @@ export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{
     return await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) return { ok: false, error: "User not found." };
+
+      // Lockout guard (spec §1.1). Same reasoning as updateUser above,
+      // but returned as a user-facing error instead of a thrown one since
+      // the caller here already handles a `{ ok: false, error }` shape.
+      if (await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status)) {
+        return { ok: false, error: "Can't delete the last Super Admin on this tenant. Promote another Admin first." };
+      }
 
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "DELETE_USER", toValue: target.email },
@@ -258,6 +315,109 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
   );
 
   await sendRegistrationRejectedEmail(user.email, branding);
+
+  revalidatePath("/admin/team");
+  return { ok: true };
+}
+
+/**
+ * Regenerates a fresh HMAC invite token and re-sends the accept-invite
+ * email. Only valid for INVITED accounts (spec §4 / §3 matrix). The old
+ * token stays valid until its own expiry — signInviteToken is stateless,
+ * so we can't invalidate a specific past JWT; both work until they expire.
+ * That's fine: the invite URL only lets the recipient set their own
+ * password + verify OTP, and this endpoint requires no prior state on the
+ * recipient's side.
+ */
+export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  const { user, branding } = await withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("resendInvite", target.status, { isLastSuperAdmin: false });
+
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_RESENT", toValue: target.email },
+      });
+      const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+      return { user: target, branding };
+    }
+  );
+
+  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
+  await sendUserInviteEmail(user.email, acceptUrl, branding);
+
+  revalidatePath("/admin/team");
+  return { ok: true };
+}
+
+/**
+ * Cancels an outstanding invite. Deletes the User row entirely — INVITED
+ * accounts have never logged in, own no tickets/messages, and have no FK
+ * dependents beyond the invite-related audit log entries (which reference
+ * the acting admin, not the invited user, so they survive the delete).
+ * Freeing the email row lets the admin re-invite the same address later
+ * without hitting the unique-per-tenant email constraint.
+ */
+export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  return withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) return { ok: false, error: "User not found." };
+      assertActionAllowed("revokeInvite", target.status, { isLastSuperAdmin: false });
+
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_REVOKED", toValue: target.email },
+      });
+      await tx.user.delete({ where: { id: target.id } });
+
+      revalidatePath("/admin/team");
+      return { ok: true };
+    }
+  );
+}
+
+/**
+ * Undoes a rejection and starts a fresh invite flow for the same email.
+ * The row transitions REJECTED → INVITED, the accept-invite email is sent
+ * with a new HMAC token, and the rejectedAt/rejectedBy audit-log entry
+ * stays as the historical record of what happened before this re-invite.
+ * This is deliberately a distinct action from resendInvite (spec §3
+ * matrix): re-inviting a rejected user is a conscious "we changed our
+ * mind" decision, not just resending a mis-typed email.
+ */
+export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  const { user, branding } = await withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("reinvite", target.status, { isLastSuperAdmin: false });
+
+      const updated = await tx.user.update({ where: { id: target.id }, data: { status: "INVITED" } });
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "REINVITE_USER", toValue: updated.email },
+      });
+      const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+      return { user: updated, branding };
+    }
+  );
+
+  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
+  await sendUserInviteEmail(user.email, acceptUrl, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
