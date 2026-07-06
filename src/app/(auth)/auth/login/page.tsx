@@ -14,6 +14,12 @@ export default function LoginPage() {
           Forgot password?
         </Link>
       </p>
+      <p className="text-[12px] text-[var(--color-neutral-500)] mt-3 text-center">
+        Need a workspace?{" "}
+        <Link href="/auth/signup" className="text-[var(--foreground)] font-medium hover:underline">
+          Start one
+        </Link>
+      </p>
     </div>
   );
 }

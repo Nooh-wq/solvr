@@ -255,6 +255,60 @@ export async function verifyOtpSessionToken(token: string): Promise<OtpSessionTo
   }
 }
 
+// Tenant signup (Zendesk-style — anyone can register a new workspace).
+// Distinct from OtpSessionToken above because tenant + user rows are
+// deliberately NOT created until the OTP is verified: creating them
+// upfront would leave orphan Tenants (with reserved slugs blocking future
+// signups) every time someone drops off after the form. Instead the
+// entire signup payload is carried in the JWT — signed by us, opaque to
+// the client, only redeemable together with the emailed code.
+export type TenantSignupTokenPayload = {
+  tenantName: string;
+  slug: string;
+  adminName: string;
+  adminEmail: string;
+  // Already bcrypt-hashed by the caller (we never sign the plaintext).
+  passwordHash: string;
+  // bcrypt hash of the 6-digit OTP code. Kept in the JWT rather than a
+  // LoginOtp row so verification is stateless (no user exists yet).
+  codeHash: string;
+};
+
+export async function signTenantSignupToken(payload: TenantSignupTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "tenant-signup" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${OTP_SESSION_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyTenantSignupToken(token: string): Promise<TenantSignupTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "tenant-signup") return null;
+    if (
+      typeof payload.tenantName !== "string" ||
+      typeof payload.slug !== "string" ||
+      typeof payload.adminName !== "string" ||
+      typeof payload.adminEmail !== "string" ||
+      typeof payload.passwordHash !== "string" ||
+      typeof payload.codeHash !== "string"
+    ) {
+      return null;
+    }
+    return {
+      tenantName: payload.tenantName,
+      slug: payload.slug,
+      adminName: payload.adminName,
+      adminEmail: payload.adminEmail,
+      passwordHash: payload.passwordHash,
+      codeHash: payload.codeHash,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CSAT rating link (actions/csat.ts's submitCsatRating(), emailed from
 // updateTicket() the moment a ticket is newly marked Resolved). Long-lived

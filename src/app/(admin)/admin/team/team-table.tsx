@@ -19,6 +19,7 @@ import { getAvailableActions } from "@/lib/team-matrix";
 import { RoleBadge } from "./role-badge";
 import { StatusIndicator } from "./status-indicator";
 import { RowActionsMenu, type RowMenuItem } from "./row-actions-menu";
+import { Avatar } from "@/components/ui/avatar";
 import type { TeamMember } from "./team-directory";
 
 type AssignableRole = "CLIENT" | "AGENT" | "ADMIN";
@@ -221,7 +222,6 @@ export function TeamTable({
                 />
               </th>
               <SortHeader label="Name" sk="name" active={sortKey === "name"} dir={sortDir} onClick={onSort} />
-              <th className="text-left font-semibold px-4 py-2.5">Email</th>
               <th className="text-left font-semibold px-4 py-2.5">Company</th>
               <th className="text-left font-semibold px-4 py-2.5">Role</th>
               <th className="text-left font-semibold px-4 py-2.5">Status</th>
@@ -260,9 +260,16 @@ export function TeamTable({
                       className="h-4 w-4 accent-[var(--color-primary)] cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                     />
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap font-medium">{u.name}</td>
-                  <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
-                  <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar name={u.name} seed={u.id} size="md" />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-[13px] leading-tight truncate">{u.name}</p>
+                        <p className="text-[12px] text-[var(--color-neutral-500)] leading-tight truncate">{u.email}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-[13px] text-[var(--color-neutral-600)] whitespace-nowrap">
                     {u.company ?? <span className="text-[var(--color-neutral-400)]">—</span>}
                   </td>
                   <td className="px-4 py-3">
