@@ -296,3 +296,24 @@ primitive that long-term belongs in the Shared Platform. Moving it
 requires coordinated migration across two repos on a live database —
 not a decision to make as a side-effect of any other milestone. Filed
 as an open item; not blocked on anything today.
+
+### 7.4 Required Shared Platform migration: partial unique index on groups.isDefault
+
+**Owner:** Shared Platform (this is a shared-owned table, so this repo cannot add the index without breaching the boundary — see rule 2 and Z1.2's default-group discussion).
+
+**Rationale:** the "at most one `Group` per tenant with `isDefault: true`" invariant that Z1.2 introduces is enforced today at the wrapper layer only (`createGroup` rejects a second default; `updateGroup` atomically demotes the previous default when promoting a new one). That closes the door for all normal write paths but leaves a small race window for two concurrent `createGroup({ isDefault: true })` calls in the same millisecond of tenant provisioning. The correct backstop is a DB-level partial unique index.
+
+**Exact SQL to run in the next Shared Platform migration** (drop-in, idempotent):
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
+  ON "groups" ("tenantId")
+  WHERE "isDefault" = true;
+```
+
+**Before running:** verify no tenant has multiple `isDefault: true` groups today. Postgres will reject the CREATE if any tenant already violates the invariant. Fix any violators via UPDATE before the migration runs (should be zero — no data path in either repo can produce this today).
+
+**When this lands in Shared Platform:**
+- Support's `createGroup` and `updateGroup` guards stay in place — they still surface friendlier errors before the DB-level rejection. No wrapper change needed.
+- Delete the code comment in `src/lib/shared-platform/groups.ts` that references this §7.4 entry (once the DB backstop is real, the comment stops being informative).
+- Optionally: remove this §7.4 entry from the boundary doc.
