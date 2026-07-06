@@ -336,31 +336,26 @@ export function HeatmapChart({ grid }: { grid: number[][] }) {
   const max = Math.max(1, ...grid.flat());
 
   return (
-    <div className="overflow-x-auto">
-      <div
-        className="inline-grid gap-[3px]"
-        style={{ gridTemplateColumns: "36px repeat(24, minmax(18px, 1fr))" }}
-      >
-        <div />
-        {Array.from({ length: 24 }, (_, h) => (
-          <div key={h} className="text-[9px] text-[var(--color-neutral-400)] text-center">
-            {h}
-          </div>
-        ))}
-        {grid.map((row, dayIdx) => (
-          <div key={dayIdx} className="contents">
-            <div className="text-[11px] text-[var(--color-neutral-600)] flex items-center">{DAY_LABELS[dayIdx]}</div>
-            {row.map((count, hourIdx) => (
-              <div
-                key={hourIdx}
-                title={`${DAY_LABELS[dayIdx]} ${hourIdx}:00 — ${count} ticket${count === 1 ? "" : "s"}`}
-                className="aspect-square rounded-[3px] bg-[var(--color-primary)]"
-                style={{ opacity: count === 0 ? 0.06 : 0.15 + (count / max) * 0.85 }}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
+    <div className="grid gap-[3px]" style={{ gridTemplateColumns: "28px repeat(24, minmax(0, 1fr))" }}>
+      <div />
+      {Array.from({ length: 24 }, (_, h) => (
+        <div key={h} className="text-[9px] text-[var(--color-neutral-400)] text-center">
+          {h}
+        </div>
+      ))}
+      {grid.map((row, dayIdx) => (
+        <div key={dayIdx} className="contents">
+          <div className="text-[11px] text-[var(--color-neutral-600)] flex items-center">{DAY_LABELS[dayIdx]}</div>
+          {row.map((count, hourIdx) => (
+            <div
+              key={hourIdx}
+              title={`${DAY_LABELS[dayIdx]} ${hourIdx}:00 — ${count} ticket${count === 1 ? "" : "s"}`}
+              className="aspect-square rounded-[3px] bg-[var(--color-primary)]"
+              style={{ opacity: count === 0 ? 0.06 : 0.15 + (count / max) * 0.85 }}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
