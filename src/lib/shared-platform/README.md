@@ -86,6 +86,7 @@ The default-group guards close 99% of the door but leave a small race window for
 - `getX(id)` returns `null` on miss. `updateX`/`deleteX` throw `WrapperNotFoundError`.
 - `assign*` / `attach*` / `upsert*` are idempotent — re-running with the same args is a no-op (no audit row for the no-op).
 - `upsert*ByEmail` and `upsertOrganizationByName` use **PATCH-style overwrite semantics** — every key present in `input` overwrites the existing row's column (including with explicit `null`); keys absent from `input` leave existing values untouched. Deterministic under re-run; safe for the Z1.3 backfill.
+- `CreateOrganizationInput`, `CreateEndUserInput`, `CreateTeamMemberInput` accept an optional `id?: string`. **Online consumers should never pass `id`** — leave it undefined and Prisma allocates a fresh cuid. Passing `id` is a backfill-time concern only (Z1.3 needs it to preserve legacy `User.id` / `Company.id` across the boundary — see [`docs/shared-platform-boundary.md`](../../../docs/shared-platform-boundary.md) §7.6).
 - Every mutation function opens a `withRls` transaction that includes both the mutation and its CoreAuditLog write. Atomic or roll back together.
 - Dates are `Date` objects. When we swap to HTTP in M7, the wrapper parses ISO strings from the API response back into `Date` internally.
 

@@ -317,3 +317,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 - Support's `createGroup` and `updateGroup` guards stay in place — they still surface friendlier errors before the DB-level rejection. No wrapper change needed.
 - Delete the code comment in `src/lib/shared-platform/groups.ts` that references this §7.4 entry (once the DB backstop is real, the comment stops being informative).
 - Optionally: remove this §7.4 entry from the boundary doc.
+
+### 7.5 Boundary carve-out: Z1.3 backfill script may bypass the wrapper
+
+**Origin:** Z1.3 (Backfill legacy User + Company into the new six-object model).
+
+**What:** `scripts/z1_3_backfill.mjs` is the one script in this repo permitted to write to Shared-Platform-owned tables directly with raw SQL — i.e. it does not go through `src/lib/shared-platform/*`. It is the explicit and narrow exception to rule 4.
+
+**Why the exception exists:**
+- The wrapper is designed for one-write-at-a-time online callers under `withRls` transactions. Backfill is a bulk-insert one-shot admin script running against `DIRECT_URL` (superuser); routing 61 inserts through 61 nested transactions and Prisma type coercion would be pure ceremony.
+- The script mirrors the wrapper's semantics exactly: `id` preservation via the Create*Input `id?` field the wrapper now accepts (see §7.6), and one `core_audit_logs` row per mutation with `actorType = SYSTEM` and `actorId = NULL` — identical to what a `systemContext()` call through the wrapper would emit.
+- Only this one script has the exception. Any future backfill / data-migration script inherits the same carve-out, but no server-action / API / cron code does.
+
+**Contract for anyone touching the script later:**
+- Must continue to write a `core_audit_logs` row for every table mutation (matches wrapper behavior — no attribution gap).
+- Must continue to preserve legacy `User.id` / `Company.id` when writing to `end_users` / `team_members` / `organizations`.
+- Must remain idempotent (get-by-id, skip if exists) so re-runs don't duplicate work.
+- Row counts written to shared tables must match the projection block the script emits, and the DoD block at the end must pass.
+
+### 7.6 Scoping-miss note: `id?` on Create*Input added in Z1.3, not Z1.2
+
+**What happened:** Z1.2 shipped `CreateOrganizationInput`, `CreateEndUserInput`, `CreateTeamMemberInput` without an optional `id` field. Every online consumer (Support-app server actions) wants Prisma to allocate a fresh `cuid()`, so leaving `id` off was reasonable for the scope Z1.2 was designed against — online use only.
+
+**What Z1.3 surfaced:** the backfill needs legacy `User.id` and `Company.id` to survive the boundary. Preserving those ids turns Z1.4's FK rewrite (`Message.senderId → Message.senderEndUserId`, `AuditLog.actorId → AuditLog.actorEndUserId`, `Ticket.companyId → Ticket.organizationId`, etc.) into a one-statement column-level SQL update instead of a lookup-table-driven migration with drift risk.
+
+**The fix:** add an optional `id?: string` to each of the three Create*Input types. The wrapper implementations pass it through with `...(input.id && { id: input.id })` — additive, non-breaking for existing callers (they never pass `id`, Prisma still allocates a cuid). Post-M7 (Shared Platform Public API) this maps cleanly to a client-supplied `id` field on the create endpoint, which real HTTP APIs support (e.g. as an idempotency mechanism).
+
+**Framing:** scoping miss, not a design mistake. Z1.2 was scoped for online use and got that right; Z1.3 was on the roadmap when Z1.2 shipped, and the id-preservation need could have been anticipated. It wasn't. Documenting here so a future reader understands why `id?` exists on those inputs.
+
+**No penalty owed to Z1.2:** because PR #23 was still in-flight (not merged) when this gap surfaced, the fix is an amendment to that PR rather than a follow-up. If you're reading this and Z1.2 has since merged, the fix landed atomically with Z1.3 (this PR).

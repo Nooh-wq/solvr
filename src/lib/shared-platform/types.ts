@@ -103,10 +103,33 @@ export type CoreAuditLogEntry = {
 
 // ---- Create + Update input shapes ----
 
-export type CreateOrganizationInput = { name: string; domain?: string | null };
+/**
+ * Optional `id` on Create*Input:
+ *
+ * Present on Organization, EndUser, and TeamMember inputs specifically
+ * to let the Z1.3 backfill preserve legacy `User.id` / `Company.id`
+ * across the boundary. Preserving ids turns Z1.4's FK rewrite
+ * (`Message.senderId → Message.senderEndUserId`,
+ *  `Ticket.companyId → Ticket.organizationId`, etc.) into a
+ * one-statement column-level SQL update instead of a
+ * lookup-table-driven migration with drift risk. See
+ * `docs/shared-platform-boundary.md` §7.6 for the scoping-miss note
+ * — this field was not part of Z1.2 as originally scoped
+ * (online-use only), and was added when Z1.3 surfaced the need.
+ *
+ * Online consumers (Support-app server actions) should NEVER pass
+ * `id` — leave it unset and the underlying Prisma default(cuid())
+ * allocates one. Passing an id is a backfill-time concern only.
+ *
+ * Post-M7 (Shared Platform Public API), this maps cleanly to a
+ * client-supplied `id` field on the create endpoint — same shape.
+ */
+
+export type CreateOrganizationInput = { id?: string; name: string; domain?: string | null };
 export type UpdateOrganizationInput = { name?: string; domain?: string | null };
 
 export type CreateEndUserInput = {
+  id?: string;
   email: string;
   name?: string | null;
   organizationId?: string | null;
@@ -118,6 +141,7 @@ export type UpdateEndUserInput = {
 };
 
 export type CreateTeamMemberInput = {
+  id?: string;
   email: string;
   name?: string | null;
   roleId: string;

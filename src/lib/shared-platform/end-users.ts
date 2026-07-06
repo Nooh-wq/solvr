@@ -84,6 +84,8 @@ export async function createEndUser(
       try {
         const row = await tx.endUser.create({
           data: {
+            // input.id is set only by Z1.3 backfill (see types.ts note).
+            ...(input.id && { id: input.id }),
             tenantId: ctx.tenantId,
             email: input.email,
             name: input.name ?? null,
@@ -193,6 +195,7 @@ export async function upsertEndUserByEmail(
       if (!existing) {
         const row = await tx.endUser.create({
           data: {
+            ...(input.id && { id: input.id }),
             tenantId: ctx.tenantId,
             email,
             name: input.name ?? null,
