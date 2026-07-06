@@ -17,8 +17,25 @@ type TeamMember = {
   email: string;
   role: Role;
   status: UserStatus;
+  company: string | null;
+  lastActiveAt: string | null;
   isLastSuperAdmin: boolean;
 };
+
+function fmtLastActive(iso: string | null): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diffMs = now - then;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return "just now";
+  if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
+  if (diffMs < 30 * day) return `${Math.floor(diffMs / day)}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
 type AssignableRole = "CLIENT" | "AGENT" | "ADMIN";
 
 const STATUS_LABEL: Record<UserStatus, string> = {
@@ -132,8 +149,10 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
           <tr>
             <th className="text-left font-semibold px-4 py-2.5">Name</th>
             <th className="text-left font-semibold px-4 py-2.5">Email</th>
+            <th className="text-left font-semibold px-4 py-2.5">Company</th>
             <th className="text-left font-semibold px-4 py-2.5">Role</th>
             <th className="text-left font-semibold px-4 py-2.5">Status</th>
+            <th className="text-left font-semibold px-4 py-2.5">Last active</th>
             <th className="text-left font-semibold px-4 py-2.5"></th>
           </tr>
         </thead>
@@ -146,6 +165,9 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
               <tr key={u.id} className="border-t border-[var(--color-neutral-100)]">
                 <td className="px-4 py-3 whitespace-nowrap">{u.name}</td>
                 <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">{u.email}</td>
+                <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap">
+                  {u.company ?? <span className="text-[var(--color-neutral-400)]">—</span>}
+                </td>
                 <td className="px-4 py-3">
                   {canChangeRole ? (
                     <Select
@@ -171,6 +193,9 @@ export function TeamTable({ users }: { users: TeamMember[] }) {
                   )}
                 </td>
                 <td className="px-4 py-3">{STATUS_LABEL[u.status]}</td>
+                <td className="px-4 py-3 text-[var(--color-neutral-600)] whitespace-nowrap text-[12px]">
+                  {fmtLastActive(u.lastActiveAt)}
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     {actions.includes("deactivate") && (

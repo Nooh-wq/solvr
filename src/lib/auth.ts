@@ -49,6 +49,22 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     if (payload.iat < Math.floor(dbUser.passwordChangedAt.getTime() / 1000)) return null;
   }
 
+  // Best-effort update of lastActiveAt (Team & Roles v2 §2 field). Throttled
+  // to at most once per hour per user so a page with a dozen server actions
+  // doesn't produce a dozen writes on one request. Fire-and-forget: any
+  // failure is silently swallowed since it must never break session auth.
+  const now = new Date();
+  const staleThresholdMs = 60 * 60 * 1000; // 1h
+  const shouldTouchActive =
+    !dbUser.lastActiveAt || now.getTime() - dbUser.lastActiveAt.getTime() > staleThresholdMs;
+  if (shouldTouchActive) {
+    withRls({ tenantId: payload.tenantId, userId: payload.userId }, (tx) =>
+      tx.user.update({ where: { id: payload.userId }, data: { lastActiveAt: now } })
+    ).catch(() => {
+      // Non-fatal.
+    });
+  }
+
   // tenants is a public-read table (see rls_policies.sql), so this doesn't
   // need withRls — a suspended tenant's users are signed out immediately,
   // not just blocked from new logins (see src/actions/auth.ts's login()).

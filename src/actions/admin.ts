@@ -24,6 +24,7 @@ import {
 } from "@/lib/validation/admin";
 import { COUNTRIES, countryName } from "@/lib/countries";
 import { assertActionAllowed } from "@/lib/team-matrix";
+import { matchCompanyByEmail } from "@/lib/company-match";
 import type { Priority } from "@/generated/prisma";
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
@@ -72,14 +73,22 @@ async function isLastSuperAdmin(
 export async function listTeam() {
   const session = await requireSession({ minRole: "ADMIN" });
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.user.findMany({ where: { tenantId: session.tenantId }, orderBy: { createdAt: "asc" } })
+    tx.user.findMany({
+      where: { tenantId: session.tenantId },
+      orderBy: { createdAt: "asc" },
+      include: { companyRef: { select: { id: true, name: true } } },
+    })
   );
 }
 
 export async function listPendingUsers() {
   const session = await requireSession({ minRole: "ADMIN" });
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.user.findMany({ where: { tenantId: session.tenantId, status: "PENDING" }, orderBy: { createdAt: "asc" } })
+    tx.user.findMany({
+      where: { tenantId: session.tenantId, status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      include: { companyRef: { select: { id: true, name: true } } },
+    })
   );
 }
 
@@ -121,6 +130,11 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
         });
         if (existing) throw new Error("EXISTS");
 
+        // Auto-match Company by email domain (spec §5.1). Falls back to
+        // null when no matching Company exists or the email is on a
+        // personal-mail domain — admins can link/create Company later.
+        const companyId = await matchCompanyByEmail(tx, session.tenantId, data.email);
+
         const user = await tx.user.create({
           data: {
             tenantId: session.tenantId,
@@ -128,8 +142,11 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
             email: data.email,
             role: data.role,
             company: data.company,
+            companyId,
             passwordHash: placeholderHash,
             status: "INVITED",
+            invitedAt: new Date(),
+            invitedById: session.id,
           },
         });
         await tx.auditLog.create({
@@ -272,7 +289,10 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
       if (!target) throw new Error("NOT_FOUND");
 
-      const user = await tx.user.update({ where: { id: target.id }, data: { status: "ACTIVE" } });
+      const user = await tx.user.update({
+        where: { id: target.id },
+        data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.id },
+      });
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "APPROVE_USER", toValue: user.email },
       });
@@ -305,7 +325,10 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
       if (!target) throw new Error("NOT_FOUND");
 
-      const user = await tx.user.update({ where: { id: target.id }, data: { status: "REJECTED" } });
+      const user = await tx.user.update({
+        where: { id: target.id },
+        data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.id },
+      });
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "REJECT_USER", toValue: user.email },
       });

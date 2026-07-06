@@ -65,7 +65,7 @@ begin
     'tenant_branding','users','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
-    'ticket_guests','login_otps','survey_responses'
+    'ticket_guests','login_otps','survey_responses','companies'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -221,6 +221,20 @@ create policy ticket_guest_revoke on ticket_guests
       or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
     )
   );
+
+-- companies: tenant-scoped like users/categories. Simple isolation policy —
+-- companies aren't sensitive to non-staff users (a client can already see
+-- their own row's linked company via the user tenant_isolation policy), so
+-- no role-based read carve-outs are needed.
+drop policy if exists tenant_isolation on companies;
+create policy tenant_isolation on companies
+  using ("tenantId" = app_current_tenant_id());
+-- SUPER_ADMIN write bypass, same shape as users/categories above — needed
+-- for tenant provisioning if the initial admin's Company is created before
+-- the app.tenant_id switch has been made in the transaction.
+drop policy if exists super_admin_write on companies;
+create policy super_admin_write on companies
+  for all using (app_current_role() = 'SUPER_ADMIN') with check (app_current_role() = 'SUPER_ADMIN');
 
 -- survey_responses (CSAT): the submitting visitor is never a real session —
 -- actions/csat.ts verifies a signed, ticket-scoped JWT (src/lib/session.ts's

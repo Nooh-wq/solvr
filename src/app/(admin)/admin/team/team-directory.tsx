@@ -9,7 +9,16 @@ import { InviteUserForm } from "./invite-user-form";
 import { TeamTable } from "./team-table";
 import type { Role, UserStatus } from "@/generated/prisma";
 
-type TeamMember = { id: string; name: string; email: string; role: Role; status: UserStatus; isLastSuperAdmin: boolean };
+type TeamMember = {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  status: UserStatus;
+  company: string | null;
+  lastActiveAt: string | null;
+  isLastSuperAdmin: boolean;
+};
 
 const ROLE_OPTIONS: { value: Role | "ALL"; label: string }[] = [
   { value: "ALL", label: "All roles" },

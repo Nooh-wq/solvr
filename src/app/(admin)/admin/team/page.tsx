@@ -21,7 +21,15 @@ export default async function TeamPage() {
       {pending.length > 0 && (
         <div className="mb-6">
           <PendingApprovals
-            users={pending.map((u) => ({ id: u.id, name: u.name, email: u.email, company: u.company, createdAt: u.createdAt.toISOString() }))}
+            users={pending.map((u) => ({
+              id: u.id,
+              name: u.name,
+              email: u.email,
+              // Prefer the linked Company's canonical name; fall back to the
+              // legacy free-text company field for rows not yet backfilled.
+              company: u.companyRef?.name ?? u.company,
+              createdAt: u.createdAt.toISOString(),
+            }))}
           />
         </div>
       )}
@@ -32,6 +40,8 @@ export default async function TeamPage() {
           email: u.email,
           role: u.role,
           status: u.status,
+          company: u.companyRef?.name ?? u.company,
+          lastActiveAt: u.lastActiveAt ? u.lastActiveAt.toISOString() : null,
           isLastSuperAdmin: u.role === "SUPER_ADMIN" && u.status === "ACTIVE" && activeSuperAdminCount <= 1,
         }))}
       />

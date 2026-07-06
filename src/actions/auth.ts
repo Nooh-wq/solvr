@@ -25,6 +25,7 @@ import {
 } from "@/lib/email/events";
 import { notify } from "@/lib/notifications";
 import { REDIRECT_BY_ROLE } from "@/lib/redirect-by-role";
+import { matchCompanyByEmail } from "@/lib/company-match";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -72,6 +73,10 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
     });
     if (existing) return { failed: true, message: "An account with this email already exists." };
 
+    // Auto-match Company by email domain (spec §5.1). Personal-email
+    // domains (gmail.com, etc.) never match — see matchCompanyByEmail.
+    const companyId = await matchCompanyByEmail(tx, tenant.id, data.email);
+
     const user = await tx.user.create({
       data: {
         tenantId: tenant.id,
@@ -79,6 +84,7 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
         name: data.name,
         email: data.email,
         company: data.company,
+        companyId,
         role: "CLIENT",
         status: "UNVERIFIED",
       },
@@ -171,7 +177,18 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
         })
       : null;
 
-    const updated = await tx.user.update({ where: { id: user.id }, data: { status: domainApproved ? "ACTIVE" : "PENDING" } });
+    // Domain-auto-approval path sets approvedAt but no approvedById — the
+    // "approver" is the system/policy, not any specific admin. Callers
+    // reading this field should tolerate a null approvedById on rows where
+    // approvedAt is set (approved by rule, not by an individual). PENDING
+    // rows leave both fields null until approveUser() sets them.
+    const updated = await tx.user.update({
+      where: { id: user.id },
+      data: {
+        status: domainApproved ? "ACTIVE" : "PENDING",
+        approvedAt: domainApproved ? new Date() : null,
+      },
+    });
 
     const admins = domainApproved
       ? []
