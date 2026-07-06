@@ -18,6 +18,16 @@ export const updateUserSchema = z.object({
 
 export const userIdSchema = z.object({ userId: z.string().cuid() });
 
+// Bulk actions accept 1..500 user IDs (500 as a sanity cap so a runaway
+// admin action doesn't build a monster transaction). All bulk actions
+// return per-user success/failure — see spec §4 "bulk UX contract".
+export const bulkUserIdsSchema = z.object({
+  userIds: z.array(z.string().cuid()).min(1, "Select at least one person.").max(500, "Too many rows selected at once."),
+});
+export const bulkChangeRoleSchema = bulkUserIdsSchema.extend({
+  role: z.enum(["CLIENT", "AGENT", "ADMIN"]),
+});
+
 // Letters (any language), digits, spaces, and a small set of punctuation
 // that shows up in real category names ("Bugs & Fixes", "Tier-1 Support",
 // "Billing/Invoices"). Rejects strings made entirely of symbols

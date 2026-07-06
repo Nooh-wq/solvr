@@ -20,9 +20,13 @@ import {
   updateBrandingSchema,
   auditLogFilterSchema,
   analyticsFilterSchema,
+  bulkUserIdsSchema,
+  bulkChangeRoleSchema,
   type AnalyticsFilter,
 } from "@/lib/validation/admin";
 import { COUNTRIES, countryName } from "@/lib/countries";
+import { assertActionAllowed } from "@/lib/team-matrix";
+import { matchCompanyByEmail } from "@/lib/company-match";
 import type { Priority } from "@/generated/prisma";
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
@@ -35,6 +39,35 @@ function generateTempPassword() {
   return crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
 }
 
+// Prisma's transaction-client type is exported off the value namespace at
+// runtime (Prisma.TransactionClient exists as a type-only property on the
+// generated namespace). Aliased here so the helper below can be typed
+// without repeating the shape inline.
+type Tx = Prisma.TransactionClient;
+
+/**
+ * Lockout guard (spec §1.1). Returns true only when `userId` IS the last
+ * remaining ACTIVE Super Admin on this tenant — i.e. this specific row is
+ * a Super Admin, currently ACTIVE, and no other ACTIVE Super Admins exist.
+ * Any code changing role/status/deletion of a user must consult this to
+ * avoid leaving the tenant with no one able to manage roles.
+ */
+async function isLastSuperAdmin(
+  tx: Tx,
+  userId: string,
+  tenantId: string,
+  role: string,
+  status: string
+): Promise<boolean> {
+  if (role !== "SUPER_ADMIN" || status !== "ACTIVE") return false;
+  const count = await tx.user.count({
+    where: { tenantId, role: "SUPER_ADMIN", status: "ACTIVE" },
+  });
+  // If we're the only one, count is 1 — deactivating/demoting/deleting us
+  // drops it to 0. Any count > 1 is safe.
+  return count <= 1;
+}
+
 // ---------------------------------------------------------------------------
 // Team & roles
 // ---------------------------------------------------------------------------
@@ -42,14 +75,22 @@ function generateTempPassword() {
 export async function listTeam() {
   const session = await requireSession({ minRole: "ADMIN" });
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.user.findMany({ where: { tenantId: session.tenantId }, orderBy: { createdAt: "asc" } })
+    tx.user.findMany({
+      where: { tenantId: session.tenantId },
+      orderBy: { createdAt: "asc" },
+      include: { companyRef: { select: { id: true, name: true } } },
+    })
   );
 }
 
 export async function listPendingUsers() {
   const session = await requireSession({ minRole: "ADMIN" });
   return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.user.findMany({ where: { tenantId: session.tenantId, status: "PENDING" }, orderBy: { createdAt: "asc" } })
+    tx.user.findMany({
+      where: { tenantId: session.tenantId, status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      include: { companyRef: { select: { id: true, name: true } } },
+    })
   );
 }
 
@@ -91,6 +132,11 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
         });
         if (existing) throw new Error("EXISTS");
 
+        // Auto-match Company by email domain (spec §5.1). Falls back to
+        // null when no matching Company exists or the email is on a
+        // personal-mail domain — admins can link/create Company later.
+        const companyId = await matchCompanyByEmail(tx, session.tenantId, data.email);
+
         const user = await tx.user.create({
           data: {
             tenantId: session.tenantId,
@@ -98,8 +144,11 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
             email: data.email,
             role: data.role,
             company: data.company,
+            companyId,
             passwordHash: placeholderHash,
             status: "INVITED",
+            invitedAt: new Date(),
+            invitedById: session.id,
           },
         });
         await tx.auditLog.create({
@@ -133,6 +182,26 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
     if (!target) throw new Error("NOT_FOUND");
     if (target.id === session.id && data.role && data.role !== target.role) {
       throw new Error("Cannot change your own role.");
+    }
+
+    // Last-Super-Admin lockout guard (spec §1.1): the only remaining
+    // Super Admin on this tenant cannot be demoted or deactivated — either
+    // would leave the tenant with no one who can manage roles/tenant-wide
+    // settings. Computed here inside the transaction so the count reflects
+    // any concurrent updates.
+    const isTargetLastSuperAdmin = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+    const isRoleChange = data.role !== undefined && data.role !== target.role;
+    const isDeactivate = data.status === "SUSPENDED";
+    const isReactivate = data.status === "ACTIVE";
+
+    if (isRoleChange) {
+      assertActionAllowed("changeRole", target.status, { isLastSuperAdmin: isTargetLastSuperAdmin });
+    }
+    if (isDeactivate) {
+      assertActionAllowed("deactivate", target.status, { isLastSuperAdmin: isTargetLastSuperAdmin });
+    }
+    if (isReactivate) {
+      assertActionAllowed("reactivate", target.status, { isLastSuperAdmin: false });
     }
 
     const updated = await tx.user.update({
@@ -188,6 +257,13 @@ export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) return { ok: false, error: "User not found." };
 
+      // Lockout guard (spec §1.1). Same reasoning as updateUser above,
+      // but returned as a user-facing error instead of a thrown one since
+      // the caller here already handles a `{ ok: false, error }` shape.
+      if (await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status)) {
+        return { ok: false, error: "Can't delete the last Super Admin on this tenant. Promote another Admin first." };
+      }
+
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "DELETE_USER", toValue: target.email },
       });
@@ -215,7 +291,10 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
       if (!target) throw new Error("NOT_FOUND");
 
-      const user = await tx.user.update({ where: { id: target.id }, data: { status: "ACTIVE" } });
+      const user = await tx.user.update({
+        where: { id: target.id },
+        data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.id },
+      });
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "APPROVE_USER", toValue: user.email },
       });
@@ -248,7 +327,10 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
       if (!target) throw new Error("NOT_FOUND");
 
-      const user = await tx.user.update({ where: { id: target.id }, data: { status: "REJECTED" } });
+      const user = await tx.user.update({
+        where: { id: target.id },
+        data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.id },
+      });
       await tx.auditLog.create({
         data: { tenantId: session.tenantId, actorId: session.id, action: "REJECT_USER", toValue: user.email },
       });
@@ -261,6 +343,261 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
 
   revalidatePath("/admin/team");
   return { ok: true };
+}
+
+/**
+ * Regenerates a fresh HMAC invite token and re-sends the accept-invite
+ * email. Only valid for INVITED accounts (spec §4 / §3 matrix). The old
+ * token stays valid until its own expiry — signInviteToken is stateless,
+ * so we can't invalidate a specific past JWT; both work until they expire.
+ * That's fine: the invite URL only lets the recipient set their own
+ * password + verify OTP, and this endpoint requires no prior state on the
+ * recipient's side.
+ */
+export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  const { user, branding } = await withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("resendInvite", target.status, { isLastSuperAdmin: false });
+
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_RESENT", toValue: target.email },
+      });
+      const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+      return { user: target, branding };
+    }
+  );
+
+  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
+  await sendUserInviteEmail(user.email, acceptUrl, branding);
+
+  revalidatePath("/admin/team");
+  return { ok: true };
+}
+
+/**
+ * Cancels an outstanding invite. Deletes the User row entirely — INVITED
+ * accounts have never logged in, own no tickets/messages, and have no FK
+ * dependents beyond the invite-related audit log entries (which reference
+ * the acting admin, not the invited user, so they survive the delete).
+ * Freeing the email row lets the admin re-invite the same address later
+ * without hitting the unique-per-tenant email constraint.
+ */
+export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  return withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) return { ok: false, error: "User not found." };
+      assertActionAllowed("revokeInvite", target.status, { isLastSuperAdmin: false });
+
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_REVOKED", toValue: target.email },
+      });
+      await tx.user.delete({ where: { id: target.id } });
+
+      revalidatePath("/admin/team");
+      return { ok: true };
+    }
+  );
+}
+
+/**
+ * Undoes a rejection and starts a fresh invite flow for the same email.
+ * The row transitions REJECTED → INVITED, the accept-invite email is sent
+ * with a new HMAC token, and the rejectedAt/rejectedBy audit-log entry
+ * stays as the historical record of what happened before this re-invite.
+ * This is deliberately a distinct action from resendInvite (spec §3
+ * matrix): re-inviting a rejected user is a conscious "we changed our
+ * mind" decision, not just resending a mis-typed email.
+ */
+export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = userIdSchema.parse(input);
+
+  const { user, branding } = await withRls(
+    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    async (tx) => {
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("reinvite", target.status, { isLastSuperAdmin: false });
+
+      const updated = await tx.user.update({ where: { id: target.id }, data: { status: "INVITED" } });
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "REINVITE_USER", toValue: updated.email },
+      });
+      const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+      return { user: updated, branding };
+    }
+  );
+
+  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
+  await sendUserInviteEmail(user.email, acceptUrl, branding);
+
+  revalidatePath("/admin/team");
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk actions (spec §4). Each per-user check runs inside the same
+// transaction as the mutation so the row's status/last-super-admin state
+// can't drift between guard and write. Failures are collected into a
+// per-user list rather than short-circuiting — an "8 of 9 succeeded, 1
+// skipped (last Super Admin)" result is more useful than a silent revert.
+// ---------------------------------------------------------------------------
+
+export type BulkActionResult = {
+  succeeded: string[];
+  failed: { userId: string; reason: string }[];
+};
+
+export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>): Promise<BulkActionResult> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkChangeRoleSchema.parse(input);
+
+  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const targets = await tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+    });
+    const found = new Map(targets.map((t) => [t.id, t]));
+
+    const result: BulkActionResult = { succeeded: [], failed: [] };
+    for (const id of data.userIds) {
+      const target = found.get(id);
+      if (!target) {
+        result.failed.push({ userId: id, reason: "User not found." });
+        continue;
+      }
+      if (target.id === session.id) {
+        result.failed.push({ userId: id, reason: "You can't change your own role." });
+        continue;
+      }
+      const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      try {
+        assertActionAllowed("changeRole", target.status, { isLastSuperAdmin: lastSuper });
+      } catch (e) {
+        result.failed.push({ userId: id, reason: e instanceof Error ? e.message : "Not allowed." });
+        continue;
+      }
+      if (target.role === data.role) {
+        result.succeeded.push(id); // Already the target role — no-op counts as success.
+        continue;
+      }
+      await tx.user.update({ where: { id: target.id }, data: { role: data.role } });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.id,
+          action: "ROLE_CHANGE",
+          fromValue: target.role,
+          toValue: data.role,
+        },
+      });
+      result.succeeded.push(id);
+    }
+
+    revalidatePath("/admin/team");
+    return result;
+  });
+}
+
+export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): Promise<BulkActionResult> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkUserIdsSchema.parse(input);
+
+  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const targets = await tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+    });
+    const found = new Map(targets.map((t) => [t.id, t]));
+
+    const result: BulkActionResult = { succeeded: [], failed: [] };
+    for (const id of data.userIds) {
+      const target = found.get(id);
+      if (!target) {
+        result.failed.push({ userId: id, reason: "User not found." });
+        continue;
+      }
+      if (target.id === session.id) {
+        result.failed.push({ userId: id, reason: "You can't deactivate yourself." });
+        continue;
+      }
+      const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      try {
+        assertActionAllowed("deactivate", target.status, { isLastSuperAdmin: lastSuper });
+      } catch (e) {
+        result.failed.push({ userId: id, reason: e instanceof Error ? e.message : "Not allowed." });
+        continue;
+      }
+      await tx.user.update({ where: { id: target.id }, data: { status: "SUSPENDED" } });
+      await tx.auditLog.create({
+        data: { tenantId: session.tenantId, actorId: session.id, action: "DEACTIVATE_USER", toValue: target.email },
+      });
+      result.succeeded.push(id);
+    }
+
+    revalidatePath("/admin/team");
+    return result;
+  });
+}
+
+/**
+ * CSV export of the selected users (spec §4). Returns the raw CSV string so
+ * the client can trigger a Blob download — a signed-URL/storage flow would
+ * be over-engineered for team-sized lists (dozens to low hundreds); this
+ * generates the file in the same server-action call. Fields match the spec:
+ * name, email, company, role, status, lastActiveAt.
+ */
+export async function bulkExport(input: z.infer<typeof bulkUserIdsSchema>): Promise<{ ok: true; csv: string; filename: string } | { ok: false; error: string }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = bulkUserIdsSchema.parse(input);
+
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+    tx.user.findMany({
+      where: { id: { in: data.userIds }, tenantId: session.tenantId },
+      include: { companyRef: { select: { name: true } } },
+      orderBy: { name: "asc" },
+    })
+  );
+
+  if (rows.length === 0) return { ok: false, error: "No rows found for export." };
+
+  const header = ["Name", "Email", "Company", "Role", "Status", "Last active"];
+  const escape = (v: string | null | undefined) => {
+    if (v == null) return "";
+    const s = String(v);
+    // RFC 4180: fields containing ,/"/newline get quoted, and internal
+    // quotes get doubled. Every field gets quoted here for uniformity.
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const lines = [
+    header.map(escape).join(","),
+    ...rows.map((u) =>
+      [
+        u.name,
+        u.email,
+        u.companyRef?.name ?? u.company,
+        u.role,
+        u.status,
+        u.lastActiveAt ? u.lastActiveAt.toISOString() : "",
+      ]
+        .map(escape)
+        .join(",")
+    ),
+  ];
+  const csv = lines.join("\r\n") + "\r\n";
+  const stamp = new Date().toISOString().slice(0, 10);
+  return { ok: true, csv, filename: `team-export-${stamp}.csv` };
 }
 
 // ---------------------------------------------------------------------------

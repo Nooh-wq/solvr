@@ -3,6 +3,7 @@ import { getSessionUser, roleAtLeast } from "@/lib/auth";
 import { getTenantById } from "@/lib/tenant";
 import { Sidebar, type NavLink } from "@/components/sidebar";
 import { ImpersonationBanner } from "./impersonation-banner";
+import { listPendingUsers } from "@/actions/admin";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getSessionUser();
@@ -16,10 +17,21 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const tenant = await getTenantById(user.tenantId);
   if (!tenant) redirect("/auth/login");
 
+  // Pending-approval count for the Team nav badge (spec §5.4). Best-effort:
+  // if the query fails for any reason (RLS, stale session, etc.) we just
+  // omit the badge rather than breaking the whole admin layout.
+  let pendingCount = 0;
+  try {
+    const pending = await listPendingUsers();
+    pendingCount = pending.length;
+  } catch {
+    // Non-fatal.
+  }
+
   const links: NavLink[] = [
     { href: "/admin", label: "Overview", icon: "overview" },
     { href: "/admin/analytics", label: "Analytics", icon: "analytics" },
-    { href: "/admin/team", label: "Team", icon: "team" },
+    { href: "/admin/team", label: "Team", icon: "team", badge: pendingCount },
     { href: "/admin/categories", label: "Categories", icon: "categories" },
     { href: "/admin/branding", label: "Branding", icon: "branding" },
     { href: "/admin/kb", label: "Knowledge base", icon: "kb" },

@@ -112,6 +112,7 @@ model Tenant {
   notifications Notification[]
   ticketGuests  TicketGuest[]
   surveyResponses SurveyResponse[]
+  companies     Company[]
 
   @@map("tenants")
 }
@@ -151,7 +152,14 @@ model User {
   name         String
   email        String
   role         Role     @default(CLIENT)
+  // Legacy free-text company field — retained for backwards compatibility
+  // during the Team & Roles v2 backfill. New writes should populate
+  // companyId (below) via the auto-match-by-email-domain flow in
+  // registerClient/inviteUser; this string will be dropped once every
+  // active row has been backfilled to a Company reference.
   company      String?
+  companyId    String?
+  companyRef   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
   status       UserStatus @default(PENDING)
   avatarUrl    String?
   createdAt    DateTime @default(now())
@@ -160,6 +168,19 @@ model User {
   // invalidates all *other* existing sessions (the changing session is
   // re-issued a fresh cookie). See src/lib/auth.ts + src/actions/profile.ts.
   passwordChangedAt DateTime?
+
+  // Team & Roles v2 audit trail (spec §2). *ById fields are deliberately
+  // not FK'd back to User to keep the audit stub around even if the acting
+  // admin later gets deleted — same reasoning as AuditLog.actorId. Every
+  // action (approve/reject/invite/deactivate) writes an AuditLog row too;
+  // these here are the "most recent of each event" summary for the row.
+  lastActiveAt DateTime?
+  invitedAt    DateTime?
+  invitedById  String?
+  approvedAt   DateTime?
+  approvedById String?
+  rejectedAt   DateTime?
+  rejectedById String?
 
   tickets       Ticket[]      @relation("ClientTickets")
   assigned      Ticket[]      @relation("AssignedAgent")
@@ -173,7 +194,32 @@ model User {
 
   @@unique([tenantId, email])
   @@index([tenantId])
+  @@index([tenantId, companyId])
   @@map("users")
+}
+
+// Companies scope users by organizational membership. `domain` is used to
+// auto-match new registrants (e.g. someone signing up with @northwind.io
+// gets linked to the Northwind Retail company automatically instead of an
+// admin doing it by hand — see registerClient/inviteUser). `country` is
+// ISO 3166-1 alpha-2 (matches the same convention as Ticket.clientCountry
+// so it can feed the analytics region map). @@unique([tenantId, name])
+// prevents accidental dupes; there is *no* unique on domain because two
+// tenants can validly claim to be the "Acme Corp" they both know about.
+model Company {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  country   String?
+  domain    String?
+  createdAt DateTime @default(now())
+
+  users User[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, domain])
+  @@map("companies")
 }
 
 model Category {

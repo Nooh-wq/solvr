@@ -39,6 +39,25 @@ export function PlusIcon(props: IconProps) {
   );
 }
 
+export function MoreVerticalIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="5" r="1" fill="currentColor" />
+      <circle cx="10" cy="10" r="1" fill="currentColor" />
+      <circle cx="10" cy="15" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function DownloadIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 3v10m0 0-3.5-3.5M10 13l3.5-3.5" />
+      <path d="M3.5 15.5V16a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-.5" />
+    </svg>
+  );
+}
+
 export function UsersIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
