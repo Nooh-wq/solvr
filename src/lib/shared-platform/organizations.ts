@@ -103,6 +103,9 @@ export async function createOrganization(
       try {
         const row = await tx.organization.create({
           data: {
+            // input.id is set only by Z1.3 backfill (see types.ts note).
+            // Online callers leave it undefined and Prisma allocates cuid().
+            ...(input.id && { id: input.id }),
             tenantId: ctx.tenantId,
             name: input.name,
             domain: input.domain ?? null,
