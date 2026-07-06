@@ -27,6 +27,7 @@ import {
 import { COUNTRIES, countryName } from "@/lib/countries";
 import { assertActionAllowed } from "@/lib/team-matrix";
 import { matchCompanyByEmail } from "@/lib/company-match";
+import { dualFkForUser, actorCols } from "@/lib/z1-dual-fk";
 import type { Priority } from "@/generated/prisma";
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
@@ -152,7 +153,7 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
           },
         });
         await tx.auditLog.create({
-          data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_USER", toValue: user.email },
+          data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_USER", toValue: user.email },
         });
         const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
         return { user, branding };
@@ -213,7 +214,7 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.id,
+          actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
           action: "ROLE_CHANGE",
           fromValue: target.role,
           toValue: data.role,
@@ -224,7 +225,7 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.id,
+          actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
           action: data.status === "ACTIVE" ? "REACTIVATE_USER" : "DEACTIVATE_USER",
           toValue: target.email,
         },
@@ -265,7 +266,7 @@ export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{
       }
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "DELETE_USER", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "DELETE_USER", toValue: target.email },
       });
       await tx.user.delete({ where: { id: target.id } });
 
@@ -296,7 +297,7 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
         data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.id },
       });
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "APPROVE_USER", toValue: user.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "APPROVE_USER", toValue: user.email },
       });
       await notify(tx, {
         tenantId: session.tenantId,
@@ -332,7 +333,7 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
         data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.id },
       });
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "REJECT_USER", toValue: user.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "REJECT_USER", toValue: user.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user, branding };
@@ -366,7 +367,7 @@ export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise
       assertActionAllowed("resendInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_RESENT", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_RESENT", toValue: target.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user: target, branding };
@@ -401,7 +402,7 @@ export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise
       assertActionAllowed("revokeInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "INVITE_REVOKED", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_REVOKED", toValue: target.email },
       });
       await tx.user.delete({ where: { id: target.id } });
 
@@ -433,7 +434,7 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
 
       const updated = await tx.user.update({ where: { id: target.id }, data: { status: "INVITED" } });
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "REINVITE_USER", toValue: updated.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "REINVITE_USER", toValue: updated.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user: updated, branding };
@@ -497,7 +498,7 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.id,
+          actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
           action: "ROLE_CHANGE",
           fromValue: target.role,
           toValue: data.role,
@@ -541,7 +542,7 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
       }
       await tx.user.update({ where: { id: target.id }, data: { status: "SUSPENDED" } });
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, action: "DEACTIVATE_USER", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "DEACTIVATE_USER", toValue: target.email },
       });
       result.succeeded.push(id);
     }
@@ -675,7 +676,7 @@ export async function updateBranding(input: z.infer<typeof updateBrandingSchema>
       },
     });
     await tx.auditLog.create({
-      data: { tenantId: session.tenantId, actorId: session.id, action: "UPDATE_BRANDING" },
+      data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "UPDATE_BRANDING" },
     });
   });
 

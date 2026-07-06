@@ -9,6 +9,12 @@ import { retrieveContext } from "@/lib/ai/rag";
 import { chatSendMessageSchema } from "@/lib/validation/kb";
 import { createWithReference } from "@/lib/ticket-number";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
+import {
+  dualFkForUser,
+  chatSubjectCols,
+  ticketClientCols,
+  actorCols,
+} from "@/lib/z1-dual-fk";
 
 /**
  * Client-facing deflection widget (TRD §6.1 job 1 + §6.2 RAG pipeline).
@@ -48,7 +54,12 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
           where: { id: data.conversationId, tenantId: session.tenantId, userId: session.id },
         })
       : await tx.chatConversation.create({
-          data: { tenantId: session.tenantId, userId: session.id, status: "active" },
+          data: {
+            tenantId: session.tenantId,
+            userId: session.id,
+            ...chatSubjectCols(dualFkForUser(session.id, session.role)),
+            status: "active",
+          },
         });
 
     await tx.chatMessage.create({
@@ -139,6 +150,12 @@ export async function escalateChatToTicket(conversationId: string) {
   return withRls(rlsCtx, async (tx) => {
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
+    const clientDual = dualFkForUser(session.id, session.role);
+    const clientUser = await tx.user.findUnique({
+      where: { id: session.id },
+      select: { companyId: true },
+    });
+
     const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
       tx.ticket.create({
         data: {
@@ -148,6 +165,8 @@ export async function escalateChatToTicket(conversationId: string) {
           title,
           description: `Escalated from chat.\n\n${transcript}`,
           clientId: session.id,
+          ...ticketClientCols(clientDual),
+          organizationId: clientUser?.companyId ?? null,
           priority,
           status: "OPEN",
           source: "chatbot",
@@ -161,7 +180,14 @@ export async function escalateChatToTicket(conversationId: string) {
     });
 
     await tx.auditLog.create({
-      data: { tenantId: session.tenantId, ticketId: ticket.id, actorId: session.id, action: "CREATE", toValue: "OPEN" },
+      data: {
+        tenantId: session.tenantId,
+        ticketId: ticket.id,
+        actorId: session.id,
+        ...actorCols(clientDual),
+        action: "CREATE",
+        toValue: "OPEN",
+      },
     });
 
     revalidatePath("/portal");

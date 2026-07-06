@@ -270,6 +270,22 @@ model Ticket {
   client       User         @relation("ClientTickets", fields: [clientId], references: [id])
   assignedToId String?
   assignedTo   User?        @relation("AssignedAgent", fields: [assignedToId], references: [id])
+  // Z1.4a: dual-FK bridge columns. clientId can point at either an EndUser
+  // (external requester on the CLIENT tenant) or a TeamMember (staff filing
+  // a ticket in their own tenant — Employee Service Suite pattern).
+  // §7.7 in docs/shared-platform-boundary.md explains why Ticket got the
+  // dual-FK treatment instead of the §7.1 clean-rename shape. Raw scalars,
+  // no Prisma relations across the boundary (rule 3). CHECK
+  // tickets_client_exclusive enforces num_nonnulls(clientEndUserId,
+  // clientTeamMemberId) <= 1 (see prisma/z1_4a_migration.sql).
+  clientEndUserId       String?
+  clientTeamMemberId    String?
+  assignedTeamMemberId  String?
+  // Ticket.organizationId denormalizes the client's Organization for
+  // analytics/routing. Populated at backfill from users.companyId; on
+  // new writes populated by looking up the EndUser's primary org via
+  // the wrapper's matchOrganizationByEmailDomain / EndUser.organizationId.
+  organizationId        String?
   source       String       @default("portal") // portal | chatbot | email
   firstReplyAt DateTime?
   resolvedAt   DateTime?
@@ -301,6 +317,10 @@ model Ticket {
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
+  @@index([tenantId, clientEndUserId])
+  @@index([tenantId, clientTeamMemberId])
+  @@index([tenantId, assignedTeamMemberId])
+  @@index([tenantId, organizationId])
   @@map("tickets")
 }
 
@@ -381,6 +401,9 @@ model Attachment {
   message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
   uploadedById String?
   uploadedBy   User?  @relation(fields: [uploadedById], references: [id])
+  // Z1.4a: dual-FK bridge columns (see boundary doc §7.1 + Ticket comment).
+  uploadedByEndUserId    String?
+  uploadedByTeamMemberId String?
   // Storage object PATH, not a public URL — this bucket is private (ticket
   // attachments aren't "public by nature" like branding logos/avatars are).
   // Resolved to a short-lived signed URL on read; see lib/storage.ts.
@@ -392,6 +415,8 @@ model Attachment {
 
   @@index([tenantId, ticketId])
   @@index([messageId])
+  @@index([tenantId, uploadedByEndUserId])
+  @@index([tenantId, uploadedByTeamMemberId])
   @@map("attachments")
 }
 
@@ -414,12 +439,17 @@ model TicketGuest {
   tokenHash   String    @unique
   invitedById String?
   invitedBy   User?     @relation(fields: [invitedById], references: [id])
+  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  invitedByEndUserId    String?
+  invitedByTeamMemberId String?
   createdAt   DateTime  @default(now())
   revokedAt   DateTime?
 
   messages Message[]
 
   @@index([tenantId, ticketId])
+  @@index([tenantId, invitedByEndUserId])
+  @@index([tenantId, invitedByTeamMemberId])
   @@map("ticket_guests")
 }
 
@@ -434,12 +464,17 @@ model LoginOtp {
   tenantId   String
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  endUserId    String?
+  teamMemberId String?
   codeHash   String
   expiresAt  DateTime
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([userId])
+  @@index([endUserId])
+  @@index([teamMemberId])
   @@map("login_otps")
 }
 
@@ -487,6 +522,9 @@ model Notification {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  recipientEndUserId    String?
+  recipientTeamMemberId String?
   type      String // TICKET_REPLY | STATUS_CHANGE | ASSIGNED | REGISTRATION_PENDING | REGISTRATION_APPROVED | REGISTRATION_REJECTED
   title     String
   body      String?
@@ -496,6 +534,8 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@index([tenantId, userId, isRead, createdAt])
+  @@index([tenantId, recipientEndUserId])
+  @@index([tenantId, recipientTeamMemberId])
   @@map("notifications")
 }
 
@@ -552,6 +592,9 @@ model ChatConversation {
   tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String?
   user      User?         @relation(fields: [userId], references: [id])
+  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  endUserId    String?
+  teamMemberId String?
   status    String        @default("active") // active | escalated | closed
   ticketId  String?
   ticket    Ticket?       @relation(fields: [ticketId], references: [id])
@@ -559,6 +602,8 @@ model ChatConversation {
   messages  ChatMessage[]
 
   @@index([tenantId])
+  @@index([tenantId, endUserId])
+  @@index([tenantId, teamMemberId])
   @@map("chat_conversations")
 }
 

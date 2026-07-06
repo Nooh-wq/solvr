@@ -153,7 +153,14 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
       });
 
       await tx.auditLog.create({
-        data: { tenantId: tenant.id, actorId: user.id, action: "TENANT_CREATED", toValue: tenant.name },
+        // Z1.4a: newly created tenant's SUPER_ADMIN is always staff → TeamMember.
+        data: {
+          tenantId: tenant.id,
+          actorId: user.id,
+          actorTeamMemberId: user.id,
+          action: "TENANT_CREATED",
+          toValue: tenant.name,
+        },
       });
 
       return { tenantId: tenant.id, userId: user.id };

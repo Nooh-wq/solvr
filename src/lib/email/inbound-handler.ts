@@ -11,6 +11,12 @@ import {
   stripQuotedReply,
   htmlToPlainText,
 } from "@/lib/email/inbound";
+import {
+  dualFkForUser,
+  senderCols,
+  actorCols,
+  ticketClientCols,
+} from "@/lib/z1-dual-fk";
 import type { EmailReceivedEvent } from "resend";
 
 type ReceivedEmailEventData = EmailReceivedEvent["data"];
@@ -128,11 +134,13 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
     const { ticket, assignedAgent, branding } = await withRls(
       { tenantId: existingTicket.tenantId, userId: sender.id, role: sender.role },
       async (tx) => {
+        const senderDual = dualFkForUser(sender.id, sender.role);
         await tx.message.create({
           data: {
             tenantId: existingTicket.tenantId,
             ticketId: existingTicket.id,
             senderId: sender.id,
+            ...senderCols(senderDual),
             senderRole: "CLIENT",
             body,
           },
@@ -146,6 +154,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
               tenantId: existingTicket.tenantId,
               ticketId: existingTicket.id,
               actorId: sender.id,
+              ...actorCols(senderDual),
               action: "STATUS_CHANGE",
               fromValue: "PENDING",
               toValue: "IN_PROGRESS",
@@ -157,6 +166,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
             tenantId: existingTicket.tenantId,
             ticketId: existingTicket.id,
             actorId: sender.id,
+            ...actorCols(senderDual),
             action: "REPLY",
           },
         });
@@ -191,6 +201,12 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
   const { ticket, branding } = await withRls({ tenantId: tenant.id, userId: sender.id, role: sender.role }, async (tx) => {
     const t = await tx.tenant.findUniqueOrThrow({ where: { id: tenant.id } });
 
+    const senderDual = dualFkForUser(sender.id, sender.role);
+    const senderCompany = await tx.user.findUnique({
+      where: { id: sender.id },
+      select: { companyId: true },
+    });
+
     const ticket = await createWithReference(t.name, ({ reference, ticketNumber }) =>
       tx.ticket.create({
         data: {
@@ -200,6 +216,8 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
           title: full.subject.replace(/^(re|fwd?):\s*/i, "").slice(0, 200) || "Email support request",
           description: body,
           clientId: sender.id,
+          ...ticketClientCols(senderDual),
+          organizationId: senderCompany?.companyId ?? null,
           status: "OPEN",
           source: "email",
         },
@@ -207,7 +225,14 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
     );
 
     await tx.auditLog.create({
-      data: { tenantId: tenant.id, ticketId: ticket.id, actorId: sender.id, action: "CREATE", toValue: "OPEN" },
+      data: {
+        tenantId: tenant.id,
+        ticketId: ticket.id,
+        actorId: sender.id,
+        ...actorCols(senderDual),
+        action: "CREATE",
+        toValue: "OPEN",
+      },
     });
 
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });

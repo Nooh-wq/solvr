@@ -5,6 +5,7 @@ import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
+import { dualFkForUser, uploaderCols } from "@/lib/z1-dual-fk";
 
 /** Every ticket-attachment action needs "does this session have any business touching this ticket" — same rule getTicket() already applies (staff: tenant match; client: must be the ticket's own client). */
 async function assertTicketAccess(
@@ -65,6 +66,7 @@ export async function uploadTicketAttachment(
           tenantId: session.tenantId,
           ticketId,
           uploadedById: session.id,
+          ...uploaderCols(dualFkForUser(session.id, session.role)),
           fileUrl: path,
           fileName: file.name,
           mimeType: file.type,

@@ -227,27 +227,40 @@ When either side wants to add a Foreign Key across the boundary:
 
 Durable record so nothing gets forgotten between milestones.
 
-### 7.1 Z1.4 must extend the dual-FK treatment to 5 more Support-owned tables
+### 7.1 Z1.4 must extend the dual-FK treatment to 6 more Support-owned tables
 
 Z1.1b added nullable `senderEndUserId`/`senderTeamMemberId` to `messages`
 and `actorEndUserId`/`actorTeamMemberId` to `audit_logs`, plus
-`num_nonnulls(..) <= 1` CHECK constraints on each. Same treatment must
-land during Z1.4's FK-rename pass on the remaining tables that reference
+`num_nonnulls(..) <= 1` CHECK constraints on each. Same treatment lands
+during Z1.4a's schema-migration pass on the remaining tables that reference
 a `User` today and could point at either an `EndUser` or a `TeamMember`
-tomorrow. Each row below is a required Z1.4 deliverable:
+tomorrow. Each row below shipped in Z1.4a (`prisma/z1_4a_migration.sql`):
 
-| Table | Current FK | Post-Z1 columns to add | CHECK constraint name |
+| Table | Current FK | Dual-FK columns added | CHECK constraint name |
 |---|---|---|---|
+| `tickets` | `clientId` | `clientEndUserId`, `clientTeamMemberId` | `tickets_client_exclusive` |
 | `ticket_guests` | `invitedById` | `invitedByEndUserId`, `invitedByTeamMemberId` | `ticket_guests_inviter_exclusive` |
 | `login_otps` | `userId` | `endUserId`, `teamMemberId` | `login_otps_subject_exclusive` |
 | `notifications` | `userId` (recipient) | `recipientEndUserId`, `recipientTeamMemberId` | `notifications_recipient_exclusive` |
 | `attachments` | `uploadedById` | `uploadedByEndUserId`, `uploadedByTeamMemberId` | `attachments_uploader_exclusive` |
 | `chat_conversations` | `userId` | `endUserId`, `teamMemberId` | `chat_conversations_subject_exclusive` |
 
-`tickets` is deliberately **not** in this list: its FKs have unambiguous
-semantics (`clientId` is always an EndUser, `assignedToId` is always a
-TeamMember), so it gets a clean rename in Z1.4 without needing the
-dual-FK bridge shape.
+`tickets.assignedTeamMemberId` is a single (non-dual) new column — the
+assignee is always staff by construction (product decision), so there's
+no client-side variant. Same for `tickets.organizationId` — one column
+denormalizing the client's org for analytics/routing. See §7.7 for the
+`tickets.clientId` dual-FK decision.
+
+Z1.4a also **tightens** the two Z1.1b CHECKs to match the §7.2 endpoint
+shape early: `messages_sender_exclusive` becomes 3-way
+(`senderEndUserId`, `senderTeamMemberId`, `guestId` — legacy `senderId`
+dropped from the arg list) and `audit_logs_actor_exclusive` becomes
+2-way (`actorEndUserId`, `actorTeamMemberId` — legacy `actorId`
+dropped). This was mandatory for the Z1.4a dual-write pattern to work:
+during the transition every insert carries BOTH legacy and one new
+column, which the old 4-way / 3-way forms would reject. Z1.5's §7.2
+scope shrinks to just `DROP COLUMN "senderId"` / `DROP COLUMN "actorId"`
+— the CHECK expressions themselves are already at their endpoint form.
 
 ### 7.2 Z1.5 must tighten every CHECK constraint
 
@@ -346,3 +359,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 **Framing:** scoping miss, not a design mistake. Z1.2 was scoped for online use and got that right; Z1.3 was on the roadmap when Z1.2 shipped, and the id-preservation need could have been anticipated. It wasn't. Documenting here so a future reader understands why `id?` exists on those inputs.
 
 **No penalty owed to Z1.2:** because PR #23 was still in-flight (not merged) when this gap surfaced, the fix is an amendment to that PR rather than a follow-up. If you're reading this and Z1.2 has since merged, the fix landed atomically with Z1.3 (this PR).
+
+### 7.7 Ticket dual-FK decision: staff-as-requester is a first-class case
+
+**Origin:** Z1.4a projection surfaced 1 ticket (`SO-26210`, tenant `solvr`) where `Ticket.clientId` pointed at `admin@stralis.app` — a staff `User`, not a `CLIENT`. Legacy schema tolerated this because `clientId` was `User.id` regardless of role. Post-Z1.3, that staff user is a `TeamMember`, not an `EndUser`.
+
+**What Z1.1's §7.1 originally claimed** (now corrected in the amended §7.1): "`Ticket.clientId` is always an EndUser, so `tickets` gets a clean rename in Z1.4 without needing the dual-FK bridge shape."
+
+**Why that claim was wrong** — not a data quirk to route around, but a product-shape mistake:
+
+- The Stralis roadmap includes an **Employee Service Suite** (internal IT/HR helpdesk mode) where staff filing tickets in their own tenant is a first-class case, not an edge case.
+- Locking `clientId` to EndUser-only would structurally foreclose on that entire market segment. Any product move into internal helpdesk would require reverting the Z1.4 shape at a much higher cost — reads migrated, UIs assuming `Ticket.client` is always an EndUser, downstream analytics etc.
+- The `SO-26210` row is the legitimate expression of that reality against the legacy schema. The data was right; the schema claim was wrong.
+
+**The fix:** Ticket joins the dual-FK bridge shape used by the 5 other §7.1 tables. `Ticket.clientEndUserId` + `Ticket.clientTeamMemberId`, `num_nonnulls(...) <= 1` CHECK. Not a temporary compromise — the intended long-term shape.
+
+**What this decision is NOT:**
+
+- Not "we'll retire staff-as-client once the Employee Service Suite ships." The suite depends on it. The dual-FK stays.
+- Not "we discovered we need to grandfather SO-26210 in." It's not one row; it's an entire product mode.
+- Not "we bent the model because reads would have broken." Reads still migrate to the wrapper in Z1.4b regardless.
+
+**Downstream Z1.5 implication:** the `tickets_client_exclusive` CHECK's Z1.5 tightening drops `clientId` from the arg list but keeps both `clientEndUserId` and `clientTeamMemberId` — same pattern as `messages_sender_exclusive`'s guest-inclusion (§7.2). Both flavors are permanent.
