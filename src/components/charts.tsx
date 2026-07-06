@@ -415,69 +415,6 @@ export function AxisBarChart({ items }: { items: Segment[] }) {
   );
 }
 
-type RegionPoint = {
-  code: string | null;
-  label: string;
-  value: number;
-  avgResolutionHours: number | null;
-  lat: number | null;
-  lon: number | null;
-};
-
-// Deliberately rough, hand-drawn landmass silhouettes — not real coastlines
-// (no world-map asset or mapping library in this repo, and the mockup this
-// is based on shows a stylized illustration, not a precise choropleth).
-// Purely a backdrop; the actual data is the projected dots below.
-const LANDMASS_PATHS = [
-  "M40,60 Q30,40 70,35 Q120,30 140,55 Q150,80 120,100 Q90,120 60,105 Q35,90 40,60Z", // North America
-  "M100,140 Q90,160 100,190 Q110,220 130,215 Q140,190 135,160 Q125,140 100,140Z", // South America
-  "M260,50 Q290,40 310,55 Q320,75 300,85 Q275,90 260,75 Q255,60 260,50Z", // Europe
-  "M270,90 Q300,85 315,110 Q325,150 300,180 Q280,190 270,160 Q260,120 270,90Z", // Africa
-  "M340,45 Q400,30 460,55 Q490,80 470,110 Q420,120 370,100 Q335,80 340,45Z", // Asia
-  "M470,210 Q500,200 520,215 Q525,230 505,235 Q480,232 470,210Z", // Australia
-];
-
-/**
- * Stylized "clients by region" illustration: a static, approximate world
- * backdrop with dot markers plotted from a small country-centroid lookup
- * (src/lib/countries.ts) via a basic equirectangular projection, sized/
- * colored by ticket volume. Opacity over one CSS variable (not hardcoded
- * hex) to stay dark-mode-safe, same approach as HeatmapChart above.
- */
-export function RegionMap({ regions }: { regions: RegionPoint[] }) {
-  const W = 560;
-  const H = 260;
-  const plottable = regions.filter((r): r is RegionPoint & { lat: number; lon: number } => r.lat !== null && r.lon !== null);
-  const max = Math.max(1, ...plottable.map((r) => r.value));
-
-  const project = (lat: number, lon: number) => ({
-    x: ((lon + 180) / 360) * W,
-    y: ((90 - lat) / 180) * H,
-  });
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" role="img" aria-label="Clients by region">
-      <rect x="0" y="0" width={W} height={H} rx="12" fill="var(--color-neutral-100)" opacity="0.5" />
-      {LANDMASS_PATHS.map((d, i) => (
-        <path key={i} d={d} fill="var(--color-neutral-300)" opacity="0.55" />
-      ))}
-      {plottable.map((r) => {
-        const { x, y } = project(r.lat, r.lon);
-        const radius = 4 + (r.value / max) * 10;
-        return (
-          <circle key={r.code ?? r.label} cx={x} cy={y} r={radius} fill="var(--color-primary)" opacity={0.35 + (r.value / max) * 0.55}>
-            <title>
-              {`${r.label}: ${r.value} ticket${r.value === 1 ? "" : "s"}${
-                r.avgResolutionHours !== null ? ` · avg resolution ${r.avgResolutionHours.toFixed(1)}h` : ""
-              }`}
-            </title>
-          </circle>
-        );
-      })}
-    </svg>
-  );
-}
-
 function niceCeil(v: number) {
   if (v <= 5) return 5;
   const pow = Math.pow(10, Math.floor(Math.log10(v)));

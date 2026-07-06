@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { getAnalyticsOverview } from "@/actions/admin";
-import { TrendChart, AxisBarChart, HeatmapChart, RegionMap } from "@/components/charts";
+import { TrendChart, AxisBarChart, HeatmapChart } from "@/components/charts";
+import { InteractiveRegionMap } from "@/components/region-map";
 import { FilterBar } from "./filter-bar";
 import { AgentLeaderboard } from "./agent-leaderboard";
 
@@ -109,8 +110,8 @@ export default async function AdminAnalyticsPage({
           <p className="text-[11px] text-[var(--color-neutral-500)] mb-4">
             Approximate — shaded by ticket volume, populates going forward only
           </p>
-          {data.regionBreakdown.some((r) => r.lat !== null) ? (
-            <RegionMap regions={data.regionBreakdown} />
+          {data.regionBreakdown.length > 0 ? (
+            <InteractiveRegionMap regions={data.regionBreakdown} />
           ) : (
             <p className="text-[13px] text-[var(--color-neutral-500)]">No region data yet for this range.</p>
           )}

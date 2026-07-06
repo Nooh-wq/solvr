@@ -27,10 +27,11 @@ const csp = [
   // for Next.js dev + its inline runtime. Tighten to a nonce-based policy
   // before production if you can budget the Next middleware work for it.
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "worker-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: blob:${supabaseOrigin ? ` ${supabaseOrigin}` : ""}`,
   "font-src 'self' data:",
-  `connect-src 'self'${supabaseOrigin ? ` ${supabaseOrigin}` : ""}`,
+  `connect-src 'self' https://cdn.jsdelivr.net${supabaseOrigin ? ` ${supabaseOrigin}` : ""}`,
   "frame-src 'none'",
 ].join("; ");
 
