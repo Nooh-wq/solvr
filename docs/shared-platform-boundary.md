@@ -3,6 +3,30 @@
 **Status:** Live as of Z1.1 (Six-Object Model Refactor — Foundation).
 **Related:** Shared Platform's [ADR-004: Single Public Schema Ownership by Convention].
 
+## Confirmed setup as of 2026-07-07
+
+Both repos are confirmed pointed at the same Supabase instance
+(`db.iimmxaxdeucbhkevwotz.supabase.co`) — this was a setup gap from
+Shared Platform's original scaffolding (its `.env` pointed at a local
+PGlite instance while Support was on production Supabase), which was
+closed as part of Z1.1b's pre-work. This fact is on record so it's
+never in question again.
+
+Verified against Supabase directly (not against a throwaway local test DB):
+- All 10 shared tables + 3 shared enums are present.
+- `tenant_isolation` RLS policy exists on all 10 shared tables.
+- Support's `app_runtime` role can read/write the shared tables through
+  its own `APP_DATABASE_URL` (i.e. the wrapper service will work at runtime).
+- Cross-tenant RLS isolation was proven by a targeted round-trip test:
+  tenant A inserted an Organization; tenant B queried and updated it;
+  both returned zero rows. Rows cleaned up after the test.
+
+The Shared Platform's Vitest tenant-isolation suite runs against a
+throwaway embedded Postgres (see `src/core/__tests__/global-setup.ts`
+in that repo) — that's a deliberate design choice for CI portability
+and doesn't validate the Supabase deployment. The one-off proof above
+covers that gap for this specific migration.
+
 The Support app (this repo) and the Stralis Shared Platform (`../Stralis Shared Platform`) are **two separate Next.js codebases that share one physical Postgres database**. Neither imports server code from the other. Schema ownership is enforced by convention + code review, not by the database.
 
 This document is the authoritative reference for that convention. Read it whenever you're about to:
@@ -141,6 +165,15 @@ These are the rules that keep the boundary intact. Violating any of them silentl
 
 7. **NEVER assume Tenant is in the Shared Platform.** It's not. Continue writing `tenantId` as a plain scalar on all shared-model rows, but treat `Tenant` itself as Support-owned.
 
+8. **When modifying a Support-owned table while the mirror block is present, use `prisma db execute` with a hand-written SQL file — NEVER `prisma db push` or `prisma migrate dev/deploy`.** Rule 2 explains the "don't"; this is the "do." The workflow:
+
+   - Add a file `prisma/<name>_migration.sql` in this repo. Make every statement idempotent (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS ... ADD CONSTRAINT ...`) so re-running is safe.
+   - Apply with `npx prisma db execute --file prisma/<name>_migration.sql --schema prisma/schema.prisma`.
+   - Keep the SQL file checked in as the durable record of what ran against the DB — no scratch scripts deleted after use.
+   - Also update `prisma/schema.prisma` to reflect the new shape, so `prisma generate` produces the right TypeScript types. The SQL file is the source of truth for DDL; schema.prisma is the source of truth for the Prisma Client.
+
+   Why this shape at all: Prisma's `migrate diff` and `db push` both walk the whole schema, including the mirrored shared-platform models, and want to re-emit FK constraints Prisma thinks are missing but the shared platform's own migration already created. That either fails loudly (constraint already exists) or, worse, silently reshapes something inside the shared platform's ownership boundary. Direct `db execute` runs only the SQL you wrote — no diff engine involvement.
+
 If breaking any of these rules seems necessary to ship a feature, **stop and escalate** — either the boundary itself is wrong (unlikely) or the feature is designed against it (fixable in design).
 
 ---
@@ -187,3 +220,79 @@ When this repo ships a change to its own tables (tickets, messages, etc.):
 When either side wants to add a Foreign Key across the boundary:
 
 - [ ] Discuss in an ADR before implementing. Cross-boundary FKs are fragile enough that they deserve explicit design review.
+
+---
+
+## 7. Open items tracked for later Z1 phases
+
+Durable record so nothing gets forgotten between milestones.
+
+### 7.1 Z1.4 must extend the dual-FK treatment to 5 more Support-owned tables
+
+Z1.1b added nullable `senderEndUserId`/`senderTeamMemberId` to `messages`
+and `actorEndUserId`/`actorTeamMemberId` to `audit_logs`, plus
+`num_nonnulls(..) <= 1` CHECK constraints on each. Same treatment must
+land during Z1.4's FK-rename pass on the remaining tables that reference
+a `User` today and could point at either an `EndUser` or a `TeamMember`
+tomorrow. Each row below is a required Z1.4 deliverable:
+
+| Table | Current FK | Post-Z1 columns to add | CHECK constraint name |
+|---|---|---|---|
+| `ticket_guests` | `invitedById` | `invitedByEndUserId`, `invitedByTeamMemberId` | `ticket_guests_inviter_exclusive` |
+| `login_otps` | `userId` | `endUserId`, `teamMemberId` | `login_otps_subject_exclusive` |
+| `notifications` | `userId` (recipient) | `recipientEndUserId`, `recipientTeamMemberId` | `notifications_recipient_exclusive` |
+| `attachments` | `uploadedById` | `uploadedByEndUserId`, `uploadedByTeamMemberId` | `attachments_uploader_exclusive` |
+| `chat_conversations` | `userId` | `endUserId`, `teamMemberId` | `chat_conversations_subject_exclusive` |
+
+`tickets` is deliberately **not** in this list: its FKs have unambiguous
+semantics (`clientId` is always an EndUser, `assignedToId` is always a
+TeamMember), so it gets a clean rename in Z1.4 without needing the
+dual-FK bridge shape.
+
+### 7.2 Z1.5 must tighten every CHECK constraint
+
+When Z1.5 drops the legacy `User` and `Company` tables, every CHECK
+constraint added in Z1.1b + Z1.4 needs to be tightened in the same
+migration step — not left as a follow-up. Specifically:
+
+- `messages.messages_sender_exclusive` — drop the legacy `senderId` column,
+  drop the old CHECK, re-add as
+  `CHECK (num_nonnulls("senderEndUserId","senderTeamMemberId","guestId") <= 1)`.
+  Note the `guestId` inclusion: Z1.1b deliberately shipped the initial
+  CHECK as 4-way (all four author paths — legacy + endUser + teamMember +
+  guestId — mutually exclusive), so the Z1.5 tightening is a straight
+  "drop the legacy column and drop it from the CHECK arg list" edit, not
+  an expansion in scope. Keep it 3-way (endUser + teamMember + guestId),
+  not 2-way. Rejecting a future double-write where a message would carry
+  both `senderTeamMemberId` and `guestId` is the exact scenario this CHECK
+  exists to catch.
+- `audit_logs.audit_logs_actor_exclusive` — drop the legacy `actorId`
+  column, drop the old CHECK, re-add as
+  `CHECK (num_nonnulls("actorEndUserId","actorTeamMemberId") <= 1)`.
+- Same pattern for each of the 5 tables in §7.1 above.
+
+This must be a single Z1.5 migration; do not defer the tightening as a
+"follow-up cleanup" — a `<= 1` bound over three columns with one of them
+permanently null is subtly bug-shaped (a future writer forgetting the
+legacy column doesn't exist gets no signal).
+
+**Existing null-actor rows must not be broken by the tightening.** A
+Z1.1b headcount against Supabase found 5 existing `audit_logs` rows
+(out of 19 CREATE-action rows) with all three actor FKs null — a
+pre-existing app path that emits system-attributed audit entries with
+no specific actor. The current `audit_logs_actor_exclusive` CHECK's
+`num_nonnulls(...) <= 1` bound allows this (0 non-nulls is `<= 1`). The
+Z1.5-tightened form MUST also allow it: keep `<= 1`, do not switch to
+`= 1`. If Z1.5 accidentally requires exactly-one actor, those 5 rows
+(and any similar ones written between now and Z1.5) will fail the
+constraint at ALTER-time and Z1.5 will not apply. The same reasoning
+carries to any other table in §7.1 where system-emitted null-actor
+rows may exist — verify with a count query before tightening each one.
+
+### 7.3 Future ADR: Tenant ownership migration to Shared Platform
+
+Still open, unchanged from the note in §1. Tenant is a genuine core
+primitive that long-term belongs in the Shared Platform. Moving it
+requires coordinated migration across two repos on a live database —
+not a decision to make as a side-effect of any other milestone. Filed
+as an open item; not blocked on anything today.

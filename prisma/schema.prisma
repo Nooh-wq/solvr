@@ -334,6 +334,27 @@ model Message {
   // — a guest never gets a User row, so this is how the message is attributed.
   guestId    String?
   guest      TicketGuest? @relation(fields: [guestId], references: [id])
+  // Z1.1b: dual-FK author columns for the Six-Object Model Refactor. Post-Z1
+  // a message's sender is either an EndUser (client-side) or a TeamMember
+  // (staff-side). Kept as raw scalar columns (no Prisma relation) because
+  // per the shared-platform boundary rules, this repo does not declare
+  // Prisma relations across to the shared core tables — see
+  // docs/shared-platform-boundary.md §3 rule 3. The wrapper service layer
+  // resolves the reference at read time.
+  //
+  // Both columns are nullable during the transition. A CHECK constraint
+  // in prisma/z1_1b_migration.sql (messages_sender_exclusive) enforces
+  // "at most one of {senderId, senderEndUserId, senderTeamMemberId,
+  // guestId} is non-null" — SYSTEM/BOT rows still legitimately have all
+  // four null (senderRole disambiguates). guestId is included in the
+  // CHECK on purpose so all four author paths are DB-enforced, not just
+  // three of them under an honor-system contract for the fourth (see
+  // boundary doc §7.2 Z1.5 tightening + rule 8).
+  //
+  // Z1.5 will drop the legacy senderId column and tighten the CHECK to
+  // "at most one of {senderEndUserId, senderTeamMemberId, guestId}".
+  senderEndUserId    String?
+  senderTeamMemberId String?
   senderRole SenderRole
   body       String
   isInternal Boolean     @default(false)
@@ -342,6 +363,8 @@ model Message {
   attachments Attachment[]
 
   @@index([tenantId, ticketId])
+  @@index([tenantId, senderEndUserId])
+  @@index([tenantId, senderTeamMemberId])
   @@map("messages")
 }
 
@@ -428,12 +451,21 @@ model AuditLog {
   ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   actorId   String?
   actor     User?    @relation(fields: [actorId], references: [id])
+  // Z1.1b: dual-FK actor columns. Same shape/reasoning as Message's
+  // senderEndUserId/senderTeamMemberId — see the comment there. actorId
+  // stays populated during the Z1 transition; new writes will populate
+  // exactly one of the three. SYSTEM-actor rows (backfills, crons) keep
+  // all three null. CHECK constraint in prisma/rls_policies.sql.
+  actorEndUserId    String?
+  actorTeamMemberId String?
   action    String // STATUS_CHANGE | PRIORITY_CHANGE | ASSIGN | REPLY | REOPEN | ...
   fromValue String?
   toValue   String?
   createdAt DateTime @default(now())
 
   @@index([tenantId, ticketId])
+  @@index([tenantId, actorEndUserId])
+  @@index([tenantId, actorTeamMemberId])
   @@map("audit_logs")
 }
 
