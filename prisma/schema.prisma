@@ -34,7 +34,13 @@ enum TenantStatus {
   TRIAL
 }
 
-enum Role {
+// Legacy user-role enum. On borrowed time — Z1's Six-Object Model Refactor
+// replaces this with the Shared Platform's `Role` MODEL (rows per tenant,
+// custom-role support), consumed via the TeamMember relation. This enum
+// stays until Z1.5 drops the legacy User table entirely; every reference
+// to `LegacyRole` here or in application code should ultimately migrate to
+// a `TeamMember.role.name` string lookup.
+enum LegacyRole {
   CLIENT
   AGENT
   ADMIN
@@ -151,7 +157,7 @@ model User {
   passwordHash String // bcrypt. TODO(decision): swap to Supabase Auth (or another provider) before production.
   name         String
   email        String
-  role         Role     @default(CLIENT)
+  role         LegacyRole @default(CLIENT)
   // Legacy free-text company field — retained for backwards compatibility
   // during the Team & Roles v2 backfill. New writes should populate
   // companyId (below) via the auto-match-by-email-domain flow in
@@ -328,6 +334,27 @@ model Message {
   // — a guest never gets a User row, so this is how the message is attributed.
   guestId    String?
   guest      TicketGuest? @relation(fields: [guestId], references: [id])
+  // Z1.1b: dual-FK author columns for the Six-Object Model Refactor. Post-Z1
+  // a message's sender is either an EndUser (client-side) or a TeamMember
+  // (staff-side). Kept as raw scalar columns (no Prisma relation) because
+  // per the shared-platform boundary rules, this repo does not declare
+  // Prisma relations across to the shared core tables — see
+  // docs/shared-platform-boundary.md §3 rule 3. The wrapper service layer
+  // resolves the reference at read time.
+  //
+  // Both columns are nullable during the transition. A CHECK constraint
+  // in prisma/z1_1b_migration.sql (messages_sender_exclusive) enforces
+  // "at most one of {senderId, senderEndUserId, senderTeamMemberId,
+  // guestId} is non-null" — SYSTEM/BOT rows still legitimately have all
+  // four null (senderRole disambiguates). guestId is included in the
+  // CHECK on purpose so all four author paths are DB-enforced, not just
+  // three of them under an honor-system contract for the fourth (see
+  // boundary doc §7.2 Z1.5 tightening + rule 8).
+  //
+  // Z1.5 will drop the legacy senderId column and tighten the CHECK to
+  // "at most one of {senderEndUserId, senderTeamMemberId, guestId}".
+  senderEndUserId    String?
+  senderTeamMemberId String?
   senderRole SenderRole
   body       String
   isInternal Boolean     @default(false)
@@ -336,6 +363,8 @@ model Message {
   attachments Attachment[]
 
   @@index([tenantId, ticketId])
+  @@index([tenantId, senderEndUserId])
+  @@index([tenantId, senderTeamMemberId])
   @@map("messages")
 }
 
@@ -422,12 +451,21 @@ model AuditLog {
   ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   actorId   String?
   actor     User?    @relation(fields: [actorId], references: [id])
+  // Z1.1b: dual-FK actor columns. Same shape/reasoning as Message's
+  // senderEndUserId/senderTeamMemberId — see the comment there. actorId
+  // stays populated during the Z1 transition; new writes will populate
+  // exactly one of the three. SYSTEM-actor rows (backfills, crons) keep
+  // all three null. CHECK constraint in prisma/rls_policies.sql.
+  actorEndUserId    String?
+  actorTeamMemberId String?
   action    String // STATUS_CHANGE | PRIORITY_CHANGE | ASSIGN | REPLY | REOPEN | ...
   fromValue String?
   toValue   String?
   createdAt DateTime @default(now())
 
   @@index([tenantId, ticketId])
+  @@index([tenantId, actorEndUserId])
+  @@index([tenantId, actorTeamMemberId])
   @@map("audit_logs")
 }
 
@@ -536,3 +574,222 @@ model ChatMessage {
   @@index([conversationId])
   @@map("chat_messages")
 }
+
+// ===========================================================================
+// STRALIS SHARED PLATFORM — REFERENCE MODELS (Z1: Six-Object Model Refactor)
+// ===========================================================================
+//
+// These 9 tables + 3 enums are OWNED BY THE STRALIS SHARED PLATFORM REPO
+// (../Stralis Shared Platform/prisma/schema.prisma). Both repos connect to
+// the same physical Postgres database (see the Shared Platform's ADR-004,
+// "Single Public Schema Ownership by Convention"). Ownership is enforced by
+// docs + code review, not the database — every table below lives in
+// Postgres's public schema, same as this repo's own tables.
+//
+// WHY THEY'RE MIRRORED HERE:
+//   - So this repo's `prisma generate` produces TypeScript types + a working
+//     Prisma Client for these models, letting server actions query and
+//     mutate them the same way any local model works.
+//   - This is the pre-M7 arrangement: this repo talks to the shared tables
+//     via Prisma directly through the wrapper service in
+//     src/lib/shared-platform/. Once the Shared Platform's Public API (M7)
+//     ships, the wrapper flips from Prisma to HTTP fetch and the models
+//     below can be removed. See docs/shared-platform-boundary.md.
+//
+// RULES:
+//   1. NEVER edit a model or enum in this block. If the Shared Platform
+//      ships schema changes to core, run `npm run pull-core` (which for now
+//      is a manual copy-paste from the Shared Platform's schema.prisma) and
+//      commit the diff — do not hand-edit.
+//   2. NEVER run `prisma migrate dev` or `prisma db push` in this repo
+//      while these models are present unless every model matches the DB's
+//      current state exactly. If they match, `db push` is a no-op and
+//      that's fine; if they don't, `db push` will corrupt the shared DB.
+//   3. NEVER introduce a Prisma relation FROM a Support-owned model TO one
+//      of the shared models (e.g. don't add `endUser EndUser @relation(...)`
+//      on Ticket). FKs cross the boundary; Prisma relations don't. Use raw
+//      scalar `endUserId String?` columns and resolve via the wrapper.
+//   4. Tenant is NOT mirrored here because it stays owned by THIS repo.
+//      The shared platform stores tenantId as a plain scalar and enforces
+//      the FK at the SQL level (see their migration.sql). Migrating Tenant
+//      to the shared platform is a deliberate future ADR — not decided as
+//      a side effect of Z1. See docs/shared-platform-boundary.md.
+//
+// If any of these rules would need to be broken to ship a feature, STOP and
+// escalate — either the boundary is wrong (unlikely) or the feature is
+// designed against it (fixable).
+
+enum TicketAccessScope {
+  ALL
+  GROUPS
+  ASSIGNED_ONLY
+}
+
+enum TagTargetType {
+  END_USER
+  TEAM_MEMBER
+  ORGANIZATION
+}
+
+enum AuditActorType {
+  TEAM_MEMBER
+  SYSTEM
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  domain    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  endUsers            EndUser[]
+  endUserMemberships  EndUserOrganization[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, domain])
+  @@map("organizations")
+}
+
+model EndUser {
+  id             String        @id @default(cuid())
+  tenantId       String
+  email          String
+  name           String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organizationMemberships EndUserOrganization[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, organizationId])
+  @@map("end_users")
+}
+
+model EndUserOrganization {
+  endUserId      String
+  endUser        EndUser      @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenantId       String
+  createdAt      DateTime     @default(now())
+
+  @@id([endUserId, organizationId])
+  @@index([tenantId])
+  @@map("end_user_organizations")
+}
+
+model TeamMember {
+  id                String            @id @default(cuid())
+  tenantId          String
+  email             String
+  name              String?
+  roleId            String
+  role              Role              @relation(fields: [roleId], references: [id])
+  ticketAccessScope TicketAccessScope @default(ASSIGNED_ONLY)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  groupMemberships TeamMemberGroup[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, roleId])
+  @@map("team_members")
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships TeamMemberGroup[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("groups")
+}
+
+model TeamMemberGroup {
+  teamMemberId String
+  teamMember   TeamMember @relation(fields: [teamMemberId], references: [id], onDelete: Cascade)
+  groupId      String
+  group        Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tenantId     String
+  createdAt    DateTime   @default(now())
+
+  @@id([teamMemberId, groupId])
+  @@index([tenantId])
+  @@map("team_member_groups")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  isCustom    Boolean  @default(false)
+  permissions Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teamMembers TeamMember[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("roles")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  color     String   @default("#7A7A7A")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments TagAssignment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("tags")
+}
+
+model TagAssignment {
+  id         String        @id @default(cuid())
+  tenantId   String
+  tagId      String
+  tag        Tag           @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  targetType TagTargetType
+  targetId   String
+  createdAt  DateTime      @default(now())
+
+  @@unique([tenantId, tagId, targetType, targetId])
+  @@index([tenantId, targetType, targetId])
+  @@map("tag_assignments")
+}
+
+model CoreAuditLog {
+  id           String         @id @default(cuid())
+  tenantId     String
+  actorId      String?
+  actorType    AuditActorType
+  action       String // CREATE | UPDATE | DELETE | ASSIGN | ...
+  resourceType String // "Organization" | "EndUser" | "TeamMember" | "Group" | "Role" | "Tag" | ...
+  resourceId   String
+  fromValue    Json?
+  toValue      Json?
+  createdAt    DateTime       @default(now())
+
+  @@index([tenantId, resourceType, resourceId])
+  @@index([tenantId, createdAt])
+  @@map("core_audit_logs")
+}
+
+// ===========================================================================
+// END OF STRALIS SHARED PLATFORM REFERENCE MODELS
+// ===========================================================================

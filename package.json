@@ -15,7 +15,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:rls": "node scripts/apply-rls.mjs",
     "db:studio": "prisma studio",
-    "db:setup": "npm run db:push && npm run db:rls && npm run db:seed"
+    "db:setup": "npm run db:push && npm run db:rls && npm run db:seed",
+    "pull-core": "node scripts/pull-shared-core.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.0",

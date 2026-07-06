@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { PASSWORD_RULES_HINT } from "@/lib/validation/password";
-import type { Role } from "@/generated/prisma";
+import type { LegacyRole as Role } from "@/generated/prisma";
 
 const ROLE_LABEL: Record<Role, string> = {
   CLIENT: "Client",
