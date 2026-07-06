@@ -129,7 +129,14 @@ export async function startImpersonation(tenantId: string) {
     // impersonation starts). Without this the audit log would show
     // "System" for who did it, defeating the point of an audit trail.
     await tx.auditLog.create({
-      data: { tenantId, actorId: session.id, action: "IMPERSONATION_START", toValue: `${session.name} <${session.email}>` },
+      // Z1.4a: super.ts is SUPER_ADMIN-only (staff).
+      data: {
+        tenantId,
+        actorId: session.id,
+        actorTeamMemberId: session.id,
+        action: "IMPERSONATION_START",
+        toValue: `${session.name} <${session.email}>`,
+      },
     });
   });
 
@@ -147,6 +154,7 @@ export async function stopImpersonation() {
       data: {
         tenantId: session.tenantId,
         actorId: session.id,
+        actorTeamMemberId: session.id,
         action: "IMPERSONATION_END",
         toValue: `${session.name} <${session.email}>`,
       },

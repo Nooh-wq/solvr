@@ -26,6 +26,13 @@ import { notify } from "@/lib/notifications";
 import { getAttachmentSignedUrl } from "@/lib/storage";
 import { resolveMessageSender } from "@/lib/message-sender";
 import { signCsatToken } from "@/lib/session";
+import {
+  dualFkForUser,
+  ticketClientCols,
+  actorCols,
+  senderCols,
+  assignedTeamMemberCol,
+} from "@/lib/z1-dual-fk";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -49,6 +56,16 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
     async (tx) => {
       const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
+      // Z1.4a: also populate the dual-FK columns + organizationId. The
+      // legacy users.companyId lookup here mirrors what the Z1.4a
+      // backfill did for historical rows; migrates to the wrapper's
+      // EndUser.organizationId in Z1.4b.
+      const clientUser = await tx.user.findUnique({
+        where: { id: session.id },
+        select: { companyId: true },
+      });
+      const clientDual = dualFkForUser(session.id, session.role);
+
       const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
         tx.ticket.create({
           data: {
@@ -60,6 +77,8 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             categoryId: data.categoryId,
             priority: data.priority,
             clientId: session.id,
+            ...ticketClientCols(clientDual),
+            organizationId: clientUser?.companyId ?? null,
             status: "OPEN",
             source: "portal",
             clientIp: clientIp !== "unknown" ? clientIp : null,
@@ -73,6 +92,7 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
           tenantId: session.tenantId,
           ticketId: ticket.id,
           actorId: session.id,
+          ...actorCols(clientDual),
           action: "CREATE",
           toValue: "OPEN",
         },
@@ -254,11 +274,13 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
       });
       if (!ticket) throw new Error("NOT_FOUND");
 
+      const clientDual = dualFkForUser(session.id, session.role);
       const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
           senderId: session.id,
+          ...senderCols(clientDual),
           senderRole: "CLIENT",
           body: data.body,
         },
@@ -281,6 +303,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
             tenantId: session.tenantId,
             ticketId: ticket.id,
             actorId: session.id,
+            ...actorCols(clientDual),
             action: "STATUS_CHANGE",
             fromValue: "PENDING",
             toValue: "IN_PROGRESS",
@@ -323,11 +346,13 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
 
+      const staffDual = dualFkForUser(session.id, session.role);
       const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
           senderId: session.id,
+          ...senderCols(staffDual),
           senderRole: session.role === "ADMIN" || session.role === "SUPER_ADMIN" ? "ADMIN" : "AGENT",
           body: data.body,
           isInternal: data.isInternal,
@@ -349,6 +374,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
           tenantId: session.tenantId,
           ticketId: ticket.id,
           actorId: session.id,
+          ...actorCols(staffDual),
           action: data.isInternal ? "INTERNAL_NOTE" : "REPLY",
         },
       });
@@ -402,12 +428,18 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         ["RESOLVED", "CLOSED"].includes(ticket.status) &&
         !["RESOLVED", "CLOSED"].includes(data.status!);
 
+      const staffDual = dualFkForUser(session.id, session.role);
       const updated = await tx.ticket.update({
         where: { id: ticket.id },
         data: {
           status: data.status,
           priority: data.priority,
           assignedToId: data.assignedToId === undefined ? undefined : data.assignedToId,
+          // Z1.4a: dual-write assignee. undefined preserves existing;
+          // null clears; a value sets both legacy and new column.
+          ...(data.assignedToId !== undefined
+            ? assignedTeamMemberCol(data.assignedToId)
+            : {}),
           resolvedAt: data.status === "RESOLVED" ? new Date() : data.status === "IN_PROGRESS" ? null : undefined,
           ...(isReopen ? { reopenedAt: new Date(), reopenCount: { increment: 1 } } : {}),
         },
@@ -421,6 +453,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
             tenantId: session.tenantId,
             ticketId: ticket.id,
             actorId: session.id,
+            ...actorCols(staffDual),
             action: "STATUS_CHANGE",
             fromValue: ticket.status,
             toValue: data.status,
@@ -433,6 +466,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
             tenantId: session.tenantId,
             ticketId: ticket.id,
             actorId: session.id,
+            ...actorCols(staffDual),
             action: "PRIORITY_CHANGE",
             fromValue: ticket.priority,
             toValue: data.priority,
@@ -455,6 +489,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
             tenantId: session.tenantId,
             ticketId: ticket.id,
             actorId: session.id,
+            ...actorCols(staffDual),
             action: "ASSIGN",
             fromValue: fromAgent?.name ?? "Unassigned",
             toValue: toAgent?.name ?? "Unassigned",
@@ -521,6 +556,7 @@ export async function confirmResolution(ticketId: string) {
         tenantId: session.tenantId,
         ticketId: ticket.id,
         actorId: session.id,
+        ...actorCols(dualFkForUser(session.id, session.role)),
         action: "STATUS_CHANGE",
         fromValue: "RESOLVED",
         toValue: "CLOSED",
@@ -550,6 +586,7 @@ export async function reopenTicket(ticketId: string) {
         tenantId: session.tenantId,
         ticketId: ticket.id,
         actorId: session.id,
+        ...actorCols(dualFkForUser(session.id, session.role)),
         action: "REOPEN",
         fromValue: ticket.status,
         toValue: "IN_PROGRESS",

@@ -103,7 +103,14 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 10);
     await tx.loginOtp.create({
-      data: { tenantId: tenant.id, userId: user.id, codeHash, expiresAt: new Date(Date.now() + OTP_DURATION_MS) },
+      data: {
+        tenantId: tenant.id,
+        userId: user.id,
+        // Z1.4a: OTPs at registration are always CLIENT-role.
+        endUserId: user.id,
+        codeHash,
+        expiresAt: new Date(Date.now() + OTP_DURATION_MS),
+      },
     });
 
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });
@@ -421,10 +428,14 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
     // stored, only its bcrypt hash is (verifyLoginOtp compares against that).
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 10);
+    // Z1.4a: acceptInvite covers both CLIENT and staff invitations; split by role.
+    const otpSubject =
+      user.role === "CLIENT" ? { endUserId: user.id } : { teamMemberId: user.id };
     await tx.loginOtp.create({
       data: {
         tenantId: payload.tenantId,
         userId: user.id,
+        ...otpSubject,
         codeHash,
         expiresAt: new Date(Date.now() + OTP_DURATION_MS),
       },

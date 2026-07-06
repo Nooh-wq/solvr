@@ -10,6 +10,7 @@ import { notify } from "@/lib/notifications";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
 import { resolveMessageSender } from "@/lib/message-sender";
+import { dualFkForUser, inviterCols } from "@/lib/z1-dual-fk";
 import type { TenantBranding } from "@/generated/prisma";
 import crypto from "node:crypto";
 
@@ -49,6 +50,7 @@ export async function inviteTicketGuest(
           name: data.name,
           tokenHash,
           invitedById: session.id,
+          ...inviterCols(dualFkForUser(session.id, session.role)),
         },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
