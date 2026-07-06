@@ -111,6 +111,7 @@ model Tenant {
   auditLogs     AuditLog[]
   notifications Notification[]
   ticketGuests  TicketGuest[]
+  surveyResponses SurveyResponse[]
 
   @@map("tenants")
 }
@@ -227,6 +228,14 @@ model Ticket {
   // updateTicket() in actions/tickets.ts).
   reopenedAt   DateTime?
   reopenCount  Int          @default(0)
+  // Captured at creation time from the requester's HTTP request (portal/
+  // chatbot only — email-sourced tickets have no live request, so both stay
+  // null). clientCountry is an ISO 3166-1 alpha-2 code resolved from
+  // clientIp via geoip-lite (offline lookup, no external API call) —
+  // powers the analytics "clients by region" map/table. Never backfilled
+  // for tickets created before this field existed.
+  clientIp      String?
+  clientCountry String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -236,10 +245,30 @@ model Ticket {
   chatConversations ChatConversation[]
   notifications Notification[]
   guests      TicketGuest[]
+  surveyResponse SurveyResponse?
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
   @@map("tickets")
+}
+
+// One CSAT rating per ticket — see actions/csat.ts's submitCsatRating()
+// (an unauthenticated, token-scoped action reached via the emailed
+// "rate this ticket" link, actions/tickets.ts's updateTicket()). Resubmitting
+// the same link overwrites the existing row rather than erroring, so
+// ticketId is unique instead of having its own separate id-based history.
+model SurveyResponse {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId  String   @unique
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@map("survey_responses")
 }
 
 model Message {

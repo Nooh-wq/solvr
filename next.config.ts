@@ -49,6 +49,12 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // geoip-lite loads its .dat files via a `__dirname`-relative fs.readFileSync
+  // at require time — Turbopack/webpack bundling for server components
+  // rewrites/sandboxes that path (surfaces as "ENOENT ...C:\ROOT\node_modules
+  // \geoip-lite\data\..." in dev), so it needs to stay a real, unbundled
+  // `require()` at runtime instead of being processed through the bundler.
+  serverExternalPackages: ["geoip-lite"],
   // Emit a self-contained server bundle (.next/standalone) so the Docker image
   // can run `node server.js` without dev dependencies — used by the Dockerfile
   // for AWS App Runner / ECS Fargate and Azure Container Apps / App Service.

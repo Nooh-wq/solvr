@@ -22,6 +22,14 @@ import {
   analyticsFilterSchema,
   type AnalyticsFilter,
 } from "@/lib/validation/admin";
+import { COUNTRIES, countryName } from "@/lib/countries";
+import type { Priority } from "@/generated/prisma";
+
+// Fixed per-priority first-response targets (analytics: SLA compliance KPI).
+// Not a configurable policy engine — see the analytics-v2 plan's explicit
+// scope decision to keep this a simple constant rather than a new
+// per-tenant SLA-policy data model.
+const SLA_THRESHOLD_HOURS: Record<Priority, number> = { URGENT: 1, HIGH: 4, MEDIUM: 8, LOW: 24 };
 
 function generateTempPassword() {
   return crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
@@ -562,10 +570,14 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
 
     // --- KPI row: volume, first response ---
     const totalInRange = await tx.ticket.count({ where: createdWhere });
+    const openInRange = await tx.ticket.count({ where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } } });
+    const unassignedOpenInRange = await tx.ticket.count({
+      where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] }, assignedToId: null },
+    });
     const resolvedInRange = await tx.ticket.count({ where: { ...createdWhere, resolvedAt: { not: null } } });
     const withFirstReply = await tx.ticket.findMany({
       where: { ...createdWhere, firstReplyAt: { not: null } },
-      select: { createdAt: true, firstReplyAt: true },
+      select: { createdAt: true, firstReplyAt: true, priority: true },
     });
     const avgFirstResponseHours =
       withFirstReply.length > 0
@@ -576,6 +588,33 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
               (1000 * 60 * 60)
           )
         : null;
+
+    // --- SLA compliance KPI ---
+    // Compliance: of tickets with a first reply, what fraction replied within
+    // their priority's fixed threshold. At-risk: currently-open tickets (in
+    // range/filters) that have blown past their threshold with no reply yet.
+    const slaCompliantCount = withFirstReply.filter(
+      (t) => (t.firstReplyAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60) <= SLA_THRESHOLD_HOURS[t.priority]
+    ).length;
+    const slaComplianceRate = withFirstReply.length > 0 ? slaCompliantCount / withFirstReply.length : null;
+    const openNoReply = await tx.ticket.findMany({
+      where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] }, firstReplyAt: null },
+      select: { createdAt: true, priority: true },
+    });
+    const now = Date.now();
+    const slaAtRiskCount = openNoReply.filter(
+      (t) => (now - t.createdAt.getTime()) / (1000 * 60 * 60) > SLA_THRESHOLD_HOURS[t.priority]
+    ).length;
+
+    // --- CSAT KPI ---
+    // Scoped by the related ticket's createdAt + filters, same as every
+    // other range-scoped metric on this page (a rating with no ticket match
+    // in range/filters shouldn't count).
+    const csatRows = await tx.surveyResponse.findMany({
+      where: { tenantId, ticket: createdWhere },
+      select: { rating: true },
+    });
+    const avgCsatRating = csatRows.length > 0 ? csatRows.reduce((sum, r) => sum + r.rating, 0) / csatRows.length : null;
 
     // --- Reopen-rate KPI ---
     const reopenedCount = await tx.ticket.count({ where: { ...createdWhere, reopenCount: { gt: 0 } } });
@@ -625,6 +664,43 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     const bySource = await tx.ticket.groupBy({ by: ["source"], where: createdWhere, _count: true });
     const channelBreakdown = bySource.map((s) => ({ label: s.source, value: s._count })).sort((a, b) => b.value - a.value);
 
+    // --- Clients by region (map + top-regions table) ---
+    // clientCountry only populates for tickets created through a live
+    // request (portal/chatbot) going forward — see actions/tickets.ts's
+    // createTicket(). Existing/historical tickets have no captured IP, so
+    // this is expected to be sparse until new activity accumulates; null is
+    // surfaced as its own "Unknown" bucket rather than silently dropped.
+    const byCountry = await tx.ticket.groupBy({ by: ["clientCountry"], where: createdWhere, _count: true });
+    const countryResolvedRows = await tx.ticket.findMany({
+      where: { ...createdWhere, clientCountry: { not: null }, resolvedAt: { not: null } },
+      select: { clientCountry: true, createdAt: true, resolvedAt: true },
+    });
+    const countryResAcc = new Map<string, { sum: number; count: number }>();
+    for (const t of countryResolvedRows) {
+      const key = t.clientCountry!;
+      const hrs = Math.max(0, (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60));
+      const acc = countryResAcc.get(key) ?? { sum: 0, count: 0 };
+      acc.sum += hrs;
+      acc.count += 1;
+      countryResAcc.set(key, acc);
+    }
+    const regionBreakdown = byCountry
+      .map((c) => {
+        const code = c.clientCountry;
+        const acc = code ? countryResAcc.get(code) : undefined;
+        const centroid = code ? COUNTRIES[code] : undefined;
+        return {
+          code,
+          label: countryName(code),
+          value: c._count,
+          avgResolutionHours: acc && acc.count > 0 ? acc.sum / acc.count : null,
+          lat: centroid?.lat ?? null,
+          lon: centroid?.lon ?? null,
+        };
+      })
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+
     // --- Agent leaderboard ---
     const byAgent = await tx.ticket.groupBy({
       by: ["assignedToId"],
@@ -663,14 +739,32 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       overallResCount += 1;
     }
     const avgResolutionHours = overallResCount > 0 ? overallResSum / overallResCount : null;
+
+    // Per-agent CSAT: join ratings to their ticket's assignedToId, scoped by
+    // the same createdWhere filter set used everywhere else on this page.
+    const agentCsatRows = await tx.surveyResponse.findMany({
+      where: { tenantId, ticket: { ...createdWhere, assignedToId: { not: null } } },
+      select: { rating: true, ticket: { select: { assignedToId: true } } },
+    });
+    const csatAccByAgent = new Map<string, { sum: number; count: number }>();
+    for (const r of agentCsatRows) {
+      const key = r.ticket.assignedToId!;
+      const acc = csatAccByAgent.get(key) ?? { sum: 0, count: 0 };
+      acc.sum += r.rating;
+      acc.count += 1;
+      csatAccByAgent.set(key, acc);
+    }
+
     const agentLeaderboard = byAgent
       .map((a) => {
         const acc = resolutionAccByAgent.get(a.assignedToId!);
+        const csatAcc = csatAccByAgent.get(a.assignedToId!);
         return {
           agentId: a.assignedToId!,
           agentName: agentNameById.get(a.assignedToId!) ?? "Unknown",
           handledCount: a._count,
           avgResolutionHours: acc && acc.count > 0 ? acc.sum / acc.count : null,
+          avgCsatRating: csatAcc && csatAcc.count > 0 ? csatAcc.sum / csatAcc.count : null,
         };
       })
       .sort((a, b) => b.handledCount - a.handledCount);
@@ -695,15 +789,21 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       filter: f,
       kpis: {
         totalInRange,
+        openInRange,
+        unassignedOpenInRange,
         resolvedInRange,
         avgFirstResponseHours,
         avgResolutionHours,
         reopenRate,
         aiDeflectionRate,
+        slaComplianceRate,
+        slaAtRiskCount,
+        avgCsatRating,
       },
       dailySeries,
       categoryBreakdown,
       channelBreakdown,
+      regionBreakdown,
       agentLeaderboard,
       heatmap,
       filterOptions: { categories: allCategories, agents: allAgents },

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { getAnalyticsOverview } from "@/actions/admin";
-import { TrendChart, DonutChart, BarList, HeatmapChart } from "@/components/charts";
+import { TrendChart, AxisBarChart, HeatmapChart, RegionMap } from "@/components/charts";
 import { FilterBar } from "./filter-bar";
 import { AgentLeaderboard } from "./agent-leaderboard";
 
@@ -65,7 +65,6 @@ export default async function AdminAnalyticsPage({
     value: c.value,
     color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
   }));
-  const categoryTotal = data.categoryBreakdown.reduce((s, c) => s + c.value, 0);
   const channelSegments = data.channelBreakdown.map((c) => ({
     label: CHANNEL_LABELS[c.label] ?? c.label,
     value: c.value,
@@ -80,16 +79,22 @@ export default async function AdminAnalyticsPage({
         <FilterBar current={data.filter} categories={data.filterOptions.categories} agents={data.filterOptions.agents} />
       </Suspense>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
-        <StatCard label="Tickets in range" value={data.kpis.totalInRange} />
-        <StatCard label="Resolved" value={data.kpis.resolvedInRange} />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Total tickets" value={data.kpis.totalInRange} />
+        <StatCard label="Open" value={data.kpis.openInRange} sub={`${data.kpis.unassignedOpenInRange} unassigned`} />
         <StatCard label="Avg first response" value={hours(data.kpis.avgFirstResponseHours)} />
-        <StatCard label="Avg resolution" value={hours(data.kpis.avgResolutionHours)} />
-        <StatCard label="Reopen rate" value={pct(data.kpis.reopenRate)} />
+        <StatCard label="Avg resolution time" value={hours(data.kpis.avgResolutionHours)} />
         <StatCard
-          label="AI deflection"
-          value={pct(data.kpis.aiDeflectionRate)}
-          sub="Based on date range only"
+          label="SLA compliance"
+          value={pct(data.kpis.slaComplianceRate)}
+          sub={`${data.kpis.slaAtRiskCount} at risk`}
+        />
+        <StatCard label="CSAT" value={data.kpis.avgCsatRating !== null ? `${data.kpis.avgCsatRating.toFixed(1)}/5` : "—"} />
+        <StatCard label="AI deflection" value={pct(data.kpis.aiDeflectionRate)} sub="Based on date range only" />
+        <StatCard
+          label="Reopen rate"
+          value={pct(data.kpis.reopenRate)}
+          sub={`of ${data.kpis.resolvedInRange} resolved`}
         />
       </div>
 
@@ -100,9 +105,52 @@ export default async function AdminAnalyticsPage({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
+          <h2 className="text-[13px] font-semibold mb-1">Clients by region</h2>
+          <p className="text-[11px] text-[var(--color-neutral-500)] mb-4">
+            Approximate — shaded by ticket volume, populates going forward only
+          </p>
+          {data.regionBreakdown.some((r) => r.lat !== null) ? (
+            <RegionMap regions={data.regionBreakdown} />
+          ) : (
+            <p className="text-[13px] text-[var(--color-neutral-500)]">No region data yet for this range.</p>
+          )}
+        </div>
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
+          <h2 className="text-[13px] font-semibold mb-4">Top regions</h2>
+          {data.regionBreakdown.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead className="text-[11px] uppercase-label text-[var(--color-neutral-500)]">
+                  <tr>
+                    <th className="text-left font-semibold pb-2">Region</th>
+                    <th className="text-right font-semibold pb-2">Tickets</th>
+                    <th className="text-right font-semibold pb-2">Avg res.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.regionBreakdown.map((r) => (
+                    <tr key={r.code ?? r.label} className="border-t border-black/5 dark:border-white/10">
+                      <td className="py-2 font-medium">{r.label}</td>
+                      <td className="py-2 text-right font-mono tabular-nums">{r.value}</td>
+                      <td className="py-2 text-right font-mono tabular-nums">
+                        {r.avgResolutionHours !== null ? `${r.avgResolutionHours.toFixed(1)}h` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-[13px] text-[var(--color-neutral-500)]">No region data yet for this range.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
           <h2 className="text-[13px] font-semibold mb-4">By category</h2>
           {categorySegments.length > 0 ? (
-            <DonutChart segments={categorySegments} total={categoryTotal} ariaLabel="Tickets by category" />
+            <AxisBarChart items={categorySegments} />
           ) : (
             <p className="text-[13px] text-[var(--color-neutral-500)]">No tickets in this range.</p>
           )}
@@ -110,21 +158,23 @@ export default async function AdminAnalyticsPage({
         <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
           <h2 className="text-[13px] font-semibold mb-4">By channel</h2>
           {channelSegments.length > 0 ? (
-            <BarList items={channelSegments} />
+            <AxisBarChart items={channelSegments} />
           ) : (
             <p className="text-[13px] text-[var(--color-neutral-500)]">No tickets in this range.</p>
           )}
         </div>
       </div>
 
-      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5 mb-6">
-        <h2 className="text-[13px] font-semibold mb-4">Agent leaderboard</h2>
-        <AgentLeaderboard rows={data.agentLeaderboard} />
-      </div>
-
-      <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
-        <h2 className="text-[13px] font-semibold mb-4">Peak hours</h2>
-        <HeatmapChart grid={data.heatmap} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
+          <h2 className="text-[13px] font-semibold mb-4">Agent leaderboard</h2>
+          <AgentLeaderboard rows={data.agentLeaderboard} />
+        </div>
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
+          <h2 className="text-[13px] font-semibold mb-1">Peak hours</h2>
+          <p className="text-[11px] text-[var(--color-neutral-500)] mb-4">Ticket volume by day and hour</p>
+          <HeatmapChart grid={data.heatmap} />
+        </div>
       </div>
     </div>
   );

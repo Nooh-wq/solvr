@@ -365,6 +365,124 @@ export function HeatmapChart({ grid }: { grid: number[][] }) {
   );
 }
 
+/**
+ * Horizontal bars with a shared numeric axis + vertical gridlines (unlike
+ * the plain proportional BarList above) — reuses the same gridline/axis
+ * visual language as TrendChart (`var(--color-neutral-100)` lines,
+ * `var(--color-neutral-400)` axis text) rather than inventing a new style.
+ */
+export function AxisBarChart({ items }: { items: Segment[] }) {
+  const max = Math.max(1, ...items.map((i) => i.value));
+  const niceMax = niceCeil(max);
+  const gridFracs = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <div>
+      <div className="space-y-2.5">
+        {items.map((it) => (
+          <div key={it.label} className="flex items-center gap-3">
+            <span className="w-24 shrink-0 truncate text-[12px] text-[var(--color-neutral-700)]" title={it.label}>
+              {it.label}
+            </span>
+            <div className="relative flex-1 h-5">
+              {gridFracs.map((g) => (
+                <div
+                  key={g}
+                  className="absolute inset-y-0 border-l border-[var(--color-neutral-100)]"
+                  style={{ left: `${g * 100}%` }}
+                />
+              ))}
+              <div
+                className="absolute inset-y-0 left-0 rounded-r-sm transition-[width] duration-500"
+                style={{ width: `${Math.min(100, (it.value / niceMax) * 100)}%`, backgroundColor: it.color }}
+              />
+            </div>
+            <span className="w-6 shrink-0 text-right font-mono text-[12px] font-semibold tabular-nums">{it.value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3 mt-1.5">
+        <span className="w-24 shrink-0" />
+        <div className="relative flex-1 h-3">
+          {gridFracs.map((g) => (
+            <span
+              key={g}
+              className="absolute text-[9px] text-[var(--color-neutral-400)]"
+              style={{ left: `${g * 100}%`, transform: g === 0 ? "none" : g === 1 ? "translateX(-100%)" : "translateX(-50%)" }}
+            >
+              {Math.round(g * niceMax)}
+            </span>
+          ))}
+        </div>
+        <span className="w-6 shrink-0" />
+      </div>
+    </div>
+  );
+}
+
+type RegionPoint = {
+  code: string | null;
+  label: string;
+  value: number;
+  avgResolutionHours: number | null;
+  lat: number | null;
+  lon: number | null;
+};
+
+// Deliberately rough, hand-drawn landmass silhouettes — not real coastlines
+// (no world-map asset or mapping library in this repo, and the mockup this
+// is based on shows a stylized illustration, not a precise choropleth).
+// Purely a backdrop; the actual data is the projected dots below.
+const LANDMASS_PATHS = [
+  "M40,60 Q30,40 70,35 Q120,30 140,55 Q150,80 120,100 Q90,120 60,105 Q35,90 40,60Z", // North America
+  "M100,140 Q90,160 100,190 Q110,220 130,215 Q140,190 135,160 Q125,140 100,140Z", // South America
+  "M260,50 Q290,40 310,55 Q320,75 300,85 Q275,90 260,75 Q255,60 260,50Z", // Europe
+  "M270,90 Q300,85 315,110 Q325,150 300,180 Q280,190 270,160 Q260,120 270,90Z", // Africa
+  "M340,45 Q400,30 460,55 Q490,80 470,110 Q420,120 370,100 Q335,80 340,45Z", // Asia
+  "M470,210 Q500,200 520,215 Q525,230 505,235 Q480,232 470,210Z", // Australia
+];
+
+/**
+ * Stylized "clients by region" illustration: a static, approximate world
+ * backdrop with dot markers plotted from a small country-centroid lookup
+ * (src/lib/countries.ts) via a basic equirectangular projection, sized/
+ * colored by ticket volume. Opacity over one CSS variable (not hardcoded
+ * hex) to stay dark-mode-safe, same approach as HeatmapChart above.
+ */
+export function RegionMap({ regions }: { regions: RegionPoint[] }) {
+  const W = 560;
+  const H = 260;
+  const plottable = regions.filter((r): r is RegionPoint & { lat: number; lon: number } => r.lat !== null && r.lon !== null);
+  const max = Math.max(1, ...plottable.map((r) => r.value));
+
+  const project = (lat: number, lon: number) => ({
+    x: ((lon + 180) / 360) * W,
+    y: ((90 - lat) / 180) * H,
+  });
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" role="img" aria-label="Clients by region">
+      <rect x="0" y="0" width={W} height={H} rx="12" fill="var(--color-neutral-100)" opacity="0.5" />
+      {LANDMASS_PATHS.map((d, i) => (
+        <path key={i} d={d} fill="var(--color-neutral-300)" opacity="0.55" />
+      ))}
+      {plottable.map((r) => {
+        const { x, y } = project(r.lat, r.lon);
+        const radius = 4 + (r.value / max) * 10;
+        return (
+          <circle key={r.code ?? r.label} cx={x} cy={y} r={radius} fill="var(--color-primary)" opacity={0.35 + (r.value / max) * 0.55}>
+            <title>
+              {`${r.label}: ${r.value} ticket${r.value === 1 ? "" : "s"}${
+                r.avgResolutionHours !== null ? ` · avg resolution ${r.avgResolutionHours.toFixed(1)}h` : ""
+              }`}
+            </title>
+          </circle>
+        );
+      })}
+    </svg>
+  );
+}
+
 function niceCeil(v: number) {
   if (v <= 5) return 5;
   const pow = Math.pow(10, Math.floor(Math.log10(v)));

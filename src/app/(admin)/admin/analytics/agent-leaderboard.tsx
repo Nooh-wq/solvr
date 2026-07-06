@@ -2,8 +2,14 @@
 
 import { useState } from "react";
 
-type Row = { agentId: string; agentName: string; handledCount: number; avgResolutionHours: number | null };
-type SortKey = "handledCount" | "avgResolutionHours";
+type Row = {
+  agentId: string;
+  agentName: string;
+  handledCount: number;
+  avgResolutionHours: number | null;
+  avgCsatRating: number | null;
+};
+type SortKey = "handledCount" | "avgResolutionHours" | "avgCsatRating";
 
 function SortableHeader({
   label,
@@ -36,7 +42,8 @@ export function AgentLeaderboard({ rows }: { rows: Row[] }) {
 
   const sorted = [...rows].sort((a, b) => {
     if (sortKey === "handledCount") return b.handledCount - a.handledCount;
-    return (a.avgResolutionHours ?? Infinity) - (b.avgResolutionHours ?? Infinity);
+    if (sortKey === "avgResolutionHours") return (a.avgResolutionHours ?? Infinity) - (b.avgResolutionHours ?? Infinity);
+    return (b.avgCsatRating ?? -Infinity) - (a.avgCsatRating ?? -Infinity);
   });
 
   return (
@@ -53,6 +60,7 @@ export function AgentLeaderboard({ rows }: { rows: Row[] }) {
                 active={sortKey === "avgResolutionHours"}
                 onSelect={setSortKey}
               />
+              <SortableHeader label="CSAT" sk="avgCsatRating" active={sortKey === "avgCsatRating"} onSelect={setSortKey} />
             </tr>
           </thead>
           <tbody>
@@ -62,6 +70,9 @@ export function AgentLeaderboard({ rows }: { rows: Row[] }) {
                 <td className="px-4 py-3 font-mono tabular-nums">{r.handledCount}</td>
                 <td className="px-4 py-3 font-mono tabular-nums">
                   {r.avgResolutionHours !== null ? `${r.avgResolutionHours.toFixed(1)}h` : "—"}
+                </td>
+                <td className="px-4 py-3 font-mono tabular-nums">
+                  {r.avgCsatRating !== null ? `${r.avgCsatRating.toFixed(1)}/5` : "—"}
                 </td>
               </tr>
             ))}

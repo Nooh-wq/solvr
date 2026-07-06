@@ -103,6 +103,23 @@ export async function sendStatusChangeEmail(ticket: TicketRef, clientEmail: stri
   });
 }
 
+/** Sent alongside sendStatusChangeEmail the moment a ticket is newly marked
+ * Resolved (see updateTicket() in actions/tickets.ts) — a "how did we do?"
+ * rating link, no account needed. Separate from the 4-stage tracker email
+ * since a CTA link doesn't fit that template. */
+export async function sendCsatRequestEmail(toEmail: string, rateUrl: string, branding: TenantBranding | null) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toEmail,
+    branding,
+    subject: `How did we do on your ${productName} ticket?`,
+    heading: "Rate your experience",
+    body: `Your ticket was just marked resolved. We'd love to know how it went — it only takes a few seconds.`,
+    ctaLabel: "Rate this ticket",
+    ctaUrl: rateUrl,
+  });
+}
+
 /** §8.2 event → email matrix, agent invite. Still used for tenant provisioning's first-admin account (actions/super.ts) — Team's own invite flow (actions/admin.ts's inviteUser()) uses sendUserInviteEmail below instead, since that one goes through the accept-invite + OTP flow rather than a temp password. */
 export async function sendAgentInviteEmail(
   toEmail: string,

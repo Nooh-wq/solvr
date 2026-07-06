@@ -254,3 +254,35 @@ export async function verifyOtpSessionToken(token: string): Promise<OtpSessionTo
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// CSAT rating link (actions/csat.ts's submitCsatRating(), emailed from
+// updateTicket() the moment a ticket is newly marked Resolved). Long-lived
+// and effectively single-purpose rather than single-use: resubmitting the
+// same link just overwrites the one SurveyResponse row for that ticket
+// (unique on ticketId), so there's no server-side revocation state to track
+// like the guest-ticket-access token hash — a plain signed JWT is enough.
+// ---------------------------------------------------------------------------
+
+const CSAT_DURATION_SECONDS = 60 * 60 * 24 * 30; // 30 days — low-stakes, no reason to be stingy
+
+export type CsatTokenPayload = { ticketId: string; tenantId: string };
+
+export async function signCsatToken(payload: CsatTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "csat" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${CSAT_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyCsatToken(token: string): Promise<CsatTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "csat") return null;
+    if (typeof payload.ticketId !== "string" || typeof payload.tenantId !== "string") return null;
+    return { ticketId: payload.ticketId, tenantId: payload.tenantId };
+  } catch {
+    return null;
+  }
+}
