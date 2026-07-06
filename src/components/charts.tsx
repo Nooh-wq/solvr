@@ -9,14 +9,26 @@
 
 import { useRef, useState } from "react";
 
-type TrendPoint = { date: string; created: number; resolved: number };
+type TrendPoint = { date: string; created: number; resolved: number; net: number };
+
+type TrendSeries = "created" | "resolved" | "net";
+
+const SERIES_META: Record<TrendSeries, { label: string; color: string }> = {
+  created: { label: "Created", color: "var(--color-primary)" },
+  resolved: { label: "Resolved", color: "var(--color-neutral-700)" },
+  // Net can go negative (more resolved than created that day) — kept off by
+  // default so the common view renders exactly like the simple two-series
+  // chart this component started as.
+  net: { label: "Net", color: "var(--color-neutral-400)" },
+};
 
 /**
- * Two-series area/line chart of tickets created vs. resolved over a window.
- * Fixed viewBox + w-full makes it responsive without distortion. Hovering
- * anywhere over the chart snaps a tooltip to the nearest day, showing both
- * values in a floating box instead of relying on the native browser title
- * tooltip (slow to appear, easy to miss).
+ * Three-series (created / resolved / net) area/line chart over a window,
+ * with a clickable legend to toggle each series. Fixed viewBox + w-full
+ * makes it responsive without distortion. Hovering anywhere over the chart
+ * snaps a tooltip to the nearest day, showing the visible series' values in
+ * a floating box instead of relying on the native browser title tooltip
+ * (slow to appear, easy to miss).
  */
 export function TrendChart({ data }: { data: TrendPoint[] }) {
   const W = 720;
@@ -30,20 +42,47 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
+  const [visible, setVisible] = useState<Set<TrendSeries>>(new Set(["created", "resolved"]));
 
-  const maxVal = Math.max(1, ...data.map((d) => Math.max(d.created, d.resolved)));
-  // "Nice" y-axis top rounded up so gridlines land on round numbers.
+  function toggleSeries(s: TrendSeries) {
+    setVisible((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      // Never let it go fully empty — toggling the last visible series back off is a no-op.
+      return next.size === 0 ? prev : next;
+    });
+  }
+
+  const showNet = visible.has("net");
+  const relevantValues = data.flatMap((d) => [
+    ...(visible.has("created") ? [d.created] : []),
+    ...(visible.has("resolved") ? [d.resolved] : []),
+    ...(showNet ? [Math.abs(d.net)] : []),
+  ]);
+  const maxVal = Math.max(1, ...relevantValues);
+  // "Nice" y-axis top rounded up so gridlines land on round numbers. When
+  // `net` is visible the domain is symmetric around zero so its negative
+  // values have somewhere to go; otherwise it's the plain 0..max domain the
+  // chart has always used.
   const niceMax = niceCeil(maxVal);
+  const domainMin = showNet ? -niceMax : 0;
+  const domainMax = niceMax;
+  const domainRange = domainMax - domainMin;
   const n = data.length;
 
   const x = (i: number) => padL + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
-  const y = (v: number) => padT + innerH - (v / niceMax) * innerH;
+  const y = (v: number) => padT + innerH - ((v - domainMin) / domainRange) * innerH;
 
-  const createdLine = data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(d.created).toFixed(1)}`).join(" ");
-  const createdArea = `${createdLine} L${x(n - 1).toFixed(1)},${(padT + innerH).toFixed(1)} L${x(0).toFixed(1)},${(padT + innerH).toFixed(1)} Z`;
-  const resolvedLine = data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(d.resolved).toFixed(1)}`).join(" ");
+  const lineFor = (key: "created" | "resolved" | "net") =>
+    data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(d[key]).toFixed(1)}`).join(" ");
+  const createdLine = lineFor("created");
+  const createdArea = `${createdLine} L${x(n - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+  const resolvedLine = lineFor("resolved");
+  const netLine = lineFor("net");
 
-  const gridLines = [0, 0.25, 0.5, 0.75, 1];
+  // 5 evenly spaced gridlines across the current domain (which may be signed).
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((frac) => domainMin + frac * domainRange);
   // Label roughly every ~6th day so the axis doesn't crowd.
   const step = Math.max(1, Math.round(n / 5));
   const xLabels = data.map((d, i) => ({ i, d })).filter(({ i }) => i % step === 0 || i === n - 1);
@@ -60,72 +99,133 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
   // Tooltip position as a percentage of the container, so it tracks the
   // point regardless of the chart's actual rendered size (viewBox scaling).
   const tipLeftPct = hover !== null ? (x(hover) / W) * 100 : 0;
-  const tipTopPct = hovered ? (Math.min(y(hovered.created), y(hovered.resolved)) / H) * 100 : 0;
+  const tipTopPct = hovered
+    ? (Math.min(
+        ...(["created", "resolved", "net"] as const).filter((s) => visible.has(s)).map((s) => y(hovered[s]))
+      ) /
+        H) *
+      100
+    : 0;
 
   return (
-    <div ref={containerRef} className="relative" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" role="img" aria-label="Tickets created and resolved over time">
-        <defs>
-          <linearGradient id="trend-created" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.28" />
-            <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-
-        {gridLines.map((g) => {
-          const gy = padT + innerH - g * innerH;
+    <div>
+      <div className="flex items-center gap-3 mb-2">
+        {(["created", "resolved", "net"] as const).map((s) => {
+          const meta = SERIES_META[s];
+          const active = visible.has(s);
           return (
-            <g key={g}>
-              <line x1={padL} y1={gy} x2={W - padR} y2={gy} stroke="var(--color-neutral-100)" strokeWidth="1" />
-              <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize="9" fill="var(--color-neutral-400)">
-                {Math.round(g * niceMax)}
-              </text>
-            </g>
+            <button
+              key={s}
+              type="button"
+              onClick={() => toggleSeries(s)}
+              className={`flex items-center gap-1.5 text-[12px] font-medium rounded-full px-2 py-1 transition-opacity duration-150 cursor-pointer hover:bg-black/[0.04] dark:hover:bg-white/[0.06] ${
+                active ? "opacity-100" : "opacity-40"
+              }`}
+            >
+              <span
+                className="h-2 w-2 rounded-full shrink-0"
+                style={{ backgroundColor: meta.color }}
+              />
+              <span className="text-[var(--color-neutral-700)]">{meta.label}</span>
+            </button>
           );
         })}
+      </div>
+      <div ref={containerRef} className="relative" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" role="img" aria-label="Tickets created, resolved, and net over time">
+          <defs>
+            <linearGradient id="trend-created" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0" />
+            </linearGradient>
+          </defs>
 
-        <path d={createdArea} fill="url(#trend-created)" />
-        <path d={createdLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-        <path d={resolvedLine} fill="none" stroke="var(--color-neutral-700)" strokeWidth="1.5" strokeDasharray="4 3" strokeLinejoin="round" strokeLinecap="round" />
+          {gridLines.map((g, idx) => {
+            const gy = y(g);
+            return (
+              <g key={idx}>
+                <line
+                  x1={padL}
+                  y1={gy}
+                  x2={W - padR}
+                  y2={gy}
+                  stroke={g === 0 && showNet ? "var(--color-neutral-300)" : "var(--color-neutral-100)"}
+                  strokeWidth="1"
+                />
+                <text x={padL - 6} y={gy + 3} textAnchor="end" fontSize="9" fill="var(--color-neutral-400)">
+                  {Math.round(g)}
+                </text>
+              </g>
+            );
+          })}
 
-        {hover !== null && (
-          <line x1={x(hover)} y1={padT} x2={x(hover)} y2={padT + innerH} stroke="var(--color-neutral-300)" strokeWidth="1" strokeDasharray="3 3" />
+          {visible.has("created") && <path d={createdArea} fill="url(#trend-created)" />}
+          {visible.has("created") && (
+            <path d={createdLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          )}
+          {visible.has("resolved") && (
+            <path d={resolvedLine} fill="none" stroke="var(--color-neutral-700)" strokeWidth="1.5" strokeDasharray="4 3" strokeLinejoin="round" strokeLinecap="round" />
+          )}
+          {showNet && (
+            <path d={netLine} fill="none" stroke="var(--color-neutral-400)" strokeWidth="1.5" strokeDasharray="2 3" strokeLinejoin="round" strokeLinecap="round" />
+          )}
+
+          {hover !== null && (
+            <line x1={x(hover)} y1={padT} x2={x(hover)} y2={padT + innerH} stroke="var(--color-neutral-300)" strokeWidth="1" strokeDasharray="3 3" />
+          )}
+
+          {data.map((d, i) => (
+            <g key={d.date}>
+              {visible.has("created") && (
+                <circle cx={x(i)} cy={y(d.created)} r={hover === i ? 4 : 2.5} fill="var(--color-primary)" className="transition-[r] duration-100" />
+              )}
+              {visible.has("resolved") && (
+                <circle cx={x(i)} cy={y(d.resolved)} r={hover === i ? 3.5 : 2} fill="var(--color-neutral-700)" className="transition-[r] duration-100" />
+              )}
+              {showNet && (
+                <circle cx={x(i)} cy={y(d.net)} r={hover === i ? 3.5 : 2} fill="var(--color-neutral-400)" className="transition-[r] duration-100" />
+              )}
+            </g>
+          ))}
+
+          {xLabels.map(({ i, d }) => (
+            <text key={d.date} x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--color-neutral-400)">
+              {fmtDay(d.date)}
+            </text>
+          ))}
+        </svg>
+
+        {hovered && (
+          <div
+            className="absolute z-10 pointer-events-none bg-black text-white rounded-xl px-3 py-2 text-[11px] shadow-[0_8px_24px_-6px_rgba(0,0,0,0.4)] whitespace-nowrap"
+            style={{
+              left: `${tipLeftPct}%`,
+              top: `${Math.max(tipTopPct, 6)}%`,
+              transform: "translate(-50%, -120%)",
+            }}
+          >
+            <p className="font-semibold mb-1">{fmtDay(hovered.date)}</p>
+            {visible.has("created") && (
+              <p className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]" />
+                {hovered.created} created
+              </p>
+            )}
+            {visible.has("resolved") && (
+              <p className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+                {hovered.resolved} resolved
+              </p>
+            )}
+            {showNet && (
+              <p className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/40" />
+                {hovered.net > 0 ? `+${hovered.net}` : hovered.net} net
+              </p>
+            )}
+          </div>
         )}
-
-        {data.map((d, i) => (
-          <g key={d.date}>
-            <circle cx={x(i)} cy={y(d.created)} r={hover === i ? 4 : 2.5} fill="var(--color-primary)" className="transition-[r] duration-100" />
-            <circle cx={x(i)} cy={y(d.resolved)} r={hover === i ? 3.5 : 2} fill="var(--color-neutral-700)" className="transition-[r] duration-100" />
-          </g>
-        ))}
-
-        {xLabels.map(({ i, d }) => (
-          <text key={d.date} x={x(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--color-neutral-400)">
-            {fmtDay(d.date)}
-          </text>
-        ))}
-      </svg>
-
-      {hovered && (
-        <div
-          className="absolute z-10 pointer-events-none bg-black text-white rounded-xl px-3 py-2 text-[11px] shadow-[0_8px_24px_-6px_rgba(0,0,0,0.4)] whitespace-nowrap"
-          style={{
-            left: `${tipLeftPct}%`,
-            top: `${Math.max(tipTopPct, 6)}%`,
-            transform: "translate(-50%, -120%)",
-          }}
-        >
-          <p className="font-semibold mb-1">{fmtDay(hovered.date)}</p>
-          <p className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]" />
-            {hovered.created} created
-          </p>
-          <p className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
-            {hovered.resolved} resolved
-          </p>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -133,7 +233,15 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
 type Segment = { label: string; value: number; color: string };
 
 /** Donut with a centered total and a legend. */
-export function DonutChart({ segments, total }: { segments: Segment[]; total: number }) {
+export function DonutChart({
+  segments,
+  total,
+  ariaLabel = "Tickets by status",
+}: {
+  segments: Segment[];
+  total: number;
+  ariaLabel?: string;
+}) {
   const size = 160;
   const stroke = 26;
   const r = (size - stroke) / 2;
@@ -143,7 +251,7 @@ export function DonutChart({ segments, total }: { segments: Segment[]; total: nu
   let acc = 0;
   return (
     <div className="flex items-center gap-5">
-      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0" role="img" aria-label="Tickets by status">
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0" role="img" aria-label={ariaLabel}>
         <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-neutral-100)" strokeWidth={stroke} />
           {sum > 0 &&
@@ -208,6 +316,51 @@ export function BarList({ items }: { items: Segment[] }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Day-of-week x hour-of-day activity heatmap (ticket creation volume).
+ * `grid[dayOfWeek 0-6][hourOfDay 0-23]`. Deliberately a CSS grid of divs
+ * (not SVG) — each cell is a single `bg-[var(--color-primary)]` swatch with
+ * `opacity` scaled by that cell's count, rather than interpolating between
+ * hardcoded hex colors: opacity over one CSS variable always renders
+ * correctly in both light and dark mode, which a literal color scale would
+ * not (see the "In Progress segment invisible in dark mode" bug fixed
+ * earlier — this avoids repeating it).
+ */
+export function HeatmapChart({ grid }: { grid: number[][] }) {
+  const max = Math.max(1, ...grid.flat());
+
+  return (
+    <div className="overflow-x-auto">
+      <div
+        className="inline-grid gap-[3px]"
+        style={{ gridTemplateColumns: "36px repeat(24, minmax(18px, 1fr))" }}
+      >
+        <div />
+        {Array.from({ length: 24 }, (_, h) => (
+          <div key={h} className="text-[9px] text-[var(--color-neutral-400)] text-center">
+            {h}
+          </div>
+        ))}
+        {grid.map((row, dayIdx) => (
+          <div key={dayIdx} className="contents">
+            <div className="text-[11px] text-[var(--color-neutral-600)] flex items-center">{DAY_LABELS[dayIdx]}</div>
+            {row.map((count, hourIdx) => (
+              <div
+                key={hourIdx}
+                title={`${DAY_LABELS[dayIdx]} ${hourIdx}:00 — ${count} ticket${count === 1 ? "" : "s"}`}
+                className="aspect-square rounded-[3px] bg-[var(--color-primary)]"
+                style={{ opacity: count === 0 ? 0.06 : 0.15 + (count / max) * 0.85 }}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

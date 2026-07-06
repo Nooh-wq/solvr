@@ -49,3 +49,17 @@ export const auditLogFilterSchema = z.object({
   action: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
 });
+
+export const analyticsFilterSchema = z.object({
+  range: z.enum(["7d", "30d", "90d", "custom"]).default("30d"),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  channel: z.enum(["portal", "chatbot", "email"]).optional(),
+  categoryId: z.string().cuid().optional(),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  // "unassigned" is a sentinel distinct from the field simply being absent
+  // (absent = all agents including unassigned; "unassigned" = only tickets
+  // with no assignedToId).
+  assignedToId: z.union([z.string().cuid(), z.literal("unassigned")]).optional(),
+});
+export type AnalyticsFilter = z.infer<typeof analyticsFilterSchema>;

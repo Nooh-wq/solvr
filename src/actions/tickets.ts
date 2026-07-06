@@ -375,6 +375,15 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         }
       }
 
+      // A manual agent-driven status change (not just the explicit
+      // reopenTicket() action) can also move a ticket back out of
+      // Resolved/Closed — counts as a reopen for the analytics KPI too, so
+      // both paths increment the same counter (see reopenTicket() above).
+      const isReopen =
+        Boolean(data.status) &&
+        ["RESOLVED", "CLOSED"].includes(ticket.status) &&
+        !["RESOLVED", "CLOSED"].includes(data.status!);
+
       const updated = await tx.ticket.update({
         where: { id: ticket.id },
         data: {
@@ -382,6 +391,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           priority: data.priority,
           assignedToId: data.assignedToId === undefined ? undefined : data.assignedToId,
           resolvedAt: data.status === "RESOLVED" ? new Date() : data.status === "IN_PROGRESS" ? null : undefined,
+          ...(isReopen ? { reopenedAt: new Date(), reopenCount: { increment: 1 } } : {}),
         },
       });
 
@@ -503,7 +513,10 @@ export async function reopenTicket(ticketId: string) {
     const ticket = await tx.ticket.findFirst({ where });
     if (!ticket || !["RESOLVED", "CLOSED"].includes(ticket.status)) throw new Error("NOT_FOUND_OR_NOT_REOPENABLE");
 
-    await tx.ticket.update({ where: { id: ticket.id }, data: { status: "IN_PROGRESS", resolvedAt: null } });
+    await tx.ticket.update({
+      where: { id: ticket.id },
+      data: { status: "IN_PROGRESS", resolvedAt: null, reopenedAt: new Date(), reopenCount: { increment: 1 } },
+    });
     await tx.auditLog.create({
       data: {
         tenantId: session.tenantId,

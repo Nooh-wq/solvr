@@ -55,15 +55,7 @@ export default async function AdminOverviewPage() {
       <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold">Tickets over time</h2>
-          <div className="flex items-center gap-4 text-[11px] text-[var(--color-neutral-600)]">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-3 rounded-full bg-[var(--color-primary)]" /> Created
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-3 bg-[var(--color-neutral-700)]" /> Resolved
-            </span>
-            <span className="text-[var(--color-neutral-400)]">last 30 days</span>
-          </div>
+          <span className="text-[11px] text-[var(--color-neutral-400)]">last 30 days</span>
         </div>
         <TrendChart data={stats.dailySeries} />
       </div>

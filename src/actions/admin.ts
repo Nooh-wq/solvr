@@ -19,6 +19,8 @@ import {
   upsertCategorySchema,
   updateBrandingSchema,
   auditLogFilterSchema,
+  analyticsFilterSchema,
+  type AnalyticsFilter,
 } from "@/lib/validation/admin";
 
 function generateTempPassword() {
@@ -451,7 +453,9 @@ export async function getReportStats() {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
       const key = d.toISOString().slice(0, 10);
-      return { date: key, created: createdByDay.get(key) ?? 0, resolved: resolvedByDay.get(key) ?? 0 };
+      const created = createdByDay.get(key) ?? 0;
+      const resolved = resolvedByDay.get(key) ?? 0;
+      return { date: key, created, resolved, net: created - resolved };
     });
 
     return {
@@ -461,6 +465,248 @@ export async function getReportStats() {
       byPriority: Object.fromEntries(byPriority.map((p) => [p.priority, p._count])),
       avgFirstResponseHours,
       dailySeries,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Analytics (/admin/analytics) — a deeper, filterable dashboard than the
+// Reports section above, which stays untouched and keeps powering the plain
+// Overview page.
+// ---------------------------------------------------------------------------
+
+function resolveRange(f: AnalyticsFilter): { start: Date; end: Date } {
+  const end = f.range === "custom" && f.to ? new Date(f.to) : new Date();
+  end.setHours(23, 59, 59, 999);
+
+  let days = 30;
+  if (f.range === "7d") days = 7;
+  else if (f.range === "90d") days = 90;
+
+  let start: Date;
+  if (f.range === "custom" && f.from) {
+    start = new Date(f.from);
+    start.setHours(0, 0, 0, 0);
+  } else {
+    start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - (days - 1));
+  }
+  return { start, end };
+}
+
+function buildTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "createdAt" | "resolvedAt" = "createdAt") {
+  const { start, end } = resolveRange(f);
+  return {
+    tenantId,
+    [dateField]: { gte: start, lte: end },
+    ...(f.channel ? { source: f.channel } : {}),
+    ...(f.categoryId ? { categoryId: f.categoryId } : {}),
+    ...(f.priority ? { priority: f.priority } : {}),
+    ...(f.assignedToId
+      ? f.assignedToId === "unassigned"
+        ? { assignedToId: null }
+        : { assignedToId: f.assignedToId }
+      : {}),
+  };
+}
+
+// Same plain-Date bucketing style as getReportStats() above, extended with a
+// `net` column and a variable-length window (instead of a hardcoded 30 days).
+function bucketByDay(start: Date, end: Date, createdDates: Date[], resolvedDates: Date[]) {
+  const dayKey = (d: Date) => {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x.toISOString().slice(0, 10);
+  };
+  const createdByDay = new Map<string, number>();
+  for (const d of createdDates) createdByDay.set(dayKey(d), (createdByDay.get(dayKey(d)) ?? 0) + 1);
+  const resolvedByDay = new Map<string, number>();
+  for (const d of resolvedDates) resolvedByDay.set(dayKey(d), (resolvedByDay.get(dayKey(d)) ?? 0) + 1);
+
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1);
+  return Array.from({ length: days }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = d.toISOString().slice(0, 10);
+    const created = createdByDay.get(key) ?? 0;
+    const resolved = resolvedByDay.get(key) ?? 0;
+    return { date: key, created, resolved, net: created - resolved };
+  });
+}
+
+// grid[dayOfWeek][hourOfDay] = ticket count. dayOfWeek: 0=Sun..6=Sat (JS Date
+// convention), using the server process's local timezone — same implicit
+// assumption getReportStats()'s day-bucketing already makes; there's no
+// per-tenant timezone field in the schema to do better.
+function buildHeatmap(dates: Date[]): number[][] {
+  const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+  for (const d of dates) grid[d.getDay()][d.getHours()] += 1;
+  return grid;
+}
+
+export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> = {}) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const parsed = analyticsFilterSchema.safeParse(rawFilter);
+  // Never throw on a bad/stale filter (e.g. a hand-edited or old bookmarked
+  // URL) — fall back to the schema's own defaults instead.
+  const f = parsed.success ? parsed.data : analyticsFilterSchema.parse({});
+
+  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const tenantId = session.tenantId;
+    const { start, end } = resolveRange(f);
+    const createdWhere = buildTicketWhere(tenantId, f, "createdAt");
+
+    // Sequential, not Promise.all — same reason as getReportStats() above:
+    // these all run on this one interactive-tx connection.
+
+    // --- KPI row: volume, first response ---
+    const totalInRange = await tx.ticket.count({ where: createdWhere });
+    const resolvedInRange = await tx.ticket.count({ where: { ...createdWhere, resolvedAt: { not: null } } });
+    const withFirstReply = await tx.ticket.findMany({
+      where: { ...createdWhere, firstReplyAt: { not: null } },
+      select: { createdAt: true, firstReplyAt: true },
+    });
+    const avgFirstResponseHours =
+      withFirstReply.length > 0
+        ? Math.max(
+            0,
+            withFirstReply.reduce((sum, t) => sum + (t.firstReplyAt!.getTime() - t.createdAt.getTime()), 0) /
+              withFirstReply.length /
+              (1000 * 60 * 60)
+          )
+        : null;
+
+    // --- Reopen-rate KPI ---
+    const reopenedCount = await tx.ticket.count({ where: { ...createdWhere, reopenCount: { gt: 0 } } });
+    const reopenRate = totalInRange > 0 ? reopenedCount / totalInRange : null;
+
+    // --- AI-deflection % KPI ---
+    // A conversation counts as "deflected" if it never escalated to a human
+    // ticket. Chat conversations have no category/priority/channel/agent, so
+    // only the date range applies here — the UI should caption this so it
+    // doesn't look broken when those other filters don't move this number.
+    const totalConversations = await tx.chatConversation.count({ where: { tenantId, createdAt: { gte: start, lte: end } } });
+    const escalatedConversations = await tx.chatConversation.count({
+      where: { tenantId, createdAt: { gte: start, lte: end }, status: "escalated" },
+    });
+    const aiDeflectionRate = totalConversations > 0 ? (totalConversations - escalatedConversations) / totalConversations : null;
+
+    // --- Tickets-over-time (created / resolved / net) ---
+    const createdRows = await tx.ticket.findMany({ where: createdWhere, select: { createdAt: true } });
+    const resolvedWhere = buildTicketWhere(tenantId, f, "resolvedAt");
+    const resolvedRows = await tx.ticket.findMany({
+      where: { ...resolvedWhere, resolvedAt: { not: null } },
+      select: { resolvedAt: true },
+    });
+    const dailySeries = bucketByDay(
+      start,
+      end,
+      createdRows.map((r) => r.createdAt),
+      resolvedRows.map((r) => r.resolvedAt!)
+    );
+
+    // --- Category breakdown ---
+    const byCategory = await tx.ticket.groupBy({ by: ["categoryId"], where: createdWhere, _count: true });
+    const categoryIds = byCategory.map((c) => c.categoryId).filter((id): id is string => id !== null);
+    const categoriesById =
+      categoryIds.length > 0
+        ? await tx.category.findMany({ where: { id: { in: categoryIds }, tenantId }, select: { id: true, name: true } })
+        : [];
+    const categoryNameById = new Map(categoriesById.map((c) => [c.id, c.name]));
+    const categoryBreakdown = byCategory
+      .map((c) => ({
+        label: c.categoryId ? (categoryNameById.get(c.categoryId) ?? "Unknown category") : "Uncategorized",
+        value: c._count,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    // --- Channel breakdown ---
+    const bySource = await tx.ticket.groupBy({ by: ["source"], where: createdWhere, _count: true });
+    const channelBreakdown = bySource.map((s) => ({ label: s.source, value: s._count })).sort((a, b) => b.value - a.value);
+
+    // --- Agent leaderboard ---
+    const byAgent = await tx.ticket.groupBy({
+      by: ["assignedToId"],
+      where: { ...createdWhere, assignedToId: { not: null } },
+      _count: true,
+    });
+    const agentIds = byAgent.map((a) => a.assignedToId).filter((id): id is string => id !== null);
+    const agentsById =
+      agentIds.length > 0
+        ? await tx.user.findMany({ where: { id: { in: agentIds }, tenantId }, select: { id: true, name: true } })
+        : [];
+    const agentNameById = new Map(agentsById.map((a) => [a.id, a.name]));
+    // Avg resolution time needs raw created/resolved pairs (groupBy can't avg
+    // a computed diff) — pulled once and reused for both each agent's own
+    // average AND the KPI-level overall average, to avoid two overlapping
+    // findMany calls over the same rows. Note this means the KPI-level
+    // avgResolutionHours only covers assigned+resolved tickets.
+    const resolvedByAgentRows = await tx.ticket.findMany({
+      where: { ...createdWhere, assignedToId: { not: null }, resolvedAt: { not: null } },
+      select: { assignedToId: true, createdAt: true, resolvedAt: true },
+    });
+    const resolutionAccByAgent = new Map<string, { sum: number; count: number }>();
+    let overallResSum = 0;
+    let overallResCount = 0;
+    for (const t of resolvedByAgentRows) {
+      const key = t.assignedToId!;
+      // Clamp like avgFirstResponseHours above — seed/clock-skew data can
+      // have resolvedAt fractionally before createdAt, which would otherwise
+      // surface as a nonsensical negative average.
+      const hrs = Math.max(0, (t.resolvedAt!.getTime() - t.createdAt.getTime()) / (1000 * 60 * 60));
+      const acc = resolutionAccByAgent.get(key) ?? { sum: 0, count: 0 };
+      acc.sum += hrs;
+      acc.count += 1;
+      resolutionAccByAgent.set(key, acc);
+      overallResSum += hrs;
+      overallResCount += 1;
+    }
+    const avgResolutionHours = overallResCount > 0 ? overallResSum / overallResCount : null;
+    const agentLeaderboard = byAgent
+      .map((a) => {
+        const acc = resolutionAccByAgent.get(a.assignedToId!);
+        return {
+          agentId: a.assignedToId!,
+          agentName: agentNameById.get(a.assignedToId!) ?? "Unknown",
+          handledCount: a._count,
+          avgResolutionHours: acc && acc.count > 0 ? acc.sum / acc.count : null,
+        };
+      })
+      .sort((a, b) => b.handledCount - a.handledCount);
+
+    // --- Peak-hours heatmap (day-of-week x hour-of-day) ---
+    const heatmapRows = await tx.ticket.findMany({ where: createdWhere, select: { createdAt: true } });
+    const heatmap = buildHeatmap(heatmapRows.map((r) => r.createdAt));
+
+    // --- Filter option lists, for the FilterBar's <select> populations ---
+    const allCategories = await tx.category.findMany({
+      where: { tenantId, isActive: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    const allAgents = await tx.user.findMany({
+      where: { tenantId, role: { in: ["AGENT", "ADMIN"] }, status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+
+    return {
+      filter: f,
+      kpis: {
+        totalInRange,
+        resolvedInRange,
+        avgFirstResponseHours,
+        avgResolutionHours,
+        reopenRate,
+        aiDeflectionRate,
+      },
+      dailySeries,
+      categoryBreakdown,
+      channelBreakdown,
+      agentLeaderboard,
+      heatmap,
+      filterOptions: { categories: allCategories, agents: allAgents },
     };
   });
 }

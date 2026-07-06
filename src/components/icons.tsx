@@ -98,6 +98,15 @@ export function ShieldIcon(props: IconProps) {
   );
 }
 
+export function ChartBarIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 16.5V11M9.5 16.5V5M15 16.5v-8" />
+      <path d="M3 16.5h14" />
+    </svg>
+  );
+}
+
 export function BellIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

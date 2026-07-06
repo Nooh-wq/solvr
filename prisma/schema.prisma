@@ -220,6 +220,13 @@ model Ticket {
   source       String       @default("portal") // portal | chatbot | email
   firstReplyAt DateTime?
   resolvedAt   DateTime?
+  // Reopen tracking (analytics: reopen-rate KPI). reopenedAt is the most
+  // recent reopen timestamp; reopenCount is a running total across the
+  // ticket's lifetime, incremented whenever it transitions OUT of
+  // RESOLVED/CLOSED back into an active status (see reopenTicket() and
+  // updateTicket() in actions/tickets.ts).
+  reopenedAt   DateTime?
+  reopenCount  Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
