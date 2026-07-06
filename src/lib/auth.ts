@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { prisma, withRls } from "@/lib/db";
 import { getSessionPayload, getImpersonationPayload } from "@/lib/session";
-import type { Role } from "@/generated/prisma";
+import type { LegacyRole as Role } from "@/generated/prisma";
 
 export type SessionUser = {
   id: string;

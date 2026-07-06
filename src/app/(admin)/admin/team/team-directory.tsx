@@ -10,7 +10,7 @@ import { TeamFilterBar, type RoleFilter, type StatusFilter } from "./team-filter
 import { BulkActionBar } from "./bulk-action-bar";
 import { useTeamSelection } from "./hooks/use-team-selection";
 import { bulkChangeRole, bulkDeactivate, bulkExport } from "@/actions/admin";
-import type { Role, UserStatus } from "@/generated/prisma";
+import type { LegacyRole as Role, UserStatus } from "@/generated/prisma";
 
 export type TeamMember = {
   id: string;

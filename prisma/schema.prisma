@@ -34,7 +34,13 @@ enum TenantStatus {
   TRIAL
 }
 
-enum Role {
+// Legacy user-role enum. On borrowed time — Z1's Six-Object Model Refactor
+// replaces this with the Shared Platform's `Role` MODEL (rows per tenant,
+// custom-role support), consumed via the TeamMember relation. This enum
+// stays until Z1.5 drops the legacy User table entirely; every reference
+// to `LegacyRole` here or in application code should ultimately migrate to
+// a `TeamMember.role.name` string lookup.
+enum LegacyRole {
   CLIENT
   AGENT
   ADMIN
@@ -151,7 +157,7 @@ model User {
   passwordHash String // bcrypt. TODO(decision): swap to Supabase Auth (or another provider) before production.
   name         String
   email        String
-  role         Role     @default(CLIENT)
+  role         LegacyRole @default(CLIENT)
   // Legacy free-text company field — retained for backwards compatibility
   // during the Team & Roles v2 backfill. New writes should populate
   // companyId (below) via the auto-match-by-email-domain flow in
@@ -536,3 +542,222 @@ model ChatMessage {
   @@index([conversationId])
   @@map("chat_messages")
 }
+
+// ===========================================================================
+// STRALIS SHARED PLATFORM — REFERENCE MODELS (Z1: Six-Object Model Refactor)
+// ===========================================================================
+//
+// These 9 tables + 3 enums are OWNED BY THE STRALIS SHARED PLATFORM REPO
+// (../Stralis Shared Platform/prisma/schema.prisma). Both repos connect to
+// the same physical Postgres database (see the Shared Platform's ADR-004,
+// "Single Public Schema Ownership by Convention"). Ownership is enforced by
+// docs + code review, not the database — every table below lives in
+// Postgres's public schema, same as this repo's own tables.
+//
+// WHY THEY'RE MIRRORED HERE:
+//   - So this repo's `prisma generate` produces TypeScript types + a working
+//     Prisma Client for these models, letting server actions query and
+//     mutate them the same way any local model works.
+//   - This is the pre-M7 arrangement: this repo talks to the shared tables
+//     via Prisma directly through the wrapper service in
+//     src/lib/shared-platform/. Once the Shared Platform's Public API (M7)
+//     ships, the wrapper flips from Prisma to HTTP fetch and the models
+//     below can be removed. See docs/shared-platform-boundary.md.
+//
+// RULES:
+//   1. NEVER edit a model or enum in this block. If the Shared Platform
+//      ships schema changes to core, run `npm run pull-core` (which for now
+//      is a manual copy-paste from the Shared Platform's schema.prisma) and
+//      commit the diff — do not hand-edit.
+//   2. NEVER run `prisma migrate dev` or `prisma db push` in this repo
+//      while these models are present unless every model matches the DB's
+//      current state exactly. If they match, `db push` is a no-op and
+//      that's fine; if they don't, `db push` will corrupt the shared DB.
+//   3. NEVER introduce a Prisma relation FROM a Support-owned model TO one
+//      of the shared models (e.g. don't add `endUser EndUser @relation(...)`
+//      on Ticket). FKs cross the boundary; Prisma relations don't. Use raw
+//      scalar `endUserId String?` columns and resolve via the wrapper.
+//   4. Tenant is NOT mirrored here because it stays owned by THIS repo.
+//      The shared platform stores tenantId as a plain scalar and enforces
+//      the FK at the SQL level (see their migration.sql). Migrating Tenant
+//      to the shared platform is a deliberate future ADR — not decided as
+//      a side effect of Z1. See docs/shared-platform-boundary.md.
+//
+// If any of these rules would need to be broken to ship a feature, STOP and
+// escalate — either the boundary is wrong (unlikely) or the feature is
+// designed against it (fixable).
+
+enum TicketAccessScope {
+  ALL
+  GROUPS
+  ASSIGNED_ONLY
+}
+
+enum TagTargetType {
+  END_USER
+  TEAM_MEMBER
+  ORGANIZATION
+}
+
+enum AuditActorType {
+  TEAM_MEMBER
+  SYSTEM
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  domain    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  endUsers            EndUser[]
+  endUserMemberships  EndUserOrganization[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, domain])
+  @@map("organizations")
+}
+
+model EndUser {
+  id             String        @id @default(cuid())
+  tenantId       String
+  email          String
+  name           String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organizationMemberships EndUserOrganization[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, organizationId])
+  @@map("end_users")
+}
+
+model EndUserOrganization {
+  endUserId      String
+  endUser        EndUser      @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenantId       String
+  createdAt      DateTime     @default(now())
+
+  @@id([endUserId, organizationId])
+  @@index([tenantId])
+  @@map("end_user_organizations")
+}
+
+model TeamMember {
+  id                String            @id @default(cuid())
+  tenantId          String
+  email             String
+  name              String?
+  roleId            String
+  role              Role              @relation(fields: [roleId], references: [id])
+  ticketAccessScope TicketAccessScope @default(ASSIGNED_ONLY)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  groupMemberships TeamMemberGroup[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, roleId])
+  @@map("team_members")
+}
+
+model Group {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships TeamMemberGroup[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("groups")
+}
+
+model TeamMemberGroup {
+  teamMemberId String
+  teamMember   TeamMember @relation(fields: [teamMemberId], references: [id], onDelete: Cascade)
+  groupId      String
+  group        Group      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tenantId     String
+  createdAt    DateTime   @default(now())
+
+  @@id([teamMemberId, groupId])
+  @@index([tenantId])
+  @@map("team_member_groups")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  isCustom    Boolean  @default(false)
+  permissions Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teamMembers TeamMember[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("roles")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  color     String   @default("#7A7A7A")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments TagAssignment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("tags")
+}
+
+model TagAssignment {
+  id         String        @id @default(cuid())
+  tenantId   String
+  tagId      String
+  tag        Tag           @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  targetType TagTargetType
+  targetId   String
+  createdAt  DateTime      @default(now())
+
+  @@unique([tenantId, tagId, targetType, targetId])
+  @@index([tenantId, targetType, targetId])
+  @@map("tag_assignments")
+}
+
+model CoreAuditLog {
+  id           String         @id @default(cuid())
+  tenantId     String
+  actorId      String?
+  actorType    AuditActorType
+  action       String // CREATE | UPDATE | DELETE | ASSIGN | ...
+  resourceType String // "Organization" | "EndUser" | "TeamMember" | "Group" | "Role" | "Tag" | ...
+  resourceId   String
+  fromValue    Json?
+  toValue      Json?
+  createdAt    DateTime       @default(now())
+
+  @@index([tenantId, resourceType, resourceId])
+  @@index([tenantId, createdAt])
+  @@map("core_audit_logs")
+}
+
+// ===========================================================================
+// END OF STRALIS SHARED PLATFORM REFERENCE MODELS
+// ===========================================================================

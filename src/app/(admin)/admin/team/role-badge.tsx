@@ -1,4 +1,4 @@
-import type { Role } from "@/generated/prisma";
+import type { LegacyRole as Role } from "@/generated/prisma";
 
 // Colored badges per role. Deliberately muted — the table's real focus is
 // the status column (StatusIndicator), so role is subtle context, not a
