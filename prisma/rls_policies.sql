@@ -65,7 +65,7 @@ begin
     'tenant_branding','users','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
-    'ticket_guests','login_otps'
+    'ticket_guests','login_otps','survey_responses'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -221,6 +221,18 @@ create policy ticket_guest_revoke on ticket_guests
       or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
     )
   );
+
+-- survey_responses (CSAT): the submitting visitor is never a real session —
+-- actions/csat.ts verifies a signed, ticket-scoped JWT (src/lib/session.ts's
+-- signCsatToken/verifyCsatToken) before ever calling withRls, then opens the
+-- transaction as role SUPER_ADMIN purely to satisfy tickets' super_admin_read
+-- policy for the existence check (same established pattern as the auto-close
+-- Inngest cron in lib/inngest/functions/auto-close.ts) — this table's own
+-- policy only needs tenantId isolation, since the token itself is what
+-- proves the caller is allowed to rate this specific ticket.
+drop policy if exists tenant_isolation on survey_responses;
+create policy tenant_isolation on survey_responses
+  using ("tenantId" = app_current_tenant_id());
 
 -- login_otps: strictly personal, same shape as notifications — a user (or,
 -- during the invite-accept flow before a real session exists, the verified

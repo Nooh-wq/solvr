@@ -98,6 +98,24 @@ export function ShieldIcon(props: IconProps) {
   );
 }
 
+/** Filled (not stroke-based like the rest of this file) since a star rating reads better solid — parent controls filled/empty via `fill`/className color, not a separate icon variant. */
+export function StarIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" {...props}>
+      <path d="M10 2.5 12.2 7.6 17.5 8.2 13.5 11.8 14.6 17.2 10 14.4 5.4 17.2 6.5 11.8 2.5 8.2 7.8 7.6 10 2.5Z" />
+    </svg>
+  );
+}
+
+export function ChartBarIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 16.5V11M9.5 16.5V5M15 16.5v-8" />
+      <path d="M3 16.5h14" />
+    </svg>
+  );
+}
+
 export function BellIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

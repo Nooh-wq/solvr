@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import geoip from "geoip-lite";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
+import { getClientIp } from "@/lib/rate-limit";
 import {
   createTicketSchema,
   replySchema,
@@ -17,16 +19,30 @@ import {
   sendAgentReplyEmail,
   sendClientReplyNotification,
   sendStatusChangeEmail,
+  sendCsatRequestEmail,
 } from "@/lib/email/events";
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
 import { getAttachmentSignedUrl } from "@/lib/storage";
 import { resolveMessageSender } from "@/lib/message-sender";
+import { signCsatToken } from "@/lib/session";
+
+function siteUrl() {
+  return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+}
 
 /** FR-2: client creates a ticket. Status defaults to Open; fires the "received" email. */
 export async function createTicket(input: z.infer<typeof createTicketSchema>) {
   const session = await requireSession();
   const data = createTicketSchema.parse(input);
+
+  // geoip-lite is an offline/synchronous lookup (no external API call), so
+  // unlike a remote geolocation service this is safe to do without worrying
+  // about holding open the withRls transaction below during a network call —
+  // it's just an in-memory data-file lookup. Powers the analytics "clients
+  // by region" map/table; null for email-sourced tickets (no live request).
+  const clientIp = await getClientIp();
+  const clientCountry = clientIp !== "unknown" ? (geoip.lookup(clientIp)?.country ?? null) : null;
 
   const { ticket, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.id, role: session.role },
@@ -46,6 +62,8 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             clientId: session.id,
             status: "OPEN",
             source: "portal",
+            clientIp: clientIp !== "unknown" ? clientIp : null,
+            clientCountry,
           },
         })
       );
@@ -375,6 +393,15 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         }
       }
 
+      // A manual agent-driven status change (not just the explicit
+      // reopenTicket() action) can also move a ticket back out of
+      // Resolved/Closed — counts as a reopen for the analytics KPI too, so
+      // both paths increment the same counter (see reopenTicket() above).
+      const isReopen =
+        Boolean(data.status) &&
+        ["RESOLVED", "CLOSED"].includes(ticket.status) &&
+        !["RESOLVED", "CLOSED"].includes(data.status!);
+
       const updated = await tx.ticket.update({
         where: { id: ticket.id },
         data: {
@@ -382,6 +409,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           priority: data.priority,
           assignedToId: data.assignedToId === undefined ? undefined : data.assignedToId,
           resolvedAt: data.status === "RESOLVED" ? new Date() : data.status === "IN_PROGRESS" ? null : undefined,
+          ...(isReopen ? { reopenedAt: new Date(), reopenCount: { increment: 1 } } : {}),
         },
       });
 
@@ -464,6 +492,16 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
   // running locally to actually fire (see README "Background jobs").
   if (statusChanged) await sendStatusChangeEmail(updated, client.email, branding);
 
+  // CSAT request fires only the moment a ticket newly becomes Resolved (not
+  // on every subsequent status touch, e.g. a later Resolved -> Closed
+  // confirmation) — see analytics' CSAT KPI (actions/admin.ts) and the
+  // rating page (app/rate/[token]).
+  if (statusChanged && updated.status === "RESOLVED") {
+    const token = await signCsatToken({ ticketId: updated.id, tenantId: session.tenantId });
+    const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
+    await sendCsatRequestEmail(client.email, rateUrl, branding);
+  }
+
   revalidatePath(`/agent/tickets/${updated.id}`);
   revalidatePath(`/portal/tickets/${updated.id}`);
   return { ok: true, ticket: updated };
@@ -503,7 +541,10 @@ export async function reopenTicket(ticketId: string) {
     const ticket = await tx.ticket.findFirst({ where });
     if (!ticket || !["RESOLVED", "CLOSED"].includes(ticket.status)) throw new Error("NOT_FOUND_OR_NOT_REOPENABLE");
 
-    await tx.ticket.update({ where: { id: ticket.id }, data: { status: "IN_PROGRESS", resolvedAt: null } });
+    await tx.ticket.update({
+      where: { id: ticket.id },
+      data: { status: "IN_PROGRESS", resolvedAt: null, reopenedAt: new Date(), reopenCount: { increment: 1 } },
+    });
     await tx.auditLog.create({
       data: {
         tenantId: session.tenantId,
