@@ -21,7 +21,9 @@ import {
   systemContext,
   getEndUser,
   getTeamMember,
+  createEndUser,
 } from "@/lib/shared-platform";
+import { matchCompanyByEmail } from "@/lib/company-match";
 import type { EmailReceivedEvent } from "resend";
 
 type ReceivedEmailEventData = EmailReceivedEvent["data"];
@@ -77,24 +79,61 @@ async function findOrCreateSender(tenantId: string, fromEmail: string, fromName:
   const tempPassword = crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  return withRls({ tenantId, userId: null }, async (tx) => {
+  // Z1.9: organization auto-match by email domain (same lookup used at
+  // portal registration / admin invite). Happens outside the legacy tx
+  // because the wrapper opens its own tenant-scoped RLS internally.
+  const organizationId = await matchCompanyByEmail(tenantId, fromEmail);
+
+  const result = await withRls({ tenantId, userId: null }, async (tx) => {
     const existing = await tx.user.findUnique({
       where: { tenantId_email: { tenantId, email: fromEmail } },
     });
-    if (existing) return { user: existing, tempPassword: null };
+    if (existing) return { user: existing, tempPassword: null as string | null, created: false };
 
+    // Z1.9: create legacy User + Z1.8 companion rows atomically. Wrapper
+    // EndUser creation happens post-commit (see below) to match the same
+    // dual-write shape admin.ts inviteUser uses — cross-boundary writes
+    // don't share Support's tx.
     const user = await tx.user.create({
       data: {
         tenantId,
         email: fromEmail,
         name: fromName || fromEmail,
         passwordHash,
+        companyId: organizationId,
         role: "CLIENT",
         status: "PENDING",
       },
     });
-    return { user, tempPassword };
+    await tx.authCredential.create({
+      data: { tenantId, subjectEndUserId: user.id, passwordHash },
+    });
+    await tx.endUserLifecycle.create({
+      data: { tenantId, subjectId: user.id, status: "PENDING" },
+    });
+    return { user, tempPassword, created: true };
   });
+
+  // Z1.9: create the wrapper EndUser counterpart with the preserved id.
+  // Post-commit (matches admin.ts inviteUser's shape) — on wrapper failure
+  // the legacy row exists without a wrapper counterpart, surfaced by
+  // scripts/z1_6_drift_check.mjs.
+  if (result.created) {
+    try {
+      await createEndUser(systemContext(tenantId), {
+        id: result.user.id,
+        email: result.user.email,
+        name: result.user.name,
+        organizationId,
+      });
+    } catch (e) {
+      // Non-fatal — legacy row is the safety net through Z1.5. Log for
+      // drift-check follow-up.
+      console.error(`[Z1.9] inbound-email wrapper EndUser create failed for ${result.user.email}:`, e);
+    }
+  }
+
+  return { user: result.user, tempPassword: result.tempPassword };
 }
 
 function parseFromHeader(from: string): { email: string; name: string } {

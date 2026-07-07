@@ -273,6 +273,19 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
             update: lifecycleData,
           });
         }
+        // Z1.9 correction: also create the auth_credentials row with the
+        // placeholder hash. Without this, acceptInvite's updateMany would
+        // silently no-op the password write (updateMany doesn't create),
+        // leaving invited users with a divergent legacy vs credentials hash
+        // after they accept.
+        await tx.authCredential.create({
+          data: {
+            tenantId: session.tenantId,
+            subjectEndUserId: data.role === "CLIENT" ? user.id : null,
+            subjectTeamMemberId: data.role === "CLIENT" ? null : user.id,
+            passwordHash: placeholderHash,
+          },
+        });
         await tx.auditLog.create({
           data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_USER", toValue: user.email },
         });
