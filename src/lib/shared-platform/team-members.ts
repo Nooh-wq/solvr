@@ -36,6 +36,28 @@ export async function getTeamMember(ctx: WrapperContext, id: string): Promise<Te
   return row ? toDto(row) : null;
 }
 
+/**
+ * Z1.5: fetches a TeamMember with its Role name joined in one query.
+ * Callers that need the display role name (session, admin lookups) use this
+ * to avoid two round-trips. `roleName` is the wrapper Role's canonical name
+ * ("Super Admin" / "Admin" / "Agent" for standard, custom string otherwise).
+ */
+export async function getTeamMemberWithRoleName(
+  ctx: WrapperContext,
+  id: string
+): Promise<(TeamMember & { roleName: string }) | null> {
+  const row = await withRls(
+    { tenantId: ctx.tenantId, userId: ctx.actor?.teamMemberId ?? null, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.teamMember.findFirst({
+        where: { id, tenantId: ctx.tenantId },
+        include: { role: { select: { name: true } } },
+      })
+  );
+  if (!row) return null;
+  return { ...toDto(row), roleName: row.role.name };
+}
+
 export async function listTeamMembers(
   ctx: WrapperContext,
   filter?: { roleId?: string; groupId?: string } & ListFilter
