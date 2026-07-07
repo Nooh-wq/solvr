@@ -78,13 +78,29 @@ export async function createTenant(input: z.infer<typeof createTenantSchema>) {
       await tx.category.create({ data: { tenantId: tenant.id, name } });
     }
 
-    await tx.user.create({
+    const adminUser = await tx.user.create({
       data: {
         tenantId: tenant.id,
         name: data.adminName,
         email: data.adminEmail,
         role: "ADMIN",
         passwordHash,
+        status: "ACTIVE",
+      },
+    });
+    // Z1.8b: seed credentials + lifecycle for the initial ADMIN alongside
+    // the legacy user. Runs inside the same super_admin_write RLS scope.
+    await tx.authCredential.create({
+      data: {
+        tenantId: tenant.id,
+        subjectTeamMemberId: adminUser.id,
+        passwordHash,
+      },
+    });
+    await tx.teamMemberLifecycle.create({
+      data: {
+        tenantId: tenant.id,
+        subjectId: adminUser.id,
         status: "ACTIVE",
       },
     });

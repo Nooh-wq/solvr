@@ -139,6 +139,7 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
         await tx.category.create({ data: { tenantId: tenant.id, name } });
       }
 
+      const now = new Date();
       const user = await tx.user.create({
         data: {
           tenantId: tenant.id,
@@ -147,8 +148,26 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
           role: "SUPER_ADMIN",
           passwordHash: payload.passwordHash,
           status: "ACTIVE",
-          approvedAt: new Date(),
-          lastActiveAt: new Date(),
+          approvedAt: now,
+          lastActiveAt: now,
+        },
+      });
+      // Z1.8b: seed credentials + lifecycle for the initial SUPER_ADMIN
+      // alongside the legacy user. RLS-scoped by the transaction's tenantId.
+      await tx.authCredential.create({
+        data: {
+          tenantId: tenant.id,
+          subjectTeamMemberId: user.id,
+          passwordHash: payload.passwordHash,
+        },
+      });
+      await tx.teamMemberLifecycle.create({
+        data: {
+          tenantId: tenant.id,
+          subjectId: user.id,
+          status: "ACTIVE",
+          approvedAt: now,
+          lastActiveAt: now,
         },
       });
 

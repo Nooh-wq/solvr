@@ -95,6 +95,21 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
         status: "UNVERIFIED",
       },
     });
+    // Z1.8b dual-write: credentials + lifecycle for the new CLIENT registrant.
+    await tx.authCredential.create({
+      data: {
+        tenantId: tenant.id,
+        subjectEndUserId: user.id,
+        passwordHash,
+      },
+    });
+    await tx.endUserLifecycle.create({
+      data: {
+        tenantId: tenant.id,
+        subjectId: user.id,
+        status: "UNVERIFIED",
+      },
+    });
 
     // login_otp_insert's RLS policy requires app.user_id to match the row's
     // userId — this transaction started with userId: null (no session exists
@@ -195,12 +210,23 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
     // reading this field should tolerate a null approvedById on rows where
     // approvedAt is set (approved by rule, not by an individual). PENDING
     // rows leave both fields null until approveUser() sets them.
+    const nextStatus = domainApproved ? "ACTIVE" as const : "PENDING" as const;
+    const approvedAt = domainApproved ? new Date() : null;
     const updated = await tx.user.update({
       where: { id: user.id },
-      data: {
-        status: domainApproved ? "ACTIVE" : "PENDING",
-        approvedAt: domainApproved ? new Date() : null,
+      data: { status: nextStatus, approvedAt },
+    });
+    // Z1.8b dual-write: mirror status transition (UNVERIFIED → ACTIVE|PENDING)
+    // to lifecycle table. All registrants are CLIENT, so always end_user_lifecycle.
+    await tx.endUserLifecycle.upsert({
+      where: { subjectId: user.id },
+      create: {
+        subjectId: user.id,
+        tenantId: payload.tenantId,
+        status: nextStatus,
+        approvedAt,
       },
+      update: { status: nextStatus, approvedAt },
     });
 
     const admins = domainApproved
@@ -277,24 +303,49 @@ export async function login(input: z.infer<typeof loginSchema>) {
     return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
   }
 
-  const dbUser = await withRls({ tenantId: tenant.id, userId: null }, (tx) =>
-    tx.user.findUnique({ where: { tenantId_email: { tenantId: tenant.id, email: data.email } } })
-  );
+  // Z1.8b: identity from legacy users (until Z1.5 drops it), passwordHash
+  // from auth_credentials (Set B — Support owns auth surface), status from
+  // the appropriate lifecycle table. All three reads share one RLS tx to
+  // avoid duplicate context setup and to keep the timing profile stable
+  // regardless of which store has drift.
+  const lookup = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { tenantId_email: { tenantId: tenant.id, email: data.email } },
+    });
+    if (!user) return null;
+    const isStaff = user.role !== "CLIENT";
+    const creds = await tx.authCredential.findFirst({
+      where: isStaff
+        ? { tenantId: tenant.id, subjectTeamMemberId: user.id }
+        : { tenantId: tenant.id, subjectEndUserId: user.id },
+    });
+    const lifecycle = isStaff
+      ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId: user.id } })
+      : await tx.endUserLifecycle.findUnique({ where: { subjectId: user.id } });
+    return { user, creds, lifecycle };
+  });
 
   // Always run a bcrypt compare — against the real hash if the user exists, or
   // a dummy hash if not — so response timing doesn't reveal whether the email
   // is registered (user-enumeration defense). The generic error message is the
   // same for "no such user" and "wrong password".
-  const valid = await bcrypt.compare(data.password, dbUser?.passwordHash ?? DUMMY_PASSWORD_HASH);
-  if (!dbUser || !valid) return { error: "Invalid email or password." };
+  const valid = await bcrypt.compare(data.password, lookup?.creds?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  if (!lookup || !lookup.creds || !valid) return { error: "Invalid email or password." };
+
+  const dbUser = lookup.user;
+  // Status read from lifecycle table (Z1.8b flip). If lifecycle row is
+  // missing (drift or race), refuse login rather than falling through to
+  // legacy — the drift-check script exists to catch and fix these.
+  const status = lookup.lifecycle?.status;
+  if (!status) return { error: "This account is not yet ready — please contact support." };
 
   // Password is correct, so it's safe to be specific about *why* login is
   // blocked (this isn't an enumeration risk once the password has already
   // been proven correct).
-  if (dbUser.status === "UNVERIFIED") return { error: "Please verify your email first — check your inbox for the code, or register again to get a new one." };
-  if (dbUser.status === "PENDING") return { error: "Your account is still awaiting admin approval." };
-  if (dbUser.status === "REJECTED") return { error: "Your registration request was not approved." };
-  if (dbUser.status === "SUSPENDED") return { error: "This account has been deactivated." };
+  if (status === "UNVERIFIED") return { error: "Please verify your email first — check your inbox for the code, or register again to get a new one." };
+  if (status === "PENDING") return { error: "Your account is still awaiting admin approval." };
+  if (status === "REJECTED") return { error: "Your registration request was not approved." };
+  if (status === "SUSPENDED") return { error: "This account has been deactivated." };
   // Practically unreachable (an INVITED account's passwordHash is a random
   // placeholder nobody could ever type — see inviteUser()), kept for
   // defense-in-depth rather than checked before the password comparison
@@ -302,7 +353,7 @@ export async function login(input: z.infer<typeof loginSchema>) {
   // live invite" from a wrong-password guess alone, which is exactly the
   // enumeration risk this whole "reveal the reason only once the password's
   // already proven correct" ordering exists to avoid.
-  if (dbUser.status === "INVITED") return { error: "Please accept your invite email first to set up your account." };
+  if (status === "INVITED") return { error: "Please accept your invite email first to set up your account." };
 
   await createSessionCookie({
     subjectId: dbUser.id,
@@ -380,7 +431,15 @@ export async function confirmPasswordReset(
     }
 
     const passwordHash = await bcrypt.hash(data.newPassword, 10);
-    await tx.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: new Date() } });
+    const now = new Date();
+    await tx.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: now } });
+    // Z1.8b dual-write: mirror password to auth_credentials. Same-tx safe
+    // because both are Support-owned tables.
+    const subjectField = user.role === "CLIENT" ? "subjectEndUserId" : "subjectTeamMemberId";
+    await tx.authCredential.updateMany({
+      where: { tenantId: user.tenantId, [subjectField]: user.id },
+      data: { passwordHash, passwordChangedAt: now },
+    });
     return { failed: false, role: user.role };
   });
 
@@ -437,10 +496,33 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
     }
 
     const passwordHash = await bcrypt.hash(data.password, 10);
+    const now = new Date();
     await tx.user.update({
       where: { id: user.id },
-      data: { passwordHash, status: "ACTIVE", passwordChangedAt: new Date() },
+      data: { passwordHash, status: "ACTIVE", passwordChangedAt: now },
     });
+    // Z1.8b dual-write: mirror password to auth_credentials + transition
+    // lifecycle status INVITED → ACTIVE.
+    const isStaff = user.role !== "CLIENT";
+    const subjectField = isStaff ? "subjectTeamMemberId" : "subjectEndUserId";
+    await tx.authCredential.updateMany({
+      where: { tenantId: user.tenantId, [subjectField]: user.id },
+      data: { passwordHash, passwordChangedAt: now },
+    });
+    const lifecycleData = { tenantId: user.tenantId, status: "ACTIVE" as const };
+    if (isStaff) {
+      await tx.teamMemberLifecycle.upsert({
+        where: { subjectId: user.id },
+        create: { subjectId: user.id, ...lifecycleData },
+        update: lifecycleData,
+      });
+    } else {
+      await tx.endUserLifecycle.upsert({
+        where: { subjectId: user.id },
+        create: { subjectId: user.id, ...lifecycleData },
+        update: lifecycleData,
+      });
+    }
 
     // The plaintext code only ever exists transiently in this closure — never
     // stored, only its bcrypt hash is (verifyLoginOtp compares against that).
