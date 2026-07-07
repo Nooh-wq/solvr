@@ -3,7 +3,8 @@
 import { Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PlusIcon, SearchIcon } from "@/components/icons";
-import type { LegacyRole as Role, UserStatus } from "@/generated/prisma";
+import type { UserStatus } from "@/generated/prisma";
+import type { UserRole as Role } from "@/lib/auth";
 
 export type RoleFilter = Role | "ALL";
 export type StatusFilter = UserStatus | "ALL";

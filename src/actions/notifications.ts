@@ -3,25 +3,24 @@
 import { revalidatePath } from "next/cache";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
+import { notificationRecipientWhereFor } from "@/lib/z1-dual-fk";
 
 const LIST_LIMIT = 20;
 
 /** Latest notifications for the current user, newest first — bell dropdown. */
 export async function listNotifications() {
   const session = await requireSession();
+  const recipient = notificationRecipientWhereFor(session.subjectId, session.role);
   const notifications = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     (tx) =>
       tx.notification.findMany({
-        where: { tenantId: session.tenantId, userId: session.subjectId },
+        where: { tenantId: session.tenantId, ...recipient },
         orderBy: { createdAt: "desc" },
         take: LIST_LIMIT,
       })
   );
 
-  // Ticket links differ by role (clients live under /portal, staff under
-  // /agent) — resolved here so the bell component doesn't need to know
-  // about routing.
   const ticketBase = session.role === "CLIENT" ? "/portal/tickets" : "/agent/tickets";
   return notifications.map((n) => ({
     ...n,
@@ -39,17 +38,15 @@ export async function listNotifications() {
 export async function getNotificationSnapshot() {
   const session = await requireSession();
   const ctx = { tenantId: session.tenantId, userId: session.subjectId, role: session.role };
+  const recipient = notificationRecipientWhereFor(session.subjectId, session.role);
   const { notifications, unreadCount } = await withRls(ctx, async (tx) => {
-    // Run sequentially, not via Promise.all: both queries share this one
-    // interactive-transaction connection, and issuing them concurrently on the
-    // same tx client is unsupported by Prisma. Two indexed reads are cheap.
     const notifications = await tx.notification.findMany({
-      where: { tenantId: session.tenantId, userId: session.subjectId },
+      where: { tenantId: session.tenantId, ...recipient },
       orderBy: { createdAt: "desc" },
       take: LIST_LIMIT,
     });
     const unreadCount = await tx.notification.count({
-      where: { tenantId: session.tenantId, userId: session.subjectId, isRead: false },
+      where: { tenantId: session.tenantId, ...recipient, isRead: false },
     });
     return { notifications, unreadCount };
   });
@@ -66,9 +63,10 @@ export async function getNotificationSnapshot() {
 
 export async function markNotificationRead(notificationId: string) {
   const session = await requireSession();
+  const recipient = notificationRecipientWhereFor(session.subjectId, session.role);
   await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.notification.updateMany({
-      where: { id: notificationId, tenantId: session.tenantId, userId: session.subjectId },
+      where: { id: notificationId, tenantId: session.tenantId, ...recipient },
       data: { isRead: true },
     })
   );
@@ -78,9 +76,10 @@ export async function markNotificationRead(notificationId: string) {
 
 export async function markAllNotificationsRead() {
   const session = await requireSession();
+  const recipient = notificationRecipientWhereFor(session.subjectId, session.role);
   await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.notification.updateMany({
-      where: { tenantId: session.tenantId, userId: session.subjectId, isRead: false },
+      where: { tenantId: session.tenantId, ...recipient, isRead: false },
       data: { isRead: true },
     })
   );

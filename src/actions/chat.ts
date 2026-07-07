@@ -13,6 +13,7 @@ import { systemContext, getEndUser } from "@/lib/shared-platform";
 import {
   dualFkForUser,
   chatSubjectCols,
+  chatSubjectWhereFor,
   ticketClientCols,
   actorCols,
 } from "@/lib/z1-dual-fk";
@@ -52,12 +53,15 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
 
     const conversation = data.conversationId
       ? await tx.chatConversation.findFirstOrThrow({
-          where: { id: data.conversationId, tenantId: session.tenantId, userId: session.subjectId },
+          where: {
+            id: data.conversationId,
+            tenantId: session.tenantId,
+            ...chatSubjectWhereFor(session.subjectId, session.role),
+          },
         })
       : await tx.chatConversation.create({
           data: {
             tenantId: session.tenantId,
-            userId: session.subjectId,
             ...chatSubjectCols(dualFkForUser(session.subjectId, session.role)),
             status: "active",
           },
@@ -128,7 +132,11 @@ export async function escalateChatToTicket(conversationId: string) {
 
   const conversation = await withRls(rlsCtx, (tx) =>
     tx.chatConversation.findFirstOrThrow({
-      where: { id: conversationId, tenantId: session.tenantId, userId: session.subjectId },
+      where: {
+        id: conversationId,
+        tenantId: session.tenantId,
+        ...chatSubjectWhereFor(session.subjectId, session.role),
+      },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     })
   );
@@ -167,7 +175,6 @@ export async function escalateChatToTicket(conversationId: string) {
           ticketNumber,
           title,
           description: `Escalated from chat.\n\n${transcript}`,
-          clientId: session.subjectId,
           ...ticketClientCols(clientDual),
           organizationId: clientEndUser?.organizationId ?? null,
           priority,
@@ -186,7 +193,6 @@ export async function escalateChatToTicket(conversationId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.subjectId,
         ...actorCols(clientDual),
         action: "CREATE",
         toValue: "OPEN",

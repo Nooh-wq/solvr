@@ -62,10 +62,10 @@ declare
   t text;
 begin
   for t in select unnest(array[
-    'tenant_branding','users','categories','tickets','messages',
+    'tenant_branding','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
-    'ticket_guests','login_otps','survey_responses','companies'
+    'ticket_guests','login_otps','survey_responses'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -86,16 +86,9 @@ drop policy if exists tenant_isolation on chatbot_configs;
 create policy tenant_isolation on chatbot_configs
   using ("tenantId" = app_current_tenant_id());
 
--- users
-drop policy if exists tenant_isolation on users;
-create policy tenant_isolation on users
-  using ("tenantId" = app_current_tenant_id());
--- SUPER_ADMIN can create the initial admin user while provisioning a new
--- tenant (see the categories/tenant_branding comment above for why this
--- can't just be scoped by tenantId).
-drop policy if exists super_admin_write on users;
-create policy super_admin_write on users
-  for all using (app_current_role() = 'SUPER_ADMIN') with check (app_current_role() = 'SUPER_ADMIN');
+-- users / companies: Z1.5c dropped these tables. Wrapper identity lives in
+-- end_users / team_members / organizations — those live under the Shared
+-- Platform's own RLS policies (see the shared repo).
 
 -- categories
 drop policy if exists tenant_isolation on categories;
@@ -143,7 +136,8 @@ create policy client_sees_own_tickets on tickets
     and app_current_role() <> 'GUEST'
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
-      or "clientId" = app_current_user_id()
+      or "clientEndUserId" = app_current_user_id()
+      or "clientTeamMemberId" = app_current_user_id()
     )
   );
 drop policy if exists guest_sees_own_ticket on tickets;
@@ -209,7 +203,14 @@ create policy ticket_guest_write on ticket_guests
     "tenantId" = app_current_tenant_id()
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
-      or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
+      or exists (
+        select 1 from tickets t
+        where t.id = "ticketId"
+          and (
+            t."clientEndUserId" = app_current_user_id()
+            or t."clientTeamMemberId" = app_current_user_id()
+          )
+      )
     )
   );
 drop policy if exists ticket_guest_revoke on ticket_guests;
@@ -218,23 +219,16 @@ create policy ticket_guest_revoke on ticket_guests
     "tenantId" = app_current_tenant_id()
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
-      or exists (select 1 from tickets t where t.id = "ticketId" and t."clientId" = app_current_user_id())
+      or exists (
+        select 1 from tickets t
+        where t.id = "ticketId"
+          and (
+            t."clientEndUserId" = app_current_user_id()
+            or t."clientTeamMemberId" = app_current_user_id()
+          )
+      )
     )
   );
-
--- companies: tenant-scoped like users/categories. Simple isolation policy —
--- companies aren't sensitive to non-staff users (a client can already see
--- their own row's linked company via the user tenant_isolation policy), so
--- no role-based read carve-outs are needed.
-drop policy if exists tenant_isolation on companies;
-create policy tenant_isolation on companies
-  using ("tenantId" = app_current_tenant_id());
--- SUPER_ADMIN write bypass, same shape as users/categories above — needed
--- for tenant provisioning if the initial admin's Company is created before
--- the app.tenant_id switch has been made in the transaction.
-drop policy if exists super_admin_write on companies;
-create policy super_admin_write on companies
-  for all using (app_current_role() = 'SUPER_ADMIN') with check (app_current_role() = 'SUPER_ADMIN');
 
 -- survey_responses (CSAT): the submitting visitor is never a real session —
 -- actions/csat.ts verifies a signed, ticket-scoped JWT (src/lib/session.ts's
@@ -254,13 +248,31 @@ create policy tenant_isolation on survey_responses
 -- reads/consumes their own OTP rows.
 drop policy if exists login_otp_read on login_otps;
 create policy login_otp_read on login_otps
-  for select using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+  for select using (
+    "tenantId" = app_current_tenant_id()
+    and (
+      "endUserId" = app_current_user_id()
+      or "teamMemberId" = app_current_user_id()
+    )
+  );
 drop policy if exists login_otp_insert on login_otps;
 create policy login_otp_insert on login_otps
-  for insert with check ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+  for insert with check (
+    "tenantId" = app_current_tenant_id()
+    and (
+      "endUserId" = app_current_user_id()
+      or "teamMemberId" = app_current_user_id()
+    )
+  );
 drop policy if exists login_otp_update on login_otps;
 create policy login_otp_update on login_otps
-  for update using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+  for update using (
+    "tenantId" = app_current_tenant_id()
+    and (
+      "endUserId" = app_current_user_id()
+      or "teamMemberId" = app_current_user_id()
+    )
+  );
 
 -- audit_logs: readable by agents/admins (the tenant's full activity log),
 -- OR by the row's own actor — the latter isn't for browsing, it's because
@@ -281,7 +293,8 @@ create policy audit_log_read on audit_logs
     "tenantId" = app_current_tenant_id()
     and (
       app_current_role() in ('AGENT','ADMIN','SUPER_ADMIN')
-      or "actorId" = app_current_user_id()
+      or "actorEndUserId" = app_current_user_id()
+      or "actorTeamMemberId" = app_current_user_id()
     )
   );
 drop policy if exists audit_log_insert on audit_logs;
@@ -335,10 +348,22 @@ create policy tenant_isolation on chat_messages
 drop policy if exists tenant_isolation on notifications;
 drop policy if exists notification_read on notifications;
 create policy notification_read on notifications
-  for select using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+  for select using (
+    "tenantId" = app_current_tenant_id()
+    and (
+      "recipientEndUserId" = app_current_user_id()
+      or "recipientTeamMemberId" = app_current_user_id()
+    )
+  );
 drop policy if exists notification_insert on notifications;
 create policy notification_insert on notifications
   for insert with check ("tenantId" = app_current_tenant_id());
 drop policy if exists notification_update on notifications;
 create policy notification_update on notifications
-  for update using ("tenantId" = app_current_tenant_id() and "userId" = app_current_user_id());
+  for update using (
+    "tenantId" = app_current_tenant_id()
+    and (
+      "recipientEndUserId" = app_current_user_id()
+      or "recipientTeamMemberId" = app_current_user_id()
+    )
+  );

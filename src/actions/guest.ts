@@ -47,7 +47,7 @@ export async function inviteTicketGuest(
     result = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
-      if (session.role === "CLIENT" && ticket.clientId !== session.subjectId) throw new Error("NOT_FOUND");
+      if (session.role === "CLIENT" && ticket.clientEndUserId !== session.subjectId) throw new Error("NOT_FOUND");
 
       await tx.ticketGuest.create({
         data: {
@@ -56,7 +56,6 @@ export async function inviteTicketGuest(
           email: data.email,
           name: data.name,
           tokenHash,
-          invitedById: session.subjectId,
           ...inviterCols(dualFkForUser(session.subjectId, session.role)),
         },
       });

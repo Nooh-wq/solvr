@@ -27,12 +27,7 @@ import {
 import { COUNTRIES, countryName } from "@/lib/countries";
 import { assertActionAllowed } from "@/lib/team-matrix";
 import { matchCompanyByEmail } from "@/lib/company-match";
-import {
-  dualFkForUser,
-  actorCols,
-  legacyRoleToWrapperRoleName,
-  isLegacyStaffRole,
-} from "@/lib/z1-dual-fk";
+import { dualFkForUser, actorCols } from "@/lib/z1-dual-fk";
 import {
   systemContext,
   getEndUsersByIds,
@@ -49,14 +44,11 @@ import {
   WrapperNotFoundError,
 } from "@/lib/shared-platform";
 import { resolveAuditActor } from "@/lib/z1-view-models";
-import type { LegacyRole, Priority, UserStatus } from "@/generated/prisma";
+import type { Priority, UserStatus } from "@/generated/prisma";
+import type { UserRole } from "@/lib/auth";
 
-// Z1.5b: single canonical role string, subset of LegacyRole. Every Set B
-// consumer already accepts the same widened literal (auth.ts UserRole,
-// team-directory role prop). We keep `LegacyRole` as the underlying
-// alias so callers importing it type-check unchanged; Z1.5c will collapse
-// this back to a bare string literal when the enum is dropped.
-type TeamRole = LegacyRole;
+// Post-Z1.5c: canonical Support-side role string (LegacyRole enum dropped).
+type TeamRole = UserRole;
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
 // Not a configurable policy engine — see the analytics-v2 plan's explicit
@@ -456,7 +448,6 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "INVITE_USER",
           toValue: data.email,
@@ -481,53 +472,13 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
 // RLS transactions internally.
 // ---------------------------------------------------------------------------
 
-async function createWrapperCounterpart(input: {
-  tenantId: string;
-  id: string;
-  email: string;
-  name: string | null;
-  role: LegacyRole;
-  organizationId: string | null;
-}): Promise<void> {
-  const ctx = systemContext(input.tenantId);
-  if (input.role === "CLIENT") {
-    await createEndUser(ctx, {
-      id: input.id,
-      email: input.email,
-      name: input.name,
-      organizationId: input.organizationId,
-    });
-    return;
-  }
-  if (isLegacyStaffRole(input.role)) {
-    const wrapperRole = await getRoleByName(ctx, legacyRoleToWrapperRoleName(input.role));
-    if (!wrapperRole) {
-      // Z1.3 seeded the three standard roles on every tenant — this
-      // "should never happen" case surfaces as a diagnostic. Rather
-      // than throw and rollback the legacy invite (which already
-      // committed), record a diagnostic. Drift-check script picks it
-      // up on the next run.
-      console.error(`[Z1.6] Wrapper role "${legacyRoleToWrapperRoleName(input.role)}" not seeded on tenant ${input.tenantId}; skipping createTeamMember for ${input.id}`);
-      return;
-    }
-    await createTeamMember(ctx, {
-      id: input.id,
-      email: input.email,
-      name: input.name,
-      roleId: wrapperRole.id,
-    });
-  }
-}
-
-async function deleteWrapperCounterpart(tenantId: string, id: string, role: LegacyRole): Promise<void> {
+async function deleteWrapperCounterpart(tenantId: string, id: string, role: TeamRole): Promise<void> {
   const ctx = systemContext(tenantId);
   try {
     if (role === "CLIENT") await deleteEndUser(ctx, id);
-    else if (isLegacyStaffRole(role)) await deleteTeamMember(ctx, id);
+    else await deleteTeamMember(ctx, id);
   } catch (e) {
     if (e instanceof WrapperNotFoundError) {
-      // Wrapper counterpart already missing — legacy delete succeeded
-      // and there's nothing left to remove. Drift-safe.
       return;
     }
     throw e;
@@ -537,16 +488,9 @@ async function deleteWrapperCounterpart(tenantId: string, id: string, role: Lega
 async function updateWrapperCounterpartRole(
   tenantId: string,
   id: string,
-  fromRole: LegacyRole,
-  toRole: LegacyRole
+  fromRole: TeamRole,
+  toRole: TeamRole
 ): Promise<void> {
-  // Cross-boundary role changes (CLIENT ↔ staff) require deleting the
-  // wrapper row of one kind and creating the other. That destroys
-  // organizationId (on EndUser → TeamMember) or ticketAccessScope (on
-  // TeamMember → EndUser). Rather than silently drop data, Z1.6 blocks
-  // this transition — admin must delete + reinvite explicitly. Legacy
-  // code accepted the transition but silently drifted the wrapper; the
-  // explicit throw is a correctness improvement.
   const fromIsClient = fromRole === "CLIENT";
   const toIsClient = toRole === "CLIENT";
   if (fromIsClient !== toIsClient) {
@@ -554,12 +498,11 @@ async function updateWrapperCounterpartRole(
       "Cross-boundary role change (CLIENT ↔ staff) not supported. Delete this user and reinvite with the new role."
     );
   }
-  if (fromIsClient) return; // CLIENT → CLIENT is a no-op at this layer
-  if (!isLegacyStaffRole(toRole)) return;
+  if (fromIsClient) return;
   const ctx = systemContext(tenantId);
-  const wrapperRole = await getRoleByName(ctx, legacyRoleToWrapperRoleName(toRole));
+  const wrapperRole = await getRoleByName(ctx, teamRoleToWrapperRoleName(toRole));
   if (!wrapperRole) {
-    console.error(`[Z1.6] Wrapper role "${legacyRoleToWrapperRoleName(toRole)}" not seeded on tenant ${tenantId}; skipping updateTeamMember for ${id}`);
+    console.error(`Wrapper role "${teamRoleToWrapperRoleName(toRole)}" not seeded on tenant ${tenantId}; skipping updateTeamMember for ${id}`);
     return;
   }
   try {
@@ -634,7 +577,6 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId,
             ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
@@ -646,7 +588,6 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId,
             ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: data.status === "ACTIVE" ? "REACTIVATE_USER" : "DEACTIVATE_USER",
             toValue: target.email,
@@ -700,7 +641,6 @@ export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{
     await tx.auditLog.create({
       data: {
         tenantId: session.tenantId,
-        actorId: session.subjectId,
         ...actorCols(dualFkForUser(session.subjectId, session.role)),
         action: "DELETE_USER",
         toValue: target.email,
@@ -773,7 +713,6 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "APPROVE_USER",
           toValue: target.email,
@@ -830,7 +769,6 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "REJECT_USER",
           toValue: target.email,
@@ -870,7 +808,6 @@ export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "INVITE_RESENT",
           toValue: target.email,
@@ -911,7 +848,6 @@ export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "INVITE_REVOKED",
           toValue: target.email,
@@ -978,7 +914,6 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "REINVITE_USER",
           toValue: target.email,
@@ -1047,7 +982,6 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId,
             ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
@@ -1125,7 +1059,6 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
       await tx.auditLog.create({
         data: {
           tenantId: session.tenantId,
-          actorId: session.subjectId,
           ...actorCols(dualFkForUser(session.subjectId, session.role)),
           action: "DEACTIVATE_USER",
           toValue: target.email,
@@ -1266,7 +1199,7 @@ export async function updateBranding(input: z.infer<typeof updateBrandingSchema>
       },
     });
     await tx.auditLog.create({
-      data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "UPDATE_BRANDING" },
+      data: { tenantId: session.tenantId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "UPDATE_BRANDING" },
     });
   });
 
@@ -1363,7 +1296,7 @@ export async function getReportStats() {
     const byPriority = await tx.ticket.groupBy({ by: ["priority"], where: { tenantId }, _count: true });
     const total = await tx.ticket.count({ where: { tenantId } });
     const unassigned = await tx.ticket.count({
-      where: { tenantId, assignedToId: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
+      where: { tenantId, assignedTeamMemberId: null, status: { notIn: ["RESOLVED", "CLOSED"] } },
     });
     const tickets = await tx.ticket.findMany({
       where: { tenantId, firstReplyAt: { not: null } },
@@ -1466,8 +1399,8 @@ function buildTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "crea
     ...(f.priority ? { priority: f.priority } : {}),
     ...(f.assignedToId
       ? f.assignedToId === "unassigned"
-        ? { assignedToId: null }
-        : { assignedToId: f.assignedToId }
+        ? { assignedTeamMemberId: null }
+        : { assignedTeamMemberId: f.assignedToId }
       : {}),
   };
 }
@@ -1525,7 +1458,7 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     const totalInRange = await tx.ticket.count({ where: createdWhere });
     const openInRange = await tx.ticket.count({ where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } } });
     const unassignedOpenInRange = await tx.ticket.count({
-      where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] }, assignedToId: null },
+      where: { ...createdWhere, status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] }, assignedTeamMemberId: null },
     });
     const resolvedInRange = await tx.ticket.count({ where: { ...createdWhere, resolvedAt: { not: null } } });
     const withFirstReply = await tx.ticket.findMany({
@@ -1656,11 +1589,11 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
 
     // --- Agent leaderboard ---
     const byAgent = await tx.ticket.groupBy({
-      by: ["assignedToId"],
-      where: { ...createdWhere, assignedToId: { not: null } },
+      by: ["assignedTeamMemberId"],
+      where: { ...createdWhere, assignedTeamMemberId: { not: null } },
       _count: true,
     });
-    const agentIds = byAgent.map((a) => a.assignedToId).filter((id): id is string => id !== null);
+    const agentIds = byAgent.map((a) => a.assignedTeamMemberId).filter((id): id is string => id !== null);
     // Z1.4b: agent names come from the wrapper (TeamMember, preserved id).
     const agentsByIdMap = await getTeamMembersByIds(systemContext(tenantId), agentIds);
     const agentNameById = new Map<string, string | null>(
@@ -1672,14 +1605,14 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     // findMany calls over the same rows. Note this means the KPI-level
     // avgResolutionHours only covers assigned+resolved tickets.
     const resolvedByAgentRows = await tx.ticket.findMany({
-      where: { ...createdWhere, assignedToId: { not: null }, resolvedAt: { not: null } },
-      select: { assignedToId: true, createdAt: true, resolvedAt: true },
+      where: { ...createdWhere, assignedTeamMemberId: { not: null }, resolvedAt: { not: null } },
+      select: { assignedTeamMemberId: true, createdAt: true, resolvedAt: true },
     });
     const resolutionAccByAgent = new Map<string, { sum: number; count: number }>();
     let overallResSum = 0;
     let overallResCount = 0;
     for (const t of resolvedByAgentRows) {
-      const key = t.assignedToId!;
+      const key = t.assignedTeamMemberId!;
       // Clamp like avgFirstResponseHours above — seed/clock-skew data can
       // have resolvedAt fractionally before createdAt, which would otherwise
       // surface as a nonsensical negative average.
@@ -1696,12 +1629,12 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     // Per-agent CSAT: join ratings to their ticket's assignedToId, scoped by
     // the same createdWhere filter set used everywhere else on this page.
     const agentCsatRows = await tx.surveyResponse.findMany({
-      where: { tenantId, ticket: { ...createdWhere, assignedToId: { not: null } } },
-      select: { rating: true, ticket: { select: { assignedToId: true } } },
+      where: { tenantId, ticket: { ...createdWhere, assignedTeamMemberId: { not: null } } },
+      select: { rating: true, ticket: { select: { assignedTeamMemberId: true } } },
     });
     const csatAccByAgent = new Map<string, { sum: number; count: number }>();
     for (const r of agentCsatRows) {
-      const key = r.ticket.assignedToId!;
+      const key = r.ticket.assignedTeamMemberId!;
       const acc = csatAccByAgent.get(key) ?? { sum: 0, count: 0 };
       acc.sum += r.rating;
       acc.count += 1;
@@ -1710,12 +1643,12 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
 
     const agentLeaderboard = byAgent
       .map((a) => {
-        const acc = resolutionAccByAgent.get(a.assignedToId!);
-        const csatAcc = csatAccByAgent.get(a.assignedToId!);
+        const acc = resolutionAccByAgent.get(a.assignedTeamMemberId!);
+        const csatAcc = csatAccByAgent.get(a.assignedTeamMemberId!);
         return {
-          agentId: a.assignedToId!,
-          agentName: agentNameById.get(a.assignedToId!) ?? "Unknown",
-          handledCount: a._count,
+          agentId: a.assignedTeamMemberId!,
+          agentName: agentNameById.get(a.assignedTeamMemberId!) ?? "Unknown",
+          handledCount: a._count as number,
           avgResolutionHours: acc && acc.count > 0 ? acc.sum / acc.count : null,
           avgCsatRating: csatAcc && csatAcc.count > 0 ? csatAcc.sum / csatAcc.count : null,
         };

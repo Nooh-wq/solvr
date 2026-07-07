@@ -28,6 +28,7 @@ import { signCsatToken } from "@/lib/session";
 import {
   dualFkForUser,
   ticketClientCols,
+  ticketClientWhereFor,
   actorCols,
   senderCols,
   assignedTeamMemberCol,
@@ -93,7 +94,6 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             description: data.description,
             categoryId: data.categoryId,
             priority: data.priority,
-            clientId: session.subjectId,
             ...ticketClientCols(clientDual),
             organizationId: clientEndUser?.organizationId ?? null,
             status: "OPEN",
@@ -108,7 +108,6 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          actorId: session.subjectId,
           ...actorCols(clientDual),
           action: "CREATE",
           toValue: "OPEN",
@@ -136,7 +135,7 @@ export async function listMyTickets(filter: Partial<z.infer<typeof ticketFilterS
     tx.ticket.findMany({
       where: {
         tenantId: session.tenantId,
-        clientId: session.subjectId,
+        ...ticketClientWhereFor(session.subjectId, session.role),
         status: f.status,
       },
       include: { category: true },
@@ -159,7 +158,7 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
         status: f.status,
         priority: f.priority,
         categoryId: f.categoryId,
-        assignedToId: f.assignedToId === "unassigned" ? null : f.assignedToId || undefined,
+        assignedTeamMemberId: f.assignedToId === "unassigned" ? null : f.assignedToId || undefined,
         // Search on ticket title stays; the legacy `client.name` search
         // subquery is dropped for Z1.4b — wrapper-side text search is a
         // Z1.5+ concern (see boundary doc §7.9). Practical impact:
@@ -232,7 +231,7 @@ export async function getTicket(ticketId: string) {
       },
     });
     if (!t) return null;
-    if (session.role === "CLIENT" && t.clientId !== session.subjectId) return null;
+    if (session.role === "CLIENT" && t.clientEndUserId !== session.subjectId) return null;
     return t;
   });
   if (!ticket) return null;
@@ -342,7 +341,8 @@ export async function getTicketMessages(ticketId: string) {
     const t = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
       select: {
-        clientId: true,
+        clientEndUserId: true,
+        clientTeamMemberId: true,
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
@@ -351,7 +351,7 @@ export async function getTicketMessages(ticketId: string) {
       },
     });
     if (!t) return null;
-    if (session.role === "CLIENT" && t.clientId !== session.subjectId) return null;
+    if (session.role === "CLIENT" && t.clientEndUserId !== session.subjectId) return null;
     return t;
   });
   if (!ticket) return null;
@@ -415,7 +415,11 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({
-        where: { id: data.ticketId, tenantId: session.tenantId, clientId: session.subjectId },
+        where: {
+          id: data.ticketId,
+          tenantId: session.tenantId,
+          ...ticketClientWhereFor(session.subjectId, session.role),
+        },
       });
       if (!ticket) throw new Error("NOT_FOUND");
 
@@ -424,7 +428,6 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          senderId: session.subjectId,
           ...senderCols(clientDual),
           senderRole: "CLIENT",
           body: data.body,
@@ -447,7 +450,6 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.subjectId,
             ...actorCols(clientDual),
             action: "STATUS_CHANGE",
             fromValue: "PENDING",
@@ -497,7 +499,6 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          senderId: session.subjectId,
           ...senderCols(staffDual),
           senderRole: session.role === "ADMIN" || session.role === "SUPER_ADMIN" ? "ADMIN" : "AGENT",
           body: data.body,
@@ -519,7 +520,6 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          actorId: session.subjectId,
           ...actorCols(staffDual),
           action: data.isInternal ? "INTERNAL_NOTE" : "REPLY",
         },
@@ -588,9 +588,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         data: {
           status: data.status,
           priority: data.priority,
-          assignedToId: data.assignedToId === undefined ? undefined : data.assignedToId,
-          // Z1.4a: dual-write assignee. undefined preserves existing;
-          // null clears; a value sets both legacy and new column.
+          // undefined preserves existing; null clears; a value sets it.
           ...(data.assignedToId !== undefined
             ? assignedTeamMemberCol(data.assignedToId)
             : {}),
@@ -606,7 +604,6 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "STATUS_CHANGE",
             fromValue: ticket.status,
@@ -619,7 +616,6 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "PRIORITY_CHANGE",
             fromValue: ticket.priority,
@@ -627,7 +623,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           },
         });
       }
-      if (data.assignedToId !== undefined && data.assignedToId !== ticket.assignedToId) {
+      if (data.assignedToId !== undefined && data.assignedToId !== ticket.assignedTeamMemberId) {
         // Store the agents' names (not their raw IDs) so the audit log reads
         // "Unassigned → Jordan Reyes" rather than a meaningless cuid. Sequential
         // (not Promise.all): concurrent queries on one interactive-tx client are
@@ -644,7 +640,6 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "ASSIGN",
             fromValue: fromAgent?.name ?? "Unassigned",
@@ -709,7 +704,12 @@ export async function confirmResolution(ticketId: string) {
   const session = await requireSession();
   return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const ticket = await tx.ticket.findFirst({
-      where: { id: ticketId, tenantId: session.tenantId, clientId: session.subjectId, status: "RESOLVED" },
+      where: {
+        id: ticketId,
+        tenantId: session.tenantId,
+        ...ticketClientWhereFor(session.subjectId, session.role),
+        status: "RESOLVED",
+      },
     });
     if (!ticket) throw new Error("NOT_FOUND_OR_NOT_RESOLVED");
     await tx.ticket.update({ where: { id: ticket.id }, data: { status: "CLOSED" } });
@@ -717,7 +717,6 @@ export async function confirmResolution(ticketId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.subjectId,
         ...actorCols(dualFkForUser(session.subjectId, session.role)),
         action: "STATUS_CHANGE",
         fromValue: "RESOLVED",
@@ -734,7 +733,7 @@ export async function reopenTicket(ticketId: string) {
   return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const where =
       session.role === "CLIENT"
-        ? { id: ticketId, tenantId: session.tenantId, clientId: session.subjectId }
+        ? { id: ticketId, tenantId: session.tenantId, clientEndUserId: session.subjectId }
         : { id: ticketId, tenantId: session.tenantId };
     const ticket = await tx.ticket.findFirst({ where });
     if (!ticket || !["RESOLVED", "CLOSED"].includes(ticket.status)) throw new Error("NOT_FOUND_OR_NOT_REOPENABLE");
@@ -747,7 +746,6 @@ export async function reopenTicket(ticketId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.subjectId,
         ...actorCols(dualFkForUser(session.subjectId, session.role)),
         action: "REOPEN",
         fromValue: ticket.status,

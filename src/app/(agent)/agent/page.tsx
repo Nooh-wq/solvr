@@ -8,7 +8,7 @@ export default async function AgentQueuePage() {
   const tickets = await listAllTickets({});
 
   const open = tickets.filter((t) => t.status === "OPEN").length;
-  const unassigned = tickets.filter((t) => !t.assignedToId).length;
+  const unassigned = tickets.filter((t) => !t.assignedTeamMemberId).length;
 
   return (
     <div>

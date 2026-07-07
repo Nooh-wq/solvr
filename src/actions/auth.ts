@@ -110,14 +110,14 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
     });
 
     // OTP row: RLS policy on login_otps requires app.user_id to match the
-    // row's userId. Set it before insert since this tx started with userId: null.
+    // row's dual-FK subject. Set it before insert since this tx started with
+    // userId: null.
     await tx.$executeRaw`SELECT set_config('app.user_id', ${subjectId}, true)`;
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 10);
     await tx.loginOtp.create({
       data: {
         tenantId: tenant.id,
-        userId: subjectId,
         endUserId: subjectId,
         codeHash,
         expiresAt: new Date(Date.now() + OTP_DURATION_MS),
@@ -171,7 +171,12 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
 
   const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
     const otp = await tx.loginOtp.findFirst({
-      where: { userId: payload.userId, tenantId: payload.tenantId, consumedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        endUserId: payload.userId,
+        tenantId: payload.tenantId,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
       orderBy: { createdAt: "desc" },
     });
     if (!otp) return { failed: true, message: "This code has expired — please register again." };
@@ -540,7 +545,6 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
     await tx.loginOtp.create({
       data: {
         tenantId: payload.tenantId,
-        userId: payload.userId,
         ...otpSubject,
         codeHash,
         expiresAt: new Date(Date.now() + OTP_DURATION_MS),
@@ -575,7 +579,15 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
 
   const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
     const otp = await tx.loginOtp.findFirst({
-      where: { userId: payload.userId, tenantId: payload.tenantId, consumedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        OR: [
+          { endUserId: payload.userId },
+          { teamMemberId: payload.userId },
+        ],
+        tenantId: payload.tenantId,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
       orderBy: { createdAt: "desc" },
     });
     if (!otp) return { failed: true, message: "This code has expired — request a new invite link." };

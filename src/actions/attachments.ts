@@ -23,7 +23,7 @@ async function assertTicketAccess(
   return withRls({ tenantId, userId, role: role as never }, async (tx) => {
     const ticket = await tx.ticket.findFirst({ where: { id: ticketId, tenantId } });
     if (!ticket) throw new Error("NOT_FOUND");
-    if (role === "CLIENT" && ticket.clientId !== userId) throw new Error("NOT_FOUND");
+    if (role === "CLIENT" && ticket.clientEndUserId !== userId) throw new Error("NOT_FOUND");
     return ticket;
   });
 }
@@ -71,7 +71,6 @@ export async function uploadTicketAttachment(
         data: {
           tenantId: session.tenantId,
           ticketId,
-          uploadedById: session.subjectId,
           ...uploaderCols(dualFkForUser(session.subjectId, session.role)),
           fileUrl: path,
           fileName: file.name,
