@@ -29,7 +29,10 @@ export default async function AgentQueuePage() {
           id: t.id,
           reference: t.reference,
           title: t.title,
-          clientName: t.client.name,
+          // Z1.4b: client may be null on rows whose dual-FK doesn't
+          // resolve (RLS-invisible, unbackfilled). Fall back to "Unknown"
+          // so the queue still renders that row's other columns.
+          clientName: t.client?.name ?? "Unknown",
           categoryName: t.category?.name ?? null,
           priority: t.priority,
           status: t.status,

@@ -83,6 +83,29 @@ export async function matchTeamMemberByEmail(
 }
 
 /**
+ * Batch id lookup. Returns a Map keyed by id — callers can `.get(id)`
+ * without needing to array-search. Missing ids are simply absent from
+ * the Map. Empty input returns empty Map.
+ *
+ * Z1.4b addition — see docs/shared-platform-boundary.md §7.9.
+ * Post-M7, this maps to `GET /api/v1/team-members?ids=...`.
+ */
+export async function getTeamMembersByIds(
+  ctx: WrapperContext,
+  ids: readonly string[]
+): Promise<Map<string, TeamMember>> {
+  if (ids.length === 0) return new Map();
+  const rows = await withRls(
+    { tenantId: ctx.tenantId, userId: ctx.actor?.teamMemberId ?? null, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.teamMember.findMany({
+        where: { tenantId: ctx.tenantId, id: { in: [...ids] } },
+      })
+  );
+  return new Map(rows.map((r) => [r.id, toDto(r)]));
+}
+
+/**
  * Count helper. Used internally by the last-Super-Admin guard and
  * exposed for admin dashboards / consumer checks.
  */

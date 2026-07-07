@@ -9,7 +9,14 @@ import { sendTicketGuestInviteEmail, sendClientReplyNotification } from "@/lib/e
 import { notify } from "@/lib/notifications";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
-import { resolveMessageSender } from "@/lib/message-sender";
+import {
+  systemContext,
+  getEndUser,
+  getEndUsersByIds,
+  getTeamMember,
+  getTeamMembersByIds,
+} from "@/lib/shared-platform";
+import { resolveMessageSender } from "@/lib/z1-view-models";
 import { dualFkForUser, inviterCols } from "@/lib/z1-dual-fk";
 import type { TenantBranding } from "@/generated/prisma";
 import crypto from "node:crypto";
@@ -119,28 +126,41 @@ export type GuestTicketView = {
     senderRole: string;
     isInternal: boolean;
     createdAt: string;
+    // Z1.4b: adapter shape — MessageSender collapsed to what the guest
+    // page's ConversationThread already renders. SYSTEM rows surface
+    // as null (matching pre-Z1.4b behavior); Guest / EndUser / TeamMember
+    // all show up as { name, avatarUrl } — avatarUrl always null (§7.10).
     sender: { name: string; avatarUrl: string | null } | null;
     attachments: { id: string; fileName: string; mimeType: string; sizeBytes: number; fileUrl: string }[];
   }[];
 };
+
+/** MessageSender → GuestTicketView.messages[].sender adapter. */
+function adaptSenderForGuest(
+  sender: import("@/lib/z1-view-models").MessageSender
+): { name: string; avatarUrl: string | null } | null {
+  if (sender.kind === "SYSTEM") return null;
+  return { name: sender.name ?? "Unknown", avatarUrl: sender.avatarUrl };
+}
 
 /** Public, token-authenticated ticket view for a guest — no session cookie involved anywhere in this path. */
 export async function getGuestTicketView(rawToken: string): Promise<GuestTicketView | null> {
   const guest = await resolveGuestSession(rawToken);
   if (!guest) return null;
 
+  // Z1.4b: identity via wrapper. GUEST RLS role can still read the
+  // ticket row (that path stays), but sender + client identity route
+  // through the wrapper's system context.
   const ticket = await withRls(
     { tenantId: guest.tenantId, userId: null, role: "GUEST", guestTicketId: guest.ticketId },
     async (tx) => {
       const t = await tx.ticket.findFirst({
         where: { id: guest.ticketId },
         include: {
-          client: { select: { name: true } },
           messages: {
             where: { isInternal: false },
             orderBy: { createdAt: "asc" },
             include: {
-              sender: { select: { name: true, avatarUrl: true } },
               guest: { select: { name: true, email: true } },
               attachments: true,
             },
@@ -152,6 +172,24 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
   );
   if (!ticket) return null;
 
+  const wrapperCtx = systemContext(guest.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  if (ticket.clientEndUserId) endUserIds.add(ticket.clientEndUserId);
+  if (ticket.clientTeamMemberId) teamMemberIds.add(ticket.clientTeamMemberId);
+  for (const m of ticket.messages) {
+    if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
+    if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+  const clientName =
+    (ticket.clientEndUserId && endUsers.get(ticket.clientEndUserId)?.name) ||
+    (ticket.clientTeamMemberId && teamMembers.get(ticket.clientTeamMemberId)?.name) ||
+    null;
+
   const messages = await Promise.all(
     ticket.messages.map(async (m) => ({
       id: m.id,
@@ -159,7 +197,18 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: resolveMessageSender(m),
+      sender: adaptSenderForGuest(
+        resolveMessageSender(
+          {
+            senderEndUserId: m.senderEndUserId,
+            senderTeamMemberId: m.senderTeamMemberId,
+            guest: m.guest,
+            senderRole: m.senderRole,
+          },
+          endUsers,
+          teamMembers,
+        ),
+      ),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
@@ -178,7 +227,7 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
     status: ticket.status,
     priority: ticket.priority,
     description: ticket.description,
-    clientName: ticket.client.name,
+    clientName: clientName ?? "Unknown",
     guestName: guest.name ?? guest.email,
     messages,
   };
@@ -197,7 +246,6 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
           where: { isInternal: false },
           orderBy: { createdAt: "asc" },
           include: {
-            sender: { select: { name: true, avatarUrl: true } },
             guest: { select: { name: true, email: true } },
             attachments: true,
           },
@@ -207,6 +255,19 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
   );
   if (!ticket) return null;
 
+  // Z1.4b: batch-resolve senders via wrapper.
+  const wrapperCtx = systemContext(guest.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  for (const m of ticket.messages) {
+    if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
+    if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+
   return Promise.all(
     ticket.messages.map(async (m) => ({
       id: m.id,
@@ -214,7 +275,18 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: resolveMessageSender(m),
+      sender: adaptSenderForGuest(
+        resolveMessageSender(
+          {
+            senderEndUserId: m.senderEndUserId,
+            senderTeamMemberId: m.senderTeamMemberId,
+            guest: m.guest,
+            senderRole: m.senderRole,
+          },
+          endUsers,
+          teamMembers,
+        ),
+      ),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
@@ -266,7 +338,10 @@ export async function postGuestReply(
         });
       }
 
-      const assignedAgent = ticket.assignedToId ? await tx.user.findUnique({ where: { id: ticket.assignedToId } }) : null;
+      // Z1.4b: assignedTeamMemberId → wrapper TeamMember (preserved id).
+      const assignedAgent = ticket.assignedTeamMemberId
+        ? await getTeamMember(systemContext(guest.tenantId), ticket.assignedTeamMemberId)
+        : null;
       if (assignedAgent) {
         await notify(tx, {
           tenantId: guest.tenantId,

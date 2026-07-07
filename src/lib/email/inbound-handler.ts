@@ -17,6 +17,11 @@ import {
   actorCols,
   ticketClientCols,
 } from "@/lib/z1-dual-fk";
+import {
+  systemContext,
+  getEndUser,
+  getTeamMember,
+} from "@/lib/shared-platform";
 import type { EmailReceivedEvent } from "resend";
 
 type ReceivedEmailEventData = EmailReceivedEvent["data"];
@@ -171,7 +176,10 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
           },
         });
 
-        const assignedAgent = ticket.assignedToId ? await tx.user.findUnique({ where: { id: ticket.assignedToId } }) : null;
+        // Z1.4b: assignedTeamMemberId → wrapper TeamMember (preserved id).
+        const assignedAgent = ticket.assignedTeamMemberId
+          ? await getTeamMember(systemContext(existingTicket.tenantId), ticket.assignedTeamMemberId)
+          : null;
         if (assignedAgent) {
           await notify(tx, {
             tenantId: existingTicket.tenantId,
@@ -202,10 +210,11 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
     const t = await tx.tenant.findUniqueOrThrow({ where: { id: tenant.id } });
 
     const senderDual = dualFkForUser(sender.id, sender.role);
-    const senderCompany = await tx.user.findUnique({
-      where: { id: sender.id },
-      select: { companyId: true },
-    });
+    // Z1.4b: organizationId sourced from wrapper's EndUser.organizationId.
+    // Non-CLIENT senders (Employee Service Suite path) get null.
+    const wrapperCtx = systemContext(tenant.id);
+    const senderEndUser =
+      sender.role === "CLIENT" ? await getEndUser(wrapperCtx, sender.id) : null;
 
     const ticket = await createWithReference(t.name, ({ reference, ticketNumber }) =>
       tx.ticket.create({
@@ -217,7 +226,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
           description: body,
           clientId: sender.id,
           ...ticketClientCols(senderDual),
-          organizationId: senderCompany?.companyId ?? null,
+          organizationId: senderEndUser?.organizationId ?? null,
           status: "OPEN",
           source: "email",
         },

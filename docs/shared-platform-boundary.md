@@ -381,3 +381,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 - Not "we bent the model because reads would have broken." Reads still migrate to the wrapper in Z1.4b regardless.
 
 **Downstream Z1.5 implication:** the `tickets_client_exclusive` CHECK's Z1.5 tightening drops `clientId` from the arg list but keeps both `clientEndUserId` and `clientTeamMemberId` — same pattern as `messages_sender_exclusive`'s guest-inclusion (§7.2). Both flavors are permanent.
+
+### 7.8 Admin/Team-page CRUD deferred to Z1.6 — MUST land before Z1.5
+
+**What's deferred**: every `tx.user.*` CRUD call in `src/actions/admin.ts` that backs the Team page and admin flows. Specifically:
+
+- `listTeam()` / `listPendingUsers()` — reads the tenant's `users` rows with legacy `Role` enum + status
+- `inviteUser()` — creates a legacy `User` row with `role`, `status: INVITED`, matched via `matchCompanyByEmail`
+- `updateUser()` — role change, status change, name/email edits (last-Super-Admin guard lives here)
+- `approveUser()` / `rejectUser()` — flips `PENDING` → `ACTIVE`/`REJECTED`, emails notification
+- `resendInvite()` / `revokeInvite()` / `reinviteUser()` — invite-flow lifecycle
+- `bulkChangeRole()` / `bulkDeactivate()` / `deleteUser()` — admin-only bulk / destructive operations
+- The Team page's server component and its `updateUser` / `deleteUser` action wiring
+
+**Why deferred**: Z1.4b's scope is a mechanical "Prisma include → wrapper read" swap on ticket/message/audit_log/attachment/notification read paths. Admin CRUD is a different shape entirely — it requires porting invite flows, role-change guards, bulk operations, and Team-page UI onto `createTeamMember` / `updateTeamMember` / `listTeamMembers` / `listEndUsers`. That expands the PR beyond "swap reads to wrapper" into "port the entire admin surface," which triples the review surface and couples two independent decisions into one PR.
+
+**Why Z1.6, not Z1.5**: Z1.5's job is dropping the legacy `users` + `companies` tables and tightening the CHECK constraints. Once those tables are gone, `listTeam()` / `inviteUser()` / all the flows above hard-crash — the Team page shows a stack trace. Z1.6 (this admin refactor) is the **hard blocker** for Z1.5: Z1.5 cannot start until Z1.6 has landed and been verified. If Z1.5 ships first, the Team page breaks in production.
+
+**Named milestone**: this refactor is now **Z1.6 (Admin/Team page consumer refactor)** — documenting the name in this boundary doc so it can't be silently deferred further. Any future scope-shuffle proposal that would push admin CRUD past Z1.6 needs to update this section explicitly and identify a new blocker gate for Z1.5.
+
+**Ordering guarantee**: the merged ordering is Z1.4a (✓) → Z1.4b → Z1.6 → Z1.5. Z1.5 has a documented dependency on Z1.6 landing first, not just on Z1.4b.
+
+### 7.9 Scoping-miss note: batch id lookups added in Z1.4b, not Z1.2
+
+**What happened:** Z1.2 shipped `getEndUser(ctx, id)` / `getTeamMember(ctx, id)` / `getOrganization(ctx, id)` as single-id readers. That's all any online-use consumer needed at Z1.2 time. Batch lookups weren't in scope.
+
+**What Z1.4b surfaced:** consumer-read migration needs to resolve N ids per list view (attachments per ticket, senders per message thread, actors per audit-log page). Doing N single-id wrapper calls would be N+1 by construction — one Prisma read for the list + N wrapper reads per row. The clean pattern is one SELECT for the list, then one batched wrapper call per identity kind.
+
+**The fix:** add `getEndUsersByIds(ctx, ids)` / `getTeamMembersByIds(ctx, ids)` / `getOrganizationsByIds(ctx, ids)` to the wrapper. Each accepts a `readonly string[]`, returns `Map<string, DTO>` (missing ids simply absent from the Map — no throw). Empty input short-circuits with an empty Map, no DB roundtrip. Same tenant-scoped RLS session shape as the single-id functions.
+
+**Framing:** same shape as §7.6 (`id?` on Create*Input added in Z1.3, not Z1.2). Z1.2 was scoped for online use and got that right; Z1.4b surfaced a legitimate additional need that the original scope didn't anticipate. Additive, non-breaking — no Z1.2 consumer changes behavior. Post-M7, these map cleanly to `GET /api/v1/end-users?ids=...` / `?ids=...` on the respective endpoints, which is how real HTTP APIs support this pattern (JSON:API sparse fieldsets, GraphQL DataLoader, plain `?ids=` — all converge on the same shape).
+
+**No penalty owed to Z1.2:** already merged, but this is an additive extension — no consumer of the original three single-id functions is affected. No amendment to prior PRs needed.
+
+### 7.10 Post-Z1.5 follow-up: avatarUrl needs a wrapper migration path
+
+**What's deferred:** the wrapper's `EndUser` / `TeamMember` DTOs do not currently expose `avatarUrl`. Legacy `users.avatarUrl` was displayed on every message row, ticket-detail sidebar, agent leaderboard, and audit-log entry. Z1.4b's `UserLike` view-model returns `avatarUrl: null` uniformly — Support UI degrades gracefully to initials-only for the duration of Z1.4b → Z1.5 → the post-Z1.5 avatar migration.
+
+**Why Z1.4b can't fix this:** avatarUrl lives on the Shared-Platform-owned table (`end_users` / `team_members` if we were to add it) or on a separate `UserPreference` join table. Adding a column to the Shared Platform's schema is a cross-repo migration (Shared Platform ships a schema change; Support pulls the mirror; both re-generate Prisma). That's the exact class of cross-repo work Z1.4b is trying NOT to bundle in — Z1.4b is a Support-only consumer read migration.
+
+**Why not fix it now via a legacy avatarUrl fallback:** would put a legacy `tx.user.findMany({ ... }, select: { id, avatarUrl })` read alongside every wrapper call. That's exactly the "bypass wrapper" anti-pattern §7.5's carve-out was written to prevent from spreading. If we allow it here it stays live through Z1.5 (which drops the `users` table), meaning either Z1.5 gets blocked or the avatarUrl reads silently break at Z1.5.
+
+**Fix path (named milestone):** **Z1.7 (avatarUrl wrapper migration)**. Two options that need a Shared Platform review at the start of that milestone — Z1.7's design pass picks between them:
+- (a) Add `avatarUrl String?` directly to `end_users` / `team_members` in Shared Platform. Simple, ships fast, mildly polluting to the identity DTO surface with a UI concern.
+- (b) Introduce a `user_preferences` (or `avatars`) table in Shared Platform keyed by `(tenantId, endUserId | teamMemberId)`. Wrapper adds `getAvatarUrlsByIds(ctx, ids[])`. More flexible if UI ever needs more per-person UI state (dark-mode preference, notification prefs, etc.) — matches how a real product tends to accumulate these fields.
+
+**Ordering:** Z1.7 lands after Z1.5 (drops legacy tables) since the legacy `users.avatarUrl` becomes unreachable at Z1.5 anyway. There's no fixed calendar gate on Z1.7 — Support just runs with initials-only avatars until it lands. Named here so it can't be silently forgotten.
+
+**Concrete signal that Z1.7 needs to be scheduled:** the first "why did avatars disappear?" internal user report. Until then, it's a background item.

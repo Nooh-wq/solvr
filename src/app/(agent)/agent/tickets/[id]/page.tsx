@@ -4,7 +4,6 @@ import { listTicketGuests } from "@/actions/guest";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
-import { resolveMessageSender } from "@/lib/message-sender";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { ClientProfileCard } from "./client-profile-card";
@@ -17,7 +16,11 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   const [ticket, agents, guests] = await Promise.all([getTicket(id), listAgents(), listTicketGuests(id)]);
   if (!ticket) notFound();
 
-  const mentionNames = participantNames(ticket.client.name, ticket.messages);
+  // Z1.4b: ticket.client is now UserLike | null (wrapper-resolved).
+  // "Unknown" fallback covers dual-FK rows whose target row is missing
+  // (RLS-invisible / not yet backfilled).
+  const clientName = ticket.client?.name ?? "Unknown";
+  const mentionNames = participantNames(clientName, ticket.messages);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -35,17 +38,27 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
 
         <ConversationThread
           description={ticket.description}
-          clientName={ticket.client.name}
+          clientName={clientName}
           mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
           mentionNames={mentionNames}
-          onPoll={getTicketMessages.bind(null, ticket.id)}
+          onPoll={async () => {
+            "use server";
+            const msgs = await getTicketMessages(ticket.id);
+            if (!msgs) return null;
+            return msgs.map((m) => ({
+              ...m,
+              sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
+            }));
+          }}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,
             senderRole: m.senderRole,
             isInternal: m.isInternal,
             createdAt: m.createdAt.toISOString(),
-            sender: resolveMessageSender(m),
+            // Sender is pre-resolved by getTicket() (MessageSender union).
+            // Adapt to ConversationThread's simpler shape: name+avatar.
+            sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
             attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
           }))}
           composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} />}
@@ -58,15 +71,19 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           status={ticket.status}
           priority={ticket.priority}
           assignedToId={ticket.assignedToId}
-          agents={agents.map((a) => ({ id: a.id, name: a.name }))}
+          agents={agents.map((a) => ({ id: a.id, name: a.name ?? a.email }))}
         />
 
         <ClientProfileCard
           client={{
-            name: ticket.client.name,
-            email: ticket.client.email,
-            company: ticket.client.company,
-            avatarUrl: ticket.client.avatarUrl,
+            name: clientName,
+            email: ticket.client?.email ?? "",
+            // Z1.4b: `company` is no longer exposed on UserLike — Organization
+            // is a first-class relation on the ticket now. Passing the
+            // organization name preserves the card's "company line" UX.
+            company: ticket.organization?.name ?? null,
+            // avatarUrl: always null in Z1.4b. See boundary doc §7.10.
+            avatarUrl: null,
           }}
           ticketMeta={{
             createdAt: ticket.createdAt.toISOString(),
