@@ -195,11 +195,12 @@ The staging tenant needs a SUPER_ADMIN with a known password for the localhost v
 
 ---
 
-## What happens after this doc
+## What happened after this doc
 
-1. Owner reviews this doc.
-2. Owner picks one option per question (or confirms recommended set B).
-3. Each decision gets recorded as an ADR under `docs/adrs/` — three ADRs total, one per question. ADRs cite this doc as the neutral option matrix + the specific pick as the ratified decision.
-4. `docs/shared-platform-boundary.md` §7.12 gets updated to reflect the chosen shape, and the "key design questions" list is replaced with a "resolved decisions" list pointing at the ADRs.
-5. Z1.8 implementation plan gets scoped against the ratified decisions. If the design pass reveals cleanly separable sub-concerns (per boundary §7.11's split-Z1.8a/Z1.8b option), scope accordingly.
-6. Only then does migration code start being written. Staging tenant script comes first; production tenant migration after verified staging apply.
+- **Set B was ratified** on 2026-07-07. Consolidated into a single ADR rather than three (Q1/Q2/Q3 are one coherent architectural commitment, not three independent decisions).
+- **ADR-001**: [`docs/adrs/adr-001-z1-8-auth-model-set-b.md`](../adrs/adr-001-z1-8-auth-model-set-b.md). Cites this doc as the neutral option matrix. Documents the coupling analysis, the rejection of Sets A and C, what Set B defers, and how Support/HRMS/CRM should evolve while §7.14 M-auth-migration is pending.
+- **§7.14 M-auth-migration** filed in `docs/shared-platform-boundary.md` as a durable open item. Parallel to §7.3 tenant-ownership migration. Names the triggers that will start the "should Shared Platform grow an auth service?" design pass. Rejects the temptation to answer the question upfront — Set B is honest about being an intermediate state.
+- **§7.12 Z1.8 scope** updated: "key design questions" replaced with "resolved decisions" pointing at ADR-001.
+- **Staging fixtures spec**: [`docs/design/z1-8-staging-fixtures.md`](z1-8-staging-fixtures.md). Seven-user fixture set covering identity migration, invite-accept, approve/reject, reactivation, active OTP verify, and expired-invite edge case. `scripts/z1_8_staging_tenant.mjs` to be authored at implementation time.
+
+**Next**: Z1.8 implementation plan scoped against these decisions. The split-into-Z1.8a/Z1.8b option (per boundary §7.11) stays on the table until the implementation plan reveals whether the concern graph is cleanly separable. Migration code doesn't start until the implementation plan is reviewed and approved.
