@@ -27,32 +27,91 @@ function getSecret() {
   return new TextEncoder().encode(secret);
 }
 
+/**
+ * Z1.8 Set B — session cookies carry a subject-neutral identifier
+ * ({subjectId, subjectKind}) instead of the pre-Z1.8 legacy userId.
+ * See docs/adrs/adr-001-z1-8-auth-model-set-b.md.
+ */
+export type SubjectKind = "END_USER" | "TEAM_MEMBER";
+
 export type SessionPayload = {
-  userId: string;
+  subjectId: string;
+  subjectKind: SubjectKind;
   tenantId: string;
   /** JWT issued-at (seconds since epoch). Used to invalidate sessions issued before a password change — see getSessionUser(). */
   iat?: number;
 };
 
+/**
+ * Decoded session payload. `subjectKind` is undefined only for old-shape
+ * cookies decoded during Z1.8a's 7-day grace period — getSessionUser()
+ * resolves those via preserved-id wrapper lookup.
+ * Removal target: [Z1.8a deploy] + 7 days. Tracked in boundary doc §7.15.
+ */
+export type DecodedSessionPayload = {
+  subjectId: string;
+  subjectKind: SubjectKind | undefined;
+  tenantId: string;
+  iat?: number;
+};
+
 export async function signSessionToken(payload: SessionPayload): Promise<string> {
-  return new SignJWT({ ...payload, purpose: "session" })
+  return new SignJWT({
+    subjectId: payload.subjectId,
+    subjectKind: payload.subjectKind,
+    tenantId: payload.tenantId,
+    purpose: "session",
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DURATION_SECONDS}s`)
     .sign(getSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
+/**
+ * Z1.8a grace-period decode. Accepts both:
+ *   - New-shape: {subjectId, subjectKind, tenantId}
+ *   - Old-shape: {userId, tenantId}  — subjectKind returned undefined,
+ *     resolved via wrapper lookup in getSessionUser (subjectId comes from
+ *     the legacy userId, which Z1.3 preserved into end_users.id /
+ *     team_members.id).
+ * The old-shape branch is a 7-day fallback; after removal, only new-shape
+ * verifies. See boundary doc §7.15.
+ */
+export async function verifySessionToken(token: string): Promise<DecodedSessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
-    if (typeof payload.userId !== "string" || typeof payload.tenantId !== "string") return null;
-    // Session and password-reset tokens share the same {userId, tenantId}
-    // shape — without this check, a leaked reset-link token could be pasted
-    // in as a session cookie value and log the attacker in directly, without
-    // ever needing to know (or reset) the password. Tokens signed before this
-    // check existed have no `purpose` claim at all, so those still verify.
+    // Session and password-reset tokens share JWT machinery — without this
+    // check, a leaked reset-link token could be pasted in as a session
+    // cookie and log the attacker in. Tokens signed before this check
+    // existed have no `purpose` claim, so those still verify.
     if (payload.purpose !== undefined && payload.purpose !== "session") return null;
-    return { userId: payload.userId, tenantId: payload.tenantId, iat: payload.iat };
+    if (typeof payload.tenantId !== "string") return null;
+
+    // New-shape (Z1.8a onwards)
+    if (typeof payload.subjectId === "string" && typeof payload.subjectKind === "string") {
+      if (payload.subjectKind !== "END_USER" && payload.subjectKind !== "TEAM_MEMBER") return null;
+      return {
+        subjectId: payload.subjectId,
+        subjectKind: payload.subjectKind,
+        tenantId: payload.tenantId,
+        iat: payload.iat,
+      };
+    }
+
+    // Old-shape (grace period): legacy {userId, tenantId}. subjectId
+    // comes from userId (Z1.3-preserved), subjectKind is resolved by
+    // getSessionUser via wrapper dual-lookup.
+    if (typeof payload.userId === "string") {
+      return {
+        subjectId: payload.userId,
+        subjectKind: undefined,
+        tenantId: payload.tenantId,
+        iat: payload.iat,
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -77,7 +136,7 @@ export async function destroySessionCookie() {
 }
 
 /** Reads + verifies the session from a Server Component / Server Action context. */
-export async function getSessionPayload(): Promise<SessionPayload | null> {
+export async function getSessionPayload(): Promise<DecodedSessionPayload | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
   if (!token) return null;
@@ -85,7 +144,7 @@ export async function getSessionPayload(): Promise<SessionPayload | null> {
 }
 
 /** Edge-safe read for middleware, which can't use next/headers' cookies(). */
-export async function getSessionPayloadFromRequest(request: NextRequest): Promise<SessionPayload | null> {
+export async function getSessionPayloadFromRequest(request: NextRequest): Promise<DecodedSessionPayload | null> {
   const token = request.cookies.get(COOKIE_NAME)?.value;
   if (!token) return null;
   return verifySessionToken(token);

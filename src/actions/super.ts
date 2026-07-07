@@ -16,7 +16,7 @@ const DEFAULT_CATEGORIES = ["Technical", "Billing", "General", "Other"];
 /** Every super.* action requires SUPER_ADMIN role AND that the caller belongs to the INTERNAL host tenant — a client tenant's SUPER_ADMIN (if one ever existed) still couldn't provision tenants (TRD §2.5, §5.4). */
 async function requireHostSuperAdmin() {
   const session = await requireSession({ minRole: "SUPER_ADMIN" });
-  const tenant = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const tenant = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } })
   );
   if (tenant.type !== "INTERNAL") throw new Error("FORBIDDEN");
@@ -26,12 +26,20 @@ async function requireHostSuperAdmin() {
 export async function listTenantsWithHealth() {
   const session = await requireHostSuperAdmin();
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     // Three fixed queries instead of 2N+1: the old per-tenant Promise.all fired
     // a pair of counts concurrently for every tenant on the same interactive-tx
     // connection — both an unsupported Prisma pattern and O(tenants) round-trips.
     // groupBy rolls all the counts into one query each.
-    const tenants = await tx.tenant.findMany({ orderBy: { createdAt: "asc" } });
+    // Z1.8a: filter out staging tenants seeded by scripts/z1_8_staging_tenant.mjs.
+    // Permanent (not env-conditional) — staging tenants have no operational
+    // value in the SUPER_ADMIN health dashboard, and env-conditional hiding
+    // would show them in dev/localhost where confusion between "real" and
+    // "staging" is most likely to cause a wrong-target action.
+    const tenants = await tx.tenant.findMany({
+      where: { slug: { not: { startsWith: "_z18-staging-" } } },
+      orderBy: { createdAt: "asc" },
+    });
     const userCounts = await tx.user.groupBy({ by: ["tenantId"], _count: true });
     const ticketCounts = await tx.ticket.groupBy({ by: ["tenantId"], _count: true });
     const userByTenant = new Map(userCounts.map((u) => [u.tenantId, u._count]));
@@ -51,7 +59,7 @@ export async function createTenant(input: z.infer<typeof createTenantSchema>) {
   const tempPassword = crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  const tenant = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  const tenant = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const existing = await tx.tenant.findUnique({ where: { slug: data.slug } });
     if (existing) throw new Error("A tenant with this slug already exists.");
 
@@ -98,7 +106,7 @@ export async function setTenantStatus(tenantId: string, status: "ACTIVE" | "SUSP
   const session = await requireHostSuperAdmin();
   if (tenantId === session.tenantId) throw new Error("Cannot change the host tenant's own status.");
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     await tx.tenant.update({ where: { id: tenantId }, data: { status } });
     revalidatePath("/admin/super");
     return { ok: true };
@@ -117,7 +125,7 @@ export async function setTenantStatus(tenantId: string, status: "ACTIVE" | "SUSP
 export async function startImpersonation(tenantId: string) {
   const session = await requireHostSuperAdmin();
 
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const target = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
     if (target.type !== "CLIENT") throw new Error("Can only impersonate a client tenant.");
 
@@ -132,15 +140,15 @@ export async function startImpersonation(tenantId: string) {
       // Z1.4a: super.ts is SUPER_ADMIN-only (staff).
       data: {
         tenantId,
-        actorId: session.id,
-        actorTeamMemberId: session.id,
+        actorId: session.subjectId,
+        actorTeamMemberId: session.subjectId,
         action: "IMPERSONATION_START",
         toValue: `${session.name} <${session.email}>`,
       },
     });
   });
 
-  await createImpersonationCookie({ impersonatorUserId: session.id, targetTenantId: tenantId });
+  await createImpersonationCookie({ impersonatorUserId: session.subjectId, targetTenantId: tenantId });
   redirect("/admin");
 }
 
@@ -149,12 +157,12 @@ export async function stopImpersonation() {
   const session = await requireSession();
   if (!session.isImpersonating) throw new Error("Not currently impersonating.");
 
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.auditLog.create({
       data: {
         tenantId: session.tenantId,
-        actorId: session.id,
-        actorTeamMemberId: session.id,
+        actorId: session.subjectId,
+        actorTeamMemberId: session.subjectId,
         action: "IMPERSONATION_END",
         toValue: `${session.name} <${session.email}>`,
       },

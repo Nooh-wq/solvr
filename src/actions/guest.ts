@@ -44,10 +44,10 @@ export async function inviteTicketGuest(
 
   let result: { reference: string; branding: TenantBranding | null };
   try {
-    result = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    result = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
-      if (session.role === "CLIENT" && ticket.clientId !== session.id) throw new Error("NOT_FOUND");
+      if (session.role === "CLIENT" && ticket.clientId !== session.subjectId) throw new Error("NOT_FOUND");
 
       await tx.ticketGuest.create({
         data: {
@@ -56,8 +56,8 @@ export async function inviteTicketGuest(
           email: data.email,
           name: data.name,
           tokenHash,
-          invitedById: session.id,
-          ...inviterCols(dualFkForUser(session.id, session.role)),
+          invitedById: session.subjectId,
+          ...inviterCols(dualFkForUser(session.subjectId, session.role)),
         },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
@@ -79,7 +79,7 @@ export type TicketGuestSummary = { id: string; email: string; name: string | nul
 
 export async function listTicketGuests(ticketId: string): Promise<TicketGuestSummary[]> {
   const session = await requireSession();
-  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticketGuest.findMany({ where: { ticketId, tenantId: session.tenantId }, orderBy: { createdAt: "desc" } })
   );
   return rows.map((g) => ({ id: g.id, email: g.email, name: g.name, createdAt: g.createdAt.toISOString(), revoked: g.revokedAt !== null }));
@@ -87,7 +87,7 @@ export async function listTicketGuests(ticketId: string): Promise<TicketGuestSum
 
 export async function revokeTicketGuest(guestId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession();
-  const result = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const result = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticketGuest.updateMany({
       where: { id: guestId, tenantId: session.tenantId },
       data: { revokedAt: new Date() },

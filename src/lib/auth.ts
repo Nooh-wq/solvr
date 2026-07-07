@@ -4,7 +4,15 @@ import { getSessionPayload, getImpersonationPayload } from "@/lib/session";
 import type { LegacyRole as Role } from "@/generated/prisma";
 
 export type SessionUser = {
-  id: string;
+  /**
+   * Z1.8 Set B — the neutral subject id. For CLIENT users this is the
+   * end_users.id; for staff this is the team_members.id. Preserved-ids
+   * from Z1.3 mean both also equal the legacy users.id until Z1.5 drops it.
+   * Was formerly named `id` — renamed alongside the session cookie shape
+   * change so consumers name their intent (session subject) rather than
+   * the (soon-legacy) users.id.
+   */
+  subjectId: string;
   tenantId: string;
   email: string;
   name: string;
@@ -35,8 +43,8 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   // establishes RLS scope for this one lookup — the DB hasn't told us the
   // caller's role yet, so this is the one query that can't wait for
   // requireSession() to know it. The users-table policy only checks tenantId.
-  const dbUser = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, (tx) =>
-    tx.user.findUnique({ where: { id: payload.userId } })
+  const dbUser = await withRls({ tenantId: payload.tenantId, userId: payload.subjectId }, (tx) =>
+    tx.user.findUnique({ where: { id: payload.subjectId } })
   );
   if (!dbUser || dbUser.status !== "ACTIVE" || dbUser.tenantId !== payload.tenantId) return null;
 
@@ -58,8 +66,8 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const shouldTouchActive =
     !dbUser.lastActiveAt || now.getTime() - dbUser.lastActiveAt.getTime() > staleThresholdMs;
   if (shouldTouchActive) {
-    withRls({ tenantId: payload.tenantId, userId: payload.userId }, (tx) =>
-      tx.user.update({ where: { id: payload.userId }, data: { lastActiveAt: now } })
+    withRls({ tenantId: payload.tenantId, userId: payload.subjectId }, (tx) =>
+      tx.user.update({ where: { id: payload.subjectId }, data: { lastActiveAt: now } })
     ).catch(() => {
       // Non-fatal.
     });
@@ -72,7 +80,7 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   if (!tenant || tenant.status === "SUSPENDED") return null;
 
   const baseSession: SessionUser = {
-    id: dbUser.id,
+    subjectId: dbUser.id,
     tenantId: dbUser.tenantId,
     email: dbUser.email,
     name: dbUser.name,

@@ -9,14 +9,14 @@ import { upsertKbArticleSchema } from "@/lib/validation/kb";
 
 export async function listKbArticles() {
   const session = await requireSession({ minRole: "ADMIN" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.kbArticle.findMany({ where: { tenantId: session.tenantId }, orderBy: { updatedAt: "desc" } })
   );
 }
 
 export async function getKbArticle(id: string) {
   const session = await requireSession({ minRole: "ADMIN" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.kbArticle.findFirst({ where: { id, tenantId: session.tenantId } })
   );
 }
@@ -27,7 +27,7 @@ export async function upsertKbArticle(input: z.infer<typeof upsertKbArticleSchem
   const data = upsertKbArticleSchema.parse(input);
   const chunks = chunkArticleBody(data.body);
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const article = data.id
       ? await tx.kbArticle.update({
           where: { id: data.id },
@@ -49,7 +49,7 @@ export async function upsertKbArticle(input: z.infer<typeof upsertKbArticleSchem
 
 export async function deleteKbArticle(id: string) {
   const session = await requireSession({ minRole: "ADMIN" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     await tx.kbArticle.deleteMany({ where: { id, tenantId: session.tenantId } });
     revalidatePath("/admin/kb");
     return { ok: true };

@@ -181,6 +181,11 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
     };
   }
 
-  await createSessionCookie({ userId: created.userId, tenantId: created.tenantId });
+  // Tenant signup creates the initial SUPER_ADMIN — always a TEAM_MEMBER.
+  await createSessionCookie({
+    subjectId: created.userId,
+    subjectKind: "TEAM_MEMBER",
+    tenantId: created.tenantId,
+  });
   return { ok: true, redirectTo: "/admin" };
 }

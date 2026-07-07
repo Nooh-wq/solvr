@@ -16,6 +16,8 @@ import {
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import { passwordSchema } from "@/lib/validation/password";
+import { roleToSubjectKind } from "@/lib/z1-dual-fk";
+import type { LegacyRole } from "@/generated/prisma";
 import {
   sendRegistrationPendingEmail,
   sendRegistrationApprovedEmail,
@@ -235,7 +237,11 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
 
   if (result.autoApproved) {
     await sendRegistrationApprovedEmail(result.email, result.branding);
-    await createSessionCookie({ userId: payload.userId, tenantId: payload.tenantId });
+    await createSessionCookie({
+      subjectId: payload.userId,
+      subjectKind: roleToSubjectKind(result.role as LegacyRole),
+      tenantId: payload.tenantId,
+    });
     return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
   }
 
@@ -298,7 +304,11 @@ export async function login(input: z.infer<typeof loginSchema>) {
   // already proven correct" ordering exists to avoid.
   if (dbUser.status === "INVITED") return { error: "Please accept your invite email first to set up your account." };
 
-  await createSessionCookie({ userId: dbUser.id, tenantId: dbUser.tenantId });
+  await createSessionCookie({
+    subjectId: dbUser.id,
+    subjectKind: roleToSubjectKind(dbUser.role),
+    tenantId: dbUser.tenantId,
+  });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[dbUser.role] };
 }
 
@@ -376,7 +386,11 @@ export async function confirmPasswordReset(
 
   if (result.failed) return { error: result.message };
 
-  await createSessionCookie({ userId: payload.userId, tenantId: payload.tenantId });
+  await createSessionCookie({
+    subjectId: payload.userId,
+    subjectKind: roleToSubjectKind(result.role as LegacyRole),
+    tenantId: payload.tenantId,
+  });
   return { ok: true as const, redirectTo: REDIRECT_BY_ROLE[result.role] };
 }
 
@@ -495,6 +509,10 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
 
   if (result.failed) return { error: result.message };
 
-  await createSessionCookie({ userId: payload.userId, tenantId: payload.tenantId });
+  await createSessionCookie({
+    subjectId: payload.userId,
+    subjectKind: roleToSubjectKind(result.role as LegacyRole),
+    tenantId: payload.tenantId,
+  });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
 }

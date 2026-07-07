@@ -114,7 +114,7 @@ export async function listTeam() {
     listEndUsers(wrapperCtx, { limit: 200 }),
     listTeamMembers(wrapperCtx, { limit: 200 }),
     withRls(
-      { tenantId: session.tenantId, userId: session.id, role: session.role },
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
       (tx) =>
         tx.user.findMany({
           where: { tenantId: session.tenantId },
@@ -135,7 +135,7 @@ export async function listPendingUsers() {
     listEndUsers(wrapperCtx, { limit: 200 }),
     listTeamMembers(wrapperCtx, { limit: 200 }),
     withRls(
-      { tenantId: session.tenantId, userId: session.id, role: session.role },
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
       (tx) =>
         tx.user.findMany({
           where: { tenantId: session.tenantId, status: "PENDING" },
@@ -229,7 +229,7 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
   let branding: Awaited<ReturnType<typeof getBranding>>;
   try {
     ({ user, branding } = await withRls(
-      { tenantId: session.tenantId, userId: session.id, role: session.role },
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
       async (tx) => {
         const existing = await tx.user.findUnique({
           where: { tenantId_email: { tenantId: session.tenantId, email: data.email } },
@@ -247,11 +247,34 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
             passwordHash: placeholderHash,
             status: "INVITED",
             invitedAt: new Date(),
-            invitedById: session.id,
+            invitedById: session.subjectId,
           },
         });
+        // Z1.8a dual-write: lifecycle row for the new user. Same-tx (not
+        // post-commit) because lifecycle tables are Support-owned — no
+        // cross-boundary concern like the wrapper dual-write below.
+        // Upsert defensively in case a residual staging row exists.
+        const lifecycleData = {
+          tenantId: session.tenantId,
+          status: "INVITED" as const,
+          invitedAt: new Date(),
+          invitedById: session.subjectId,
+        };
+        if (data.role === "CLIENT") {
+          await tx.endUserLifecycle.upsert({
+            where: { subjectId: user.id },
+            create: { subjectId: user.id, ...lifecycleData },
+            update: lifecycleData,
+          });
+        } else {
+          await tx.teamMemberLifecycle.upsert({
+            where: { subjectId: user.id },
+            create: { subjectId: user.id, ...lifecycleData },
+            update: lifecycleData,
+          });
+        }
         await tx.auditLog.create({
-          data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_USER", toValue: user.email },
+          data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_USER", toValue: user.email },
         });
         const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
         return { user, branding };
@@ -392,11 +415,11 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
   const data = updateUserSchema.parse(input);
 
   const { targetRole, updated, roleChanged } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) throw new Error("NOT_FOUND");
-      if (target.id === session.id && data.role && data.role !== target.role) {
+      if (target.id === session.subjectId && data.role && data.role !== target.role) {
         throw new Error("Cannot change your own role.");
       }
 
@@ -429,7 +452,7 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
+            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
             toValue: data.role,
@@ -440,7 +463,7 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
+            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: data.status === "ACTIVE" ? "REACTIVATE_USER" : "DEACTIVATE_USER",
             toValue: target.email,
           },
@@ -477,10 +500,10 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
 export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
-  if (data.userId === session.id) return { ok: false, error: "You can't delete your own account." };
+  if (data.userId === session.subjectId) return { ok: false, error: "You can't delete your own account." };
 
   try {
-    const outcome = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+    const outcome = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) return { ok: false as const, error: "User not found." };
 
@@ -492,8 +515,15 @@ export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{
       }
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "DELETE_USER", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "DELETE_USER", toValue: target.email },
       });
+      // Z1.8a dual-write: delete lifecycle row. deleteMany is idempotent —
+      // no error if the row doesn't exist (e.g. legacy user pre-Z1.8a backfill).
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.deleteMany({ where: { subjectId: target.id } });
+      } else {
+        await tx.teamMemberLifecycle.deleteMany({ where: { subjectId: target.id } });
+      }
       await tx.user.delete({ where: { id: target.id } });
 
       return { ok: true as const, deletedId: target.id, deletedRole: target.role };
@@ -522,7 +552,7 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
   const data = userIdSchema.parse(input);
 
   const { user, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       // Z1.6 matrix tightening: was a silent `WHERE status: "PENDING"`
       // filter that returned null on invalid state. Now uses the shared
@@ -534,10 +564,30 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
 
       const user = await tx.user.update({
         where: { id: target.id },
-        data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.id },
+        data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.subjectId },
       });
+      // Z1.8a dual-write: mirror status + approval fields to lifecycle table.
+      const approveLifecycle = {
+        tenantId: session.tenantId,
+        status: "ACTIVE" as const,
+        approvedAt: new Date(),
+        approvedById: session.subjectId,
+      };
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...approveLifecycle },
+          update: approveLifecycle,
+        });
+      } else {
+        await tx.teamMemberLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...approveLifecycle },
+          update: approveLifecycle,
+        });
+      }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "APPROVE_USER", toValue: user.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "APPROVE_USER", toValue: user.email },
       });
       await notify(tx, {
         tenantId: session.tenantId,
@@ -563,7 +613,7 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
   const data = userIdSchema.parse(input);
 
   const { user, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       // Z1.6 matrix tightening: same shape as approveUser above.
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
@@ -572,10 +622,30 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
 
       const user = await tx.user.update({
         where: { id: target.id },
-        data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.id },
+        data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.subjectId },
       });
+      // Z1.8a dual-write.
+      const rejectLifecycle = {
+        tenantId: session.tenantId,
+        status: "REJECTED" as const,
+        rejectedAt: new Date(),
+        rejectedById: session.subjectId,
+      };
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...rejectLifecycle },
+          update: rejectLifecycle,
+        });
+      } else {
+        await tx.teamMemberLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...rejectLifecycle },
+          update: rejectLifecycle,
+        });
+      }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "REJECT_USER", toValue: user.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "REJECT_USER", toValue: user.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user, branding };
@@ -602,14 +672,14 @@ export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise
   const data = userIdSchema.parse(input);
 
   const { user, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("resendInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_RESENT", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_RESENT", toValue: target.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user: target, branding };
@@ -637,15 +707,21 @@ export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise
   const data = userIdSchema.parse(input);
 
   const outcome = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) return { ok: false as const, error: "User not found." };
       assertActionAllowed("revokeInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "INVITE_REVOKED", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_REVOKED", toValue: target.email },
       });
+      // Z1.8a dual-write: delete lifecycle row before legacy delete.
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.deleteMany({ where: { subjectId: target.id } });
+      } else {
+        await tx.teamMemberLifecycle.deleteMany({ where: { subjectId: target.id } });
+      }
       await tx.user.delete({ where: { id: target.id } });
 
       return { ok: true as const, deletedId: target.id, deletedRole: target.role };
@@ -675,15 +751,33 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
   const data = userIdSchema.parse(input);
 
   const { user, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("reinvite", target.status, { isLastSuperAdmin: false });
 
       const updated = await tx.user.update({ where: { id: target.id }, data: { status: "INVITED" } });
+      // Z1.8a dual-write: reinvite transitions status back to INVITED.
+      const reinviteLifecycle = {
+        tenantId: session.tenantId,
+        status: "INVITED" as const,
+      };
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...reinviteLifecycle },
+          update: reinviteLifecycle,
+        });
+      } else {
+        await tx.teamMemberLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...reinviteLifecycle },
+          update: reinviteLifecycle,
+        });
+      }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "REINVITE_USER", toValue: updated.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "REINVITE_USER", toValue: updated.email },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
       return { user: updated, branding };
@@ -716,7 +810,7 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
   const data = bulkChangeRoleSchema.parse(input);
 
   const { result, wrapperUpdates } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const targets = await tx.user.findMany({
         where: { id: { in: data.userIds }, tenantId: session.tenantId },
@@ -732,7 +826,7 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
           result.failed.push({ userId: id, reason: "User not found." });
           continue;
         }
-        if (target.id === session.id) {
+        if (target.id === session.subjectId) {
           result.failed.push({ userId: id, reason: "You can't change your own role." });
           continue;
         }
@@ -751,7 +845,7 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)),
+            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
             toValue: data.role,
@@ -792,7 +886,7 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
   const session = await requireSession({ minRole: "ADMIN" });
   const data = bulkUserIdsSchema.parse(input);
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const targets = await tx.user.findMany({
       where: { id: { in: data.userIds }, tenantId: session.tenantId },
     });
@@ -805,7 +899,7 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
         result.failed.push({ userId: id, reason: "User not found." });
         continue;
       }
-      if (target.id === session.id) {
+      if (target.id === session.subjectId) {
         result.failed.push({ userId: id, reason: "You can't deactivate yourself." });
         continue;
       }
@@ -817,8 +911,23 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
         continue;
       }
       await tx.user.update({ where: { id: target.id }, data: { status: "SUSPENDED" } });
+      // Z1.8a dual-write: mirror SUSPENDED status to lifecycle table.
+      const suspendLifecycle = { tenantId: session.tenantId, status: "SUSPENDED" as const };
+      if (target.role === "CLIENT") {
+        await tx.endUserLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...suspendLifecycle },
+          update: suspendLifecycle,
+        });
+      } else {
+        await tx.teamMemberLifecycle.upsert({
+          where: { subjectId: target.id },
+          create: { subjectId: target.id, ...suspendLifecycle },
+          update: suspendLifecycle,
+        });
+      }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "DEACTIVATE_USER", toValue: target.email },
+        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "DEACTIVATE_USER", toValue: target.email },
       });
       result.succeeded.push(id);
     }
@@ -839,7 +948,7 @@ export async function bulkExport(input: z.infer<typeof bulkUserIdsSchema>): Prom
   const session = await requireSession({ minRole: "ADMIN" });
   const data = bulkUserIdsSchema.parse(input);
 
-  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.user.findMany({
       where: { id: { in: data.userIds }, tenantId: session.tenantId },
       include: { companyRef: { select: { name: true } } },
@@ -883,7 +992,7 @@ export async function bulkExport(input: z.infer<typeof bulkUserIdsSchema>): Prom
 
 export async function listAllCategories() {
   const session = await requireSession({ minRole: "ADMIN" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.category.findMany({ where: { tenantId: session.tenantId }, orderBy: { name: "asc" } })
   );
 }
@@ -900,7 +1009,7 @@ export async function upsertCategory(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid category name." };
   const data = parsed.data;
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     if (data.id) {
       const category = await tx.category.updateMany({
         where: { id: data.id, tenantId: session.tenantId },
@@ -923,7 +1032,7 @@ export async function upsertCategory(
 
 export async function getBranding() {
   const session = await requireSession({ minRole: "ADMIN" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } })
   );
 }
@@ -939,7 +1048,7 @@ export async function updateBranding(input: z.infer<typeof updateBrandingSchema>
       ? "This primary color has low contrast on white — use it for large/bold elements only, not body text."
       : null;
 
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     await tx.tenantBranding.update({
       where: { tenantId: session.tenantId },
       data: {
@@ -952,7 +1061,7 @@ export async function updateBranding(input: z.infer<typeof updateBrandingSchema>
       },
     });
     await tx.auditLog.create({
-      data: { tenantId: session.tenantId, actorId: session.id, ...actorCols(dualFkForUser(session.id, session.role)), action: "UPDATE_BRANDING" },
+      data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "UPDATE_BRANDING" },
     });
   });
 
@@ -997,7 +1106,7 @@ export async function listAuditLog(filter: Partial<z.infer<typeof auditLogFilter
   const f = auditLogFilterSchema.parse(filter);
   const PAGE_SIZE = 50;
 
-  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.auditLog.findMany({
       where: { tenantId: session.tenantId, action: f.action },
       include: { ticket: true },
@@ -1040,7 +1149,7 @@ export async function listAuditLog(filter: Partial<z.infer<typeof auditLogFilter
 export async function getReportStats() {
   const session = await requireSession({ minRole: "ADMIN" });
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const tenantId = session.tenantId;
     // Sequential, not Promise.all: these all run on this one interactive-tx
     // connection, so concurrent issue is unsupported by Prisma (and gives no
@@ -1199,7 +1308,7 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
   // URL) — fall back to the schema's own defaults instead.
   const f = parsed.success ? parsed.data : analyticsFilterSchema.parse({});
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const tenantId = session.tenantId;
     const { start, end } = resolveRange(f);
     const createdWhere = buildTicketWhere(tenantId, f, "createdAt");

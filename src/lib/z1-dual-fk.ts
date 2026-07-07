@@ -8,11 +8,11 @@
 // by prisma/z1_4a_migration.sql. Pass the result directly into Prisma
 // data blocks via spread:
 //
-//   const author = dualFkForUser(session.id, session.role);
+//   const author = dualFkForUser(session.subjectId, session.role);
 //   await tx.message.create({
 //     data: {
 //       ...base,
-//       senderId: session.id,
+//       senderId: session.subjectId,
 //       ...senderCols(author),
 //     },
 //   });
@@ -37,6 +37,15 @@ export function dualFkForUser(userId: string, role: LegacyRole): DualFk {
 
 /** SYSTEM/BOT actor — both null. Used for cron jobs, auto-close, etc. */
 export const SYSTEM_ACTOR: DualFk = { endUserId: null, teamMemberId: null };
+
+/**
+ * Z1.8 Set B — maps a legacy role to the session-cookie subjectKind.
+ * CLIENT users live in end_users; every other role lives in team_members.
+ * Used at every JWT-signing site to embed the correct subjectKind.
+ */
+export function roleToSubjectKind(role: LegacyRole): "END_USER" | "TEAM_MEMBER" {
+  return role === "CLIENT" ? "END_USER" : "TEAM_MEMBER";
+}
 
 // ---------------------------------------------------------------------------
 // Per-table column-name mappings. Every function returns exactly the

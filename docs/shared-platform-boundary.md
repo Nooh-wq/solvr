@@ -521,3 +521,26 @@ The three sit in one coherent architectural commitment: **wrapper stays identity
 **What M-auth-migration does not commit to:** it doesn't pre-commit to "yes, we'll consolidate." The milestone is the design pass, not the outcome. Set B may turn out to be the permanent shape — that's a valid outcome. The point is having a named place where the question gets revisited on real evidence rather than architectural anxiety.
 
 **Ordering:** unblocked, unscheduled. No dependency on Z1.5, Z1.7, or anything currently on the roadmap. Sits on the same shelf as §7.3.
+
+### 7.15 Z1.8a session cookie grace-period removal
+
+**Filed as a durable item during Z1.8a implementation** so the follow-up commit that removes the old-shape decode branch from `getSessionUser` can't be forgotten.
+
+**Context.** Z1.8a's session cookie change (new-shape `{subjectId, subjectKind, tenantId}` replacing the pre-Z1.8 `{userId, tenantId}`) ships with a **7-day grace-period decode** in `src/lib/session.ts`'s `verifySessionToken` so existing sessions keep working after deploy — otherwise every active user would get logged out simultaneously. Analysis in [`docs/design/z1-8-implementation-plan.md`](design/z1-8-implementation-plan.md) Decision A.
+
+**Removal target.** Day 7 after Z1.8a deploys. One-file follow-up commit removes:
+- The `if (typeof payload.userId === "string") { ... }` old-shape branch in `verifySessionToken`.
+- Its associated comment tagging the removal date.
+- The imports that only the old-shape branch used, if any.
+
+Expected size: ~15 lines removed.
+
+**Day-7 contingency.** If day-7 log-scan shows non-trivial old-shape cookies still in circulation (rare — session TTL is 7 days, so any pre-Z1.8a cookie should have naturally expired by then), extend the grace period by another 7 days before removing the branch. Re-tag the comment with the new removal date. This is a real branch of the plan, not a hypothetical — capturing it here so the choice is deliberate and not implicit.
+
+**How to check readiness on day 7.**
+
+1. Grep server logs for any session verification that fell through the new-shape branch and matched the old-shape branch. If the logs don't already tag this (they don't as of Z1.8a-1), add a `logger.debug("z1_8a old-shape session decode", { tenantId })` line to the old-shape branch before deploy, so day-7 logs have a signal to grep.
+2. If old-shape decodes are <1% of all session decodes over the last 24h: proceed with removal.
+3. If old-shape decodes are >1%: extend contingency, re-file removal for day 14.
+
+**Post-removal.** Delete this §7.15 entry from the boundary doc in the same follow-up commit. The item's job is done.

@@ -34,12 +34,12 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
   // one IP) can drive them — otherwise a logged-in client could loop and run
   // up the AI bill. SECURITY-DECISION: 20 msgs/user/min, 40/IP/min. Tune to
   // your cost tolerance; a normal support chat is a handful of turns.
-  const rl = await checkRateLimitWithIp(`chat:${session.tenantId}:${session.id}`, 20, 40, 60_000);
+  const rl = await checkRateLimitWithIp(`chat:${session.tenantId}:${session.subjectId}`, 20, 40, 60_000);
   if (!rl.allowed) {
     return { error: "RATE_LIMITED" as const };
   }
 
-  const rlsCtx = { tenantId: session.tenantId, userId: session.id, role: session.role };
+  const rlsCtx = { tenantId: session.tenantId, userId: session.subjectId, role: session.role };
 
   // Pass 1 (fast, transactional): persist the client message and gather
   // everything the model needs. Kept short so it never risks the Prisma
@@ -51,13 +51,13 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
 
     const conversation = data.conversationId
       ? await tx.chatConversation.findFirstOrThrow({
-          where: { id: data.conversationId, tenantId: session.tenantId, userId: session.id },
+          where: { id: data.conversationId, tenantId: session.tenantId, userId: session.subjectId },
         })
       : await tx.chatConversation.create({
           data: {
             tenantId: session.tenantId,
-            userId: session.id,
-            ...chatSubjectCols(dualFkForUser(session.id, session.role)),
+            userId: session.subjectId,
+            ...chatSubjectCols(dualFkForUser(session.subjectId, session.role)),
             status: "active",
           },
         });
@@ -123,11 +123,11 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
 /** Chat-to-ticket escalation contract (TRD §6.3): summarizes the transcript into a pre-filled ticket. */
 export async function escalateChatToTicket(conversationId: string) {
   const session = await requireSession();
-  const rlsCtx = { tenantId: session.tenantId, userId: session.id, role: session.role };
+  const rlsCtx = { tenantId: session.tenantId, userId: session.subjectId, role: session.role };
 
   const conversation = await withRls(rlsCtx, (tx) =>
     tx.chatConversation.findFirstOrThrow({
-      where: { id: conversationId, tenantId: session.tenantId, userId: session.id },
+      where: { id: conversationId, tenantId: session.tenantId, userId: session.subjectId },
       include: { messages: { orderBy: { createdAt: "asc" } } },
     })
   );
@@ -150,9 +150,9 @@ export async function escalateChatToTicket(conversationId: string) {
   return withRls(rlsCtx, async (tx) => {
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
-    const clientDual = dualFkForUser(session.id, session.role);
+    const clientDual = dualFkForUser(session.subjectId, session.role);
     const clientUser = await tx.user.findUnique({
-      where: { id: session.id },
+      where: { id: session.subjectId },
       select: { companyId: true },
     });
 
@@ -164,7 +164,7 @@ export async function escalateChatToTicket(conversationId: string) {
           ticketNumber,
           title,
           description: `Escalated from chat.\n\n${transcript}`,
-          clientId: session.id,
+          clientId: session.subjectId,
           ...ticketClientCols(clientDual),
           organizationId: clientUser?.companyId ?? null,
           priority,
@@ -183,7 +183,7 @@ export async function escalateChatToTicket(conversationId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.id,
+        actorId: session.subjectId,
         ...actorCols(clientDual),
         action: "CREATE",
         toValue: "OPEN",
