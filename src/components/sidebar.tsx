@@ -29,6 +29,7 @@ export type NavIconKey =
   | "team"
   | "categories"
   | "fields"
+  | "forms"
   | "branding"
   | "kb"
   | "audit"
@@ -42,6 +43,7 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   team: UsersIcon,
   categories: TagIcon,
   fields: SlidersIcon,
+  forms: ClipboardIcon,
   branding: PaletteIcon,
   kb: BookIcon,
   audit: ClipboardIcon,

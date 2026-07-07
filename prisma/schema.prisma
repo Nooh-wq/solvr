@@ -92,12 +92,18 @@ enum CustomFieldScope {
   TICKET
 }
 
-// Z2.1 subset only — DROPDOWN/MULTISELECT/LOOKUP land in Z2.2/Z2.5.
 enum CustomFieldType {
   TEXT
   NUMBER
   DATE
   CHECKBOX
+  DROPDOWN
+  MULTISELECT
+  // Z2.5 — reference another wrapper entity. Value stored as a raw scalar
+  // id (`valueLookupId`) — no Prisma relation across the boundary. Sidebar
+  // renders the referenced entity's name via a batch wrapper lookup.
+  USER_LOOKUP
+  ORG_LOOKUP
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +135,8 @@ model Tenant {
   subjectAvatars       SubjectAvatar[]
   customFieldDefinitions CustomFieldDefinition[]
   customFieldValues      CustomFieldValue[]
+  customFieldOptions     CustomFieldOption[]
+  ticketForms            TicketForm[]
 
   @@map("tenants")
 }
@@ -161,12 +169,13 @@ model TenantBranding {
 // ---------------------------------------------------------------------------
 
 model Category {
-  id       String   @id @default(cuid())
-  tenantId String
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name     String
-  isActive Boolean  @default(true)
-  tickets  Ticket[]
+  id        String               @id @default(cuid())
+  tenantId  String
+  tenant    Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  isActive  Boolean              @default(true)
+  tickets   Ticket[]
+  formLinks TicketFormCategory[]
 
   @@unique([tenantId, name])
   @@map("categories")
@@ -228,6 +237,10 @@ model Ticket {
   // for tickets created before this field existed.
   clientIp             String?
   clientCountry        String?
+  // Z2.3: the ticket form the client picked (if any). Nullable — legacy
+  // tickets and email-sourced ones have no form.
+  ticketFormId         String?
+  ticketForm           TicketForm?  @relation(fields: [ticketFormId], references: [id], onDelete: SetNull)
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
 
@@ -563,11 +576,112 @@ model CustomFieldDefinition {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  values CustomFieldValue[]
+  values     CustomFieldValue[]
+  options    CustomFieldOption[]
+  formFields TicketFormField[]
 
   @@unique([tenantId, scope, key])
   @@index([tenantId, scope, isActive])
   @@map("custom_field_definitions")
+}
+
+// Z2.2 — Options for DROPDOWN / MULTISELECT fields.
+//
+// `value` is the stable identifier (like the key on a definition — used by
+// placeholder resolvers, trigger conditions, and integrations). `label` is
+// the display text and is freely renamable. Uniqueness is per definition
+// so two fields can each have an option called "high" without collision.
+//
+// `implicitTag` is Zendesk-style: selecting this option can apply a tag to
+// the entity. Stored as free text (not a Tag FK) because (a) the mapping
+// should survive tag renames, and (b) TICKET-scoped fields want this too
+// but ticket tagging isn't yet a first-class concept — trigger/rule
+// engines (Z8) will consume this string and do the tag write.
+model CustomFieldOption {
+  id                String                @id @default(cuid())
+  tenantId          String
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fieldDefinitionId String
+  fieldDefinition   CustomFieldDefinition @relation(fields: [fieldDefinitionId], references: [id], onDelete: Cascade)
+  value             String
+  label             String
+  position          Int                   @default(0)
+  implicitTag       String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([fieldDefinitionId, value])
+  @@index([tenantId])
+  @@index([fieldDefinitionId, position])
+  @@map("custom_field_options")
+}
+
+// ---------------------------------------------------------------------------
+// Z2.3 — Ticket Forms
+//
+// A form is a curated ordered subset of TICKET-scoped CustomFieldDefinitions
+// pinned to zero or more Categories. When a client picks a category on the
+// portal, the first (position-ordered, active) TicketForm whose
+// `categories` list contains that category is used to render extra fields.
+// If no form pins a category, no custom fields are shown.
+//
+// Only TICKET-scoped definitions can be added to a form (enforced in the
+// action layer). USER/ORG fields live only on the entity's own sidebar.
+// ---------------------------------------------------------------------------
+
+model TicketForm {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  fields     TicketFormField[]
+  categories TicketFormCategory[]
+  tickets    Ticket[]
+
+  @@index([tenantId, isActive])
+  @@map("ticket_forms")
+}
+
+model TicketFormField {
+  id                 String                @id @default(cuid())
+  tenantId           String
+  ticketFormId       String
+  ticketForm         TicketForm            @relation(fields: [ticketFormId], references: [id], onDelete: Cascade)
+  fieldDefinitionId  String
+  fieldDefinition    CustomFieldDefinition @relation(fields: [fieldDefinitionId], references: [id], onDelete: Cascade)
+  position           Int                   @default(0)
+  // Overrides CustomFieldDefinition.isRequired for this form only. Lets a
+  // form say "on THIS intake path we don't need service_tier" even if the
+  // sidebar edit view still marks it required.
+  isRequiredOverride Boolean?
+  // Z2.4 — conditional visibility. When set, this field only shows on the
+  // form if the sibling field's value equals `visibleWhenValue` (string
+  // equality — Z2 spec §3 limits us to single-condition rules).
+  visibleWhenFieldId String?
+  visibleWhenValue   String?
+
+  @@unique([ticketFormId, fieldDefinitionId])
+  @@index([tenantId])
+  @@index([ticketFormId, position])
+  @@map("ticket_form_fields")
+}
+
+model TicketFormCategory {
+  ticketFormId String
+  ticketForm   TicketForm @relation(fields: [ticketFormId], references: [id], onDelete: Cascade)
+  categoryId   String
+  category     Category   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  tenantId     String
+
+  @@id([ticketFormId, categoryId])
+  @@index([tenantId, categoryId])
+  @@map("ticket_form_categories")
 }
 
 model CustomFieldValue {
@@ -589,6 +703,15 @@ model CustomFieldValue {
   valueNumber       Decimal?              @db.Decimal(20, 6)
   valueDate         DateTime?
   valueBoolean      Boolean?
+  // Z2.2: single-option pick for DROPDOWN.
+  valueOptionId     String?
+  // Z2.2: multi-option pick for MULTISELECT. Default `[]` so the CHECK
+  // constraint's "empty array == not set" convention works out of the box
+  // for TEXT/NUMBER/etc. rows. Postgres text[]; queryable via `@>`.
+  valueOptionIds    String[]              @default([])
+  // Z2.5: id of the referenced wrapper entity (EndUser for USER_LOOKUP,
+  // Organization for ORG_LOOKUP). Raw scalar — no Prisma relation.
+  valueLookupId     String?
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 

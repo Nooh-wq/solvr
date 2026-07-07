@@ -1,10 +1,18 @@
-// Z2.1 — Read-only render of custom-field values on ticket/user/org detail
+// Read-only render of custom-field values on ticket/user/org detail
 // sidebars. Data is pre-fetched server-side via listValuesForTarget and
 // passed in as a plain array so this can be a server component itself.
 // A definition with no value renders as "—"; inactive definitions render
 // only if they still hold a value (historical data).
 
-type FieldType = "TEXT" | "NUMBER" | "DATE" | "CHECKBOX";
+type FieldType =
+  | "TEXT"
+  | "NUMBER"
+  | "DATE"
+  | "CHECKBOX"
+  | "DROPDOWN"
+  | "MULTISELECT"
+  | "USER_LOOKUP"
+  | "ORG_LOOKUP";
 
 export type CustomFieldRow = {
   definition: {
@@ -14,12 +22,18 @@ export type CustomFieldRow = {
     type: FieldType;
     isActive: boolean;
     isRequired: boolean;
+    options?: Array<{ id: string; value: string; label: string }>;
   };
   value: {
     valueText: string | null;
     valueNumber: string | null;
     valueDate: Date | null;
     valueBoolean: boolean | null;
+    valueOptionId?: string | null;
+    valueOptionIds?: string[];
+    valueOptionLabels?: string[];
+    valueLookupId?: string | null;
+    valueLookupLabel?: string | null;
   } | null;
 };
 
@@ -34,6 +48,19 @@ function formatValue(row: CustomFieldRow): string {
       return row.value.valueDate ? row.value.valueDate.toLocaleDateString() : "—";
     case "CHECKBOX":
       return row.value.valueBoolean === true ? "Yes" : row.value.valueBoolean === false ? "No" : "—";
+    case "DROPDOWN":
+    case "MULTISELECT": {
+      const labels = row.value.valueOptionLabels ?? [];
+      return labels.length > 0 ? labels.join(", ") : "—";
+    }
+    case "USER_LOOKUP":
+    case "ORG_LOOKUP":
+      // When the wrapper entity has been deleted since the value was written,
+      // valueLookupLabel is null — fall back to a lightweight "deleted"
+      // marker rather than leaking a raw id.
+      return row.value.valueLookupId
+        ? (row.value.valueLookupLabel ?? "(deleted)")
+        : "—";
   }
 }
 

@@ -11,10 +11,21 @@ import {
   createDefinition,
   updateDefinition,
   deactivateDefinition,
+  listOptions,
+  upsertOption,
+  deleteOption,
 } from "@/actions/customFields";
 
 type Scope = "USER" | "ORG" | "TICKET";
-type FieldType = "TEXT" | "NUMBER" | "DATE" | "CHECKBOX";
+type FieldType =
+  | "TEXT"
+  | "NUMBER"
+  | "DATE"
+  | "CHECKBOX"
+  | "DROPDOWN"
+  | "MULTISELECT"
+  | "USER_LOOKUP"
+  | "ORG_LOOKUP";
 
 type Definition = {
   id: string;
@@ -26,6 +37,15 @@ type Definition = {
   isActive: boolean;
   isRequired: boolean;
   position: number;
+  optionCount: number;
+};
+
+type OptionRow = {
+  id: string;
+  value: string;
+  label: string;
+  position: number;
+  implicitTag: string | null;
 };
 
 const TYPE_LABEL: Record<FieldType, string> = {
@@ -33,6 +53,10 @@ const TYPE_LABEL: Record<FieldType, string> = {
   NUMBER: "Number",
   DATE: "Date",
   CHECKBOX: "Checkbox",
+  DROPDOWN: "Dropdown",
+  MULTISELECT: "Multiselect",
+  USER_LOOKUP: "User lookup",
+  ORG_LOOKUP: "Organization lookup",
 };
 
 const SCOPE_LABEL: Record<Scope, string> = {
@@ -42,6 +66,10 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 const SCOPES: Scope[] = ["USER", "ORG", "TICKET"];
+
+function isOptionType(t: FieldType): boolean {
+  return t === "DROPDOWN" || t === "MULTISELECT";
+}
 
 function Pill({
   children,
@@ -75,6 +103,7 @@ export function FieldsManager({
   const [pending, startTransition] = useTransition();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Definition | null>(null);
+  const [managingOptionsFor, setManagingOptionsFor] = useState<Definition | null>(null);
 
   function toggleActive(def: Definition) {
     startTransition(async () => {
@@ -149,6 +178,11 @@ export function FieldsManager({
                       {d.key}
                     </code>
                     <Pill>{TYPE_LABEL[d.type]}</Pill>
+                    {isOptionType(d.type) ? (
+                      <Pill tone="muted">
+                        {d.optionCount} option{d.optionCount === 1 ? "" : "s"}
+                      </Pill>
+                    ) : null}
                     {d.isRequired ? <Pill tone="warning">Required</Pill> : null}
                     {!d.isActive ? <Pill tone="muted">Inactive</Pill> : null}
                   </div>
@@ -156,6 +190,16 @@ export function FieldsManager({
                     <div className="text-xs text-[var(--color-neutral-500)] mt-1">{d.description}</div>
                   ) : null}
                 </div>
+                {isOptionType(d.type) ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => setManagingOptionsFor(d)}
+                  >
+                    Options
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -193,6 +237,14 @@ export function FieldsManager({
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
+          router.refresh();
+        }}
+      />
+
+      <OptionsModal
+        definition={managingOptionsFor}
+        onClose={() => {
+          setManagingOptionsFor(null);
           router.refresh();
         }}
       />
@@ -247,7 +299,13 @@ function CreateFieldModal({
           toast({ title: "Couldn't create field", description: r.error, variant: "error" });
           return;
         }
-        toast({ title: "Field created", description: label.trim(), variant: "success" });
+        toast({
+          title: "Field created",
+          description: isOptionType(type)
+            ? `${label.trim()} — add options next`
+            : label.trim(),
+          variant: "success",
+        });
         reset();
         onCreated();
       } catch (e) {
@@ -304,7 +362,16 @@ function CreateFieldModal({
             <option value="NUMBER">Number</option>
             <option value="DATE">Date</option>
             <option value="CHECKBOX">Checkbox</option>
+            <option value="DROPDOWN">Dropdown</option>
+            <option value="MULTISELECT">Multiselect</option>
+            <option value="USER_LOOKUP">User lookup</option>
+            <option value="ORG_LOOKUP">Organization lookup</option>
           </select>
+          {isOptionType(type) ? (
+            <div className="text-[11px] text-[var(--color-neutral-500)] mt-1">
+              You&apos;ll add the option list after creating the field.
+            </div>
+          ) : null}
         </label>
         <label className="block">
           <div className="text-xs font-medium mb-1">Description (optional)</div>
@@ -342,7 +409,7 @@ function CreateFieldModal({
 }
 
 // ---------------------------------------------------------------------------
-// Edit modal — label/description/isRequired/position only. Key is immutable.
+// Edit modal
 // ---------------------------------------------------------------------------
 
 function EditFieldModal({
@@ -360,9 +427,6 @@ function EditFieldModal({
   const [description, setDescription] = useState("");
   const [isRequired, setIsRequired] = useState(false);
 
-  // Re-sync form state when the selected definition changes (opening a
-  // different row). Keyed on id so re-renders with the same row don't clobber
-  // in-flight edits.
   useEffect(() => {
     if (definition) {
       setLabel(definition.label);
@@ -425,6 +489,225 @@ function EditFieldModal({
             </Button>
             <Button disabled={pending} onClick={submit}>
               Save
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Options modal (Z2.2)
+// ---------------------------------------------------------------------------
+
+function OptionsModal({
+  definition,
+  onClose,
+}: {
+  definition: Definition | null;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [pending, startTransition] = useTransition();
+  const [options, setOptions] = useState<OptionRow[]>([]);
+  const [newValue, setNewValue] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [newTag, setNewTag] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!definition) return;
+    setLoading(true);
+    listOptions(definition.id)
+      .then((rows) =>
+        setOptions(
+          rows.map((r) => ({
+            id: r.id,
+            value: r.value,
+            label: r.label,
+            position: r.position,
+            implicitTag: r.implicitTag,
+          }))
+        )
+      )
+      .catch((e) => toast({ title: "Couldn't load options", description: e?.message, variant: "error" }))
+      .finally(() => setLoading(false));
+  }, [definition?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function refresh() {
+    if (!definition) return;
+    listOptions(definition.id).then((rows) =>
+      setOptions(
+        rows.map((r) => ({
+          id: r.id,
+          value: r.value,
+          label: r.label,
+          position: r.position,
+          implicitTag: r.implicitTag,
+        }))
+      )
+    );
+  }
+
+  function addOption() {
+    if (!definition || !newValue.trim() || !newLabel.trim()) return;
+    startTransition(async () => {
+      const r = await upsertOption({
+        fieldDefinitionId: definition.id,
+        value: newValue.trim(),
+        label: newLabel.trim(),
+        position: options.length,
+        implicitTag: newTag.trim() || null,
+      });
+      if (!r.ok) {
+        toast({ title: "Couldn't add option", description: r.error, variant: "error" });
+        return;
+      }
+      setNewValue("");
+      setNewLabel("");
+      setNewTag("");
+      toast({ title: "Option added", variant: "success" });
+      refresh();
+    });
+  }
+
+  function saveOption(opt: OptionRow) {
+    if (!definition) return;
+    startTransition(async () => {
+      const r = await upsertOption({
+        fieldDefinitionId: definition.id,
+        id: opt.id,
+        value: opt.value,
+        label: opt.label,
+        position: opt.position,
+        implicitTag: opt.implicitTag,
+      });
+      if (!r.ok) {
+        toast({ title: "Couldn't save option", description: r.error, variant: "error" });
+        return;
+      }
+      toast({ title: "Option saved", variant: "success" });
+      refresh();
+    });
+  }
+
+  function removeOption(opt: OptionRow) {
+    startTransition(async () => {
+      try {
+        await deleteOption(opt.id);
+        toast({ title: "Option deleted", description: opt.label, variant: "success" });
+        refresh();
+      } catch (e) {
+        toast({
+          title: "Couldn't delete option",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "error",
+        });
+      }
+    });
+  }
+
+  return (
+    <Modal
+      open={definition !== null}
+      onClose={onClose}
+      title={definition ? `Options — ${definition.label}` : "Options"}
+      widthClass="max-w-lg"
+    >
+      {definition ? (
+        <div className="space-y-4">
+          <div className="text-xs text-[var(--color-neutral-500)]">
+            <code>{definition.key}</code> — {TYPE_LABEL[definition.type]}. Values are immutable
+            after create. Implicit tags are applied by triggers when the option is picked
+            (available Z8+).
+          </div>
+
+          {loading ? (
+            <div className="text-sm text-[var(--color-neutral-500)]">Loading…</div>
+          ) : options.length === 0 ? (
+            <div className="text-sm text-[var(--color-neutral-500)]">No options yet.</div>
+          ) : (
+            <div className="space-y-2">
+              {options.map((o, idx) => (
+                <div
+                  key={o.id}
+                  className="rounded-lg border border-[var(--color-neutral-200)] p-3 space-y-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <code className="text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-neutral-100)] text-[var(--color-neutral-600)]">
+                      {o.value}
+                    </code>
+                    <Input
+                      value={o.label}
+                      onChange={(e) => {
+                        const next = [...options];
+                        next[idx] = { ...o, label: e.target.value };
+                        setOptions(next);
+                      }}
+                      onBlur={() => saveOption(o)}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeOption(o)}
+                      disabled={pending}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                  <Input
+                    placeholder="Implicit tag (optional)"
+                    value={o.implicitTag ?? ""}
+                    onChange={(e) => {
+                      const next = [...options];
+                      next[idx] = { ...o, implicitTag: e.target.value || null };
+                      setOptions(next);
+                    }}
+                    onBlur={() => saveOption(o)}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="pt-3 border-t border-[var(--color-neutral-200)]">
+            <div className="text-xs font-medium mb-2">Add option</div>
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                placeholder="Value (immutable)"
+                value={newValue}
+                onChange={(e) =>
+                  setNewValue(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "_"))
+                }
+              />
+              <Input
+                placeholder="Label"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+              />
+            </div>
+            <Input
+              placeholder="Implicit tag (optional)"
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              className="mt-2"
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <Button
+                size="sm"
+                disabled={pending || !newValue.trim() || !newLabel.trim()}
+                onClick={addOption}
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2 border-t border-[var(--color-neutral-200)]">
+            <Button variant="secondary" onClick={onClose}>
+              Done
             </Button>
           </div>
         </div>

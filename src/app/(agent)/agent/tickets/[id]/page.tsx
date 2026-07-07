@@ -7,7 +7,7 @@ import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
-import { CustomFieldsPanel } from "@/components/custom-fields-panel";
+import { CustomFieldsEditor } from "@/components/custom-fields-editor";
 import { ClientProfileCard } from "./client-profile-card";
 import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
@@ -108,9 +108,21 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           }}
         />
 
-        <CustomFieldsPanel title="Ticket fields" rows={ticketFields} />
-        <CustomFieldsPanel title="Requester fields" rows={userFields} />
-        <CustomFieldsPanel title="Organization fields" rows={orgFields} />
+        <CustomFieldsEditor title="Ticket fields" rows={ticketFields} targetId={ticket.id} />
+        {ticket.clientEndUserId ? (
+          <CustomFieldsEditor
+            title="Requester fields"
+            rows={userFields}
+            targetId={ticket.clientEndUserId}
+          />
+        ) : null}
+        {ticket.organizationId ? (
+          <CustomFieldsEditor
+            title="Organization fields"
+            rows={orgFields}
+            targetId={ticket.organizationId}
+          />
+        ) : null}
 
         <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
 

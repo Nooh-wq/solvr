@@ -6,6 +6,13 @@ import { Prisma } from "@/generated/prisma";
 import type { CustomFieldScope, CustomFieldType } from "@/generated/prisma";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
+import {
+  systemContext,
+  getEndUsersByIds,
+  getOrganizationsByIds,
+  listEndUsers,
+  listOrganizations,
+} from "@/lib/shared-platform";
 
 // ---------------------------------------------------------------------------
 // Z2.1 — Custom Fields server actions
@@ -17,7 +24,21 @@ import { requireSession } from "@/lib/auth";
 // ---------------------------------------------------------------------------
 
 const SCOPES = ["USER", "ORG", "TICKET"] as const;
-const TYPES = ["TEXT", "NUMBER", "DATE", "CHECKBOX"] as const;
+const TYPES = [
+  "TEXT",
+  "NUMBER",
+  "DATE",
+  "CHECKBOX",
+  "DROPDOWN",
+  "MULTISELECT",
+  "USER_LOOKUP",
+  "ORG_LOOKUP",
+] as const;
+
+// DD/MS require an option list; other types must not carry options.
+const OPTION_TYPES = new Set<CustomFieldType>(["DROPDOWN", "MULTISELECT"]);
+// LOOKUP types need a target-entity picker instead of an options list.
+const LOOKUP_TYPES = new Set<CustomFieldType>(["USER_LOOKUP", "ORG_LOOKUP"]);
 
 // Lowercase snake_case, must start with a letter. Explicit anchors so an
 // input like "foo bar" doesn't sneak through by matching a substring.
@@ -60,6 +81,9 @@ export async function listDefinitions(scope: CustomFieldScope) {
       tx.customFieldDefinition.findMany({
         where: { tenantId: session.tenantId, scope },
         orderBy: [{ isActive: "desc" }, { position: "asc" }, { createdAt: "asc" }],
+        include: {
+          _count: { select: { options: true } },
+        },
       })
   );
 }
@@ -151,20 +175,38 @@ const upsertValueSchema = z
       .optional()
       .transform((v) => (v == null ? null : typeof v === "string" ? new Date(v) : v)),
     valueBoolean: z.boolean().nullable().optional(),
+    valueOptionId: z.string().nullable().optional(),
+    valueOptionIds: z.array(z.string()).nullable().optional(),
+    valueLookupId: z.string().nullable().optional(),
   })
   .refine(
     (v) => {
-      const filled = [v.valueText, v.valueNumber, v.valueDate, v.valueBoolean].filter(
-        (x) => x !== undefined && x !== null
-      ).length;
+      const filled = [
+        v.valueText,
+        v.valueNumber,
+        v.valueDate,
+        v.valueBoolean,
+        v.valueOptionId,
+        v.valueOptionIds && v.valueOptionIds.length > 0 ? "set" : null,
+        v.valueLookupId,
+      ].filter((x) => x !== undefined && x !== null).length;
       return filled === 1;
     },
-    { message: "Exactly one value field must be provided (matching the definition's type)." }
+    { message: "Exactly one value must be provided (matching the definition's type)." }
   );
 
 type UpsertValueInput = z.infer<typeof upsertValueSchema>;
 
-function columnForType(t: CustomFieldType): keyof UpsertValueInput {
+function columnForType(
+  t: CustomFieldType
+):
+  | "valueText"
+  | "valueNumber"
+  | "valueDate"
+  | "valueBoolean"
+  | "valueOptionId"
+  | "valueOptionIds"
+  | "valueLookupId" {
   switch (t) {
     case "TEXT":
       return "valueText";
@@ -174,6 +216,13 @@ function columnForType(t: CustomFieldType): keyof UpsertValueInput {
       return "valueDate";
     case "CHECKBOX":
       return "valueBoolean";
+    case "DROPDOWN":
+      return "valueOptionId";
+    case "MULTISELECT":
+      return "valueOptionIds";
+    case "USER_LOOKUP":
+    case "ORG_LOOKUP":
+      return "valueLookupId";
   }
 }
 
@@ -191,8 +240,36 @@ export async function upsertValue(input: UpsertValueInput) {
       if (!def.isActive) throw new Error("DEFINITION_INACTIVE");
 
       const expected = columnForType(def.type);
-      if (data[expected] === undefined || data[expected] === null) {
+      const incoming = data[expected];
+      const isSet =
+        expected === "valueOptionIds"
+          ? Array.isArray(incoming) && incoming.length > 0
+          : incoming !== undefined && incoming !== null;
+      if (!isSet) {
         throw new Error(`VALUE_TYPE_MISMATCH: expected ${expected} for ${def.type} field`);
+      }
+
+      // For DD/MS validate that the incoming option id(s) belong to this
+      // definition. Prevents smuggling a stray id from another tenant's
+      // field (RLS would still block cross-tenant, but the "wrong field's
+      // option" case has to be caught here).
+      if (def.type === "DROPDOWN" && data.valueOptionId) {
+        const opt = await tx.customFieldOption.findFirst({
+          where: { id: data.valueOptionId, fieldDefinitionId: def.id, tenantId: session.tenantId },
+          select: { id: true },
+        });
+        if (!opt) throw new Error("UNKNOWN_OPTION");
+      }
+      if (def.type === "MULTISELECT" && data.valueOptionIds && data.valueOptionIds.length > 0) {
+        const opts = await tx.customFieldOption.findMany({
+          where: {
+            id: { in: data.valueOptionIds },
+            fieldDefinitionId: def.id,
+            tenantId: session.tenantId,
+          },
+          select: { id: true },
+        });
+        if (opts.length !== data.valueOptionIds.length) throw new Error("UNKNOWN_OPTION");
       }
 
       const payload = {
@@ -207,6 +284,9 @@ export async function upsertValue(input: UpsertValueInput) {
             : null,
         valueDate: expected === "valueDate" ? (data.valueDate ?? null) : null,
         valueBoolean: expected === "valueBoolean" ? (data.valueBoolean ?? null) : null,
+        valueOptionId: expected === "valueOptionId" ? (data.valueOptionId ?? null) : null,
+        valueOptionIds: expected === "valueOptionIds" ? (data.valueOptionIds ?? []) : [],
+        valueLookupId: expected === "valueLookupId" ? (data.valueLookupId ?? null) : null,
       };
 
       return tx.customFieldValue.upsert({
@@ -222,11 +302,149 @@ export async function upsertValue(input: UpsertValueInput) {
           valueNumber: payload.valueNumber,
           valueDate: payload.valueDate,
           valueBoolean: payload.valueBoolean,
+          valueOptionId: payload.valueOptionId,
+          valueOptionIds: payload.valueOptionIds,
+          valueLookupId: payload.valueLookupId,
         },
       });
     }
   );
   return { ok: true as const, value: result };
+}
+
+// ---------------------------------------------------------------------------
+// Z2.2 — Options
+// ---------------------------------------------------------------------------
+
+const OPTION_VALUE_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+const upsertOptionSchema = z.object({
+  fieldDefinitionId: z.string().min(1),
+  id: z.string().optional(),
+  // Value is immutable after create (like the definition's key). Editing an
+  // existing option's `value` is a hard error at the DB level (unique index
+  // key) — the UI hides the field entirely on edit.
+  value: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(OPTION_VALUE_RE, "Option value must be lowercase alphanumeric with _ or -."),
+  label: z.string().min(1).max(120),
+  position: z.number().int().min(0).optional(),
+  implicitTag: z.string().max(120).nullable().optional(),
+});
+
+export async function listOptions(fieldDefinitionId: string) {
+  const session = await requireSession({ minRole: "AGENT" });
+  return withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) =>
+      tx.customFieldOption.findMany({
+        where: { fieldDefinitionId, tenantId: session.tenantId },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+      })
+  );
+}
+
+export async function upsertOption(input: z.infer<typeof upsertOptionSchema>) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = upsertOptionSchema.parse(input);
+
+  try {
+    const result = await withRls(
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+      async (tx) => {
+        const def = await tx.customFieldDefinition.findFirst({
+          where: { id: data.fieldDefinitionId, tenantId: session.tenantId },
+          select: { id: true, type: true },
+        });
+        if (!def) throw new Error("NOT_FOUND");
+        if (!OPTION_TYPES.has(def.type)) {
+          throw new Error(`OPTIONS_NOT_ALLOWED: ${def.type} fields don't have options`);
+        }
+
+        if (data.id) {
+          // Edit path — value is immutable; only label/position/implicitTag change.
+          const existing = await tx.customFieldOption.findFirst({
+            where: { id: data.id, fieldDefinitionId: def.id, tenantId: session.tenantId },
+            select: { id: true, value: true },
+          });
+          if (!existing) throw new Error("NOT_FOUND");
+          return tx.customFieldOption.update({
+            where: { id: data.id },
+            data: {
+              label: data.label,
+              ...(data.position !== undefined ? { position: data.position } : {}),
+              implicitTag: data.implicitTag ?? null,
+            },
+          });
+        }
+        return tx.customFieldOption.create({
+          data: {
+            tenantId: session.tenantId,
+            fieldDefinitionId: def.id,
+            value: data.value,
+            label: data.label,
+            position: data.position ?? 0,
+            implicitTag: data.implicitTag ?? null,
+          },
+        });
+      }
+    );
+    revalidatePath("/admin/fields");
+    return { ok: true as const, option: result };
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return { ok: false as const, error: `An option with value "${data.value}" already exists.` };
+    }
+    if (err instanceof Error && err.message.startsWith("OPTIONS_NOT_ALLOWED")) {
+      return { ok: false as const, error: err.message.split(": ").slice(1).join(": ") };
+    }
+    throw err;
+  }
+}
+
+export async function deleteOption(id: string) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      // Clear any references from values before the FK-less scalar deletes.
+      // Prisma has no FK for valueOptionId/valueOptionIds — the option might
+      // still be referenced from valueOptionId rows. Reset those rows so the
+      // CHECK constraint doesn't fire (a value with all-null columns).
+      // The Z2 spec says definitions can only be deactivated, not deleted;
+      // options DO allow hard-delete (Zendesk parity), so we do the cleanup.
+      await tx.customFieldValue.deleteMany({
+        where: { tenantId: session.tenantId, valueOptionId: id },
+      });
+      // For MULTISELECT, splice the option id out of any valueOptionIds
+      // arrays. If splicing empties the array the row still fails CHECK, so
+      // just delete those rows too — treating removal as "the user's pick is
+      // gone" is the least surprising behavior.
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "custom_field_values"
+         WHERE "tenantId" = $1
+           AND $2 = ANY("valueOptionIds")
+           AND cardinality(array_remove("valueOptionIds", $2)) = 0`,
+        session.tenantId,
+        id
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE "custom_field_values"
+           SET "valueOptionIds" = array_remove("valueOptionIds", $2)
+         WHERE "tenantId" = $1
+           AND $2 = ANY("valueOptionIds")`,
+        session.tenantId,
+        id
+      );
+      await tx.customFieldOption.delete({
+        where: { id },
+      });
+    }
+  );
+  revalidatePath("/admin/fields");
+  return { ok: true as const };
 }
 
 /**
@@ -235,28 +453,41 @@ export async function upsertValue(input: UpsertValueInput) {
  * value renders as "—" and an inactive definition still renders IF a value
  * exists (historical data). Missing definitions never render.
  */
+export type CustomFieldTargetRow = {
+  definition: {
+    id: string;
+    key: string;
+    label: string;
+    type: CustomFieldType;
+    isActive: boolean;
+    isRequired: boolean;
+    position: number;
+    // Available options for DD/MS (empty array for other types). The full
+    // list is included so a value editor doesn't need a second round-trip.
+    options: Array<{ id: string; value: string; label: string }>;
+  };
+  value: {
+    valueText: string | null;
+    valueNumber: string | null;
+    valueDate: Date | null;
+    valueBoolean: boolean | null;
+    valueOptionId: string | null;
+    valueOptionIds: string[];
+    // Pre-resolved labels of the picked option(s), for display without a
+    // second lookup pass. Order matches valueOptionIds.
+    valueOptionLabels: string[];
+    // Z2.5: id + resolved display label of the referenced wrapper entity
+    // (EndUser/Organization). `valueLookupLabel` is null when the lookup
+    // target has been deleted from the wrapper — sidebar renders a fallback.
+    valueLookupId: string | null;
+    valueLookupLabel: string | null;
+  } | null;
+};
+
 export async function listValuesForTarget(
   scope: CustomFieldScope,
   targetId: string
-): Promise<
-  Array<{
-    definition: {
-      id: string;
-      key: string;
-      label: string;
-      type: CustomFieldType;
-      isActive: boolean;
-      isRequired: boolean;
-      position: number;
-    };
-    value: {
-      valueText: string | null;
-      valueNumber: string | null; // Decimal serialized
-      valueDate: Date | null;
-      valueBoolean: boolean | null;
-    } | null;
-  }>
-> {
+): Promise<CustomFieldTargetRow[]> {
   const session = await requireSession({ minRole: "AGENT" });
   return withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
@@ -265,17 +496,55 @@ export async function listValuesForTarget(
         tx.customFieldDefinition.findMany({
           where: { tenantId: session.tenantId, scope },
           orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+          include: {
+            options: {
+              orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+              select: { id: true, value: true, label: true },
+            },
+          },
         }),
         tx.customFieldValue.findMany({
           where: { tenantId: session.tenantId, targetType: scope, targetId },
         }),
       ]);
       const valueByDef = new Map(values.map((v) => [v.fieldDefinitionId, v]));
-      // Active + any-inactive-with-a-value, so historical data still renders.
+
+      // Z2.5: batch-resolve lookup targets. Group by scope so we hit each
+      // wrapper endpoint at most once per list. Skip when there's nothing
+      // to resolve.
+      const userLookupIds = new Set<string>();
+      const orgLookupIds = new Set<string>();
+      for (const d of defs) {
+        const v = valueByDef.get(d.id);
+        if (!v?.valueLookupId) continue;
+        if (d.type === "USER_LOOKUP") userLookupIds.add(v.valueLookupId);
+        if (d.type === "ORG_LOOKUP") orgLookupIds.add(v.valueLookupId);
+      }
+      const ctx = systemContext(session.tenantId);
+      const [userMap, orgMap] = await Promise.all([
+        userLookupIds.size > 0
+          ? getEndUsersByIds(ctx, [...userLookupIds])
+          : Promise.resolve(new Map<string, { name: string | null; email: string }>()),
+        orgLookupIds.size > 0
+          ? getOrganizationsByIds(ctx, [...orgLookupIds])
+          : Promise.resolve(new Map<string, { name: string }>()),
+      ]);
+
       return defs
         .filter((d) => d.isActive || valueByDef.has(d.id))
         .map((d) => {
           const v = valueByDef.get(d.id) ?? null;
+          const optionLabelById = new Map(d.options.map((o) => [o.id, o.label]));
+          let lookupLabel: string | null = null;
+          if (v?.valueLookupId) {
+            if (d.type === "USER_LOOKUP") {
+              const u = userMap.get(v.valueLookupId);
+              lookupLabel = u ? (u.name ?? u.email) : null;
+            } else if (d.type === "ORG_LOOKUP") {
+              const o = orgMap.get(v.valueLookupId);
+              lookupLabel = o?.name ?? null;
+            }
+          }
           return {
             definition: {
               id: d.id,
@@ -285,6 +554,7 @@ export async function listValuesForTarget(
               isActive: d.isActive,
               isRequired: d.isRequired,
               position: d.position,
+              options: d.options,
             },
             value: v
               ? {
@@ -292,10 +562,43 @@ export async function listValuesForTarget(
                   valueNumber: v.valueNumber ? v.valueNumber.toString() : null,
                   valueDate: v.valueDate,
                   valueBoolean: v.valueBoolean,
+                  valueOptionId: v.valueOptionId,
+                  valueOptionIds: v.valueOptionIds,
+                  valueOptionLabels: (v.valueOptionId ? [v.valueOptionId] : v.valueOptionIds)
+                    .map((id) => optionLabelById.get(id))
+                    .filter((l): l is string => Boolean(l)),
+                  valueLookupId: v.valueLookupId,
+                  valueLookupLabel: lookupLabel,
                 }
               : null,
           };
         });
     }
   );
+}
+
+// ---------------------------------------------------------------------------
+// Z2.5 — Lookup search
+//
+// Autocomplete backing for USER_LOOKUP / ORG_LOOKUP value pickers. Staff-only
+// (same AGENT gate as everything else in this file). Returns up to 20 rows.
+// ---------------------------------------------------------------------------
+
+export async function searchLookupTargets(
+  scope: "USER" | "ORG",
+  query: string
+): Promise<Array<{ id: string; label: string; sublabel?: string }>> {
+  const session = await requireSession({ minRole: "AGENT" });
+  const ctx = systemContext(session.tenantId);
+  const q = query.trim();
+  if (scope === "USER") {
+    const page = await listEndUsers(ctx, { search: q || undefined, limit: 20 });
+    return page.items.map((u) => ({
+      id: u.id,
+      label: u.name ?? u.email,
+      sublabel: u.name ? u.email : undefined,
+    }));
+  }
+  const page = await listOrganizations(ctx, { search: q || undefined, limit: 20 });
+  return page.items.map((o) => ({ id: o.id, label: o.name }));
 }

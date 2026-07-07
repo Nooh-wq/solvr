@@ -35,6 +35,7 @@ export default async function FieldsPage({
           isActive: d.isActive,
           isRequired: d.isRequired,
           position: d.position,
+          optionCount: d._count.options,
         }))}
       />
     </div>
