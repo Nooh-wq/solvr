@@ -12,18 +12,13 @@ import {
   htmlToPlainText,
 } from "@/lib/email/inbound";
 import {
-  dualFkForUser,
-  senderCols,
-  actorCols,
-  ticketClientCols,
-} from "@/lib/z1-dual-fk";
-import {
   systemContext,
   getEndUser,
   getTeamMember,
   createEndUser,
 } from "@/lib/shared-platform";
 import { matchCompanyByEmail } from "@/lib/company-match";
+import { randomUUID } from "node:crypto";
 import type { EmailReceivedEvent } from "resend";
 
 type ReceivedEmailEventData = EmailReceivedEvent["data"];
@@ -33,9 +28,6 @@ type ReceivedEmailEventData = EmailReceivedEvent["data"];
  * on TenantBranding.supportEmail (the dedicated inbound mailbox an admin
  * sets in /admin/branding), falling back to the "support@<slug>.<base
  * domain>" convention for tenants that haven't set a custom one yet.
- * `tenant_branding`/`tenants` are public-read tables (see
- * prisma/rls_policies.sql) so this needs no RLS context — same reasoning as
- * resolveTenantByHost() in lib/tenant.ts.
  */
 async function resolveTenantByInboundAddress(toAddresses: string[]) {
   for (const to of toAddresses) {
@@ -56,84 +48,82 @@ async function resolveTenantByInboundAddress(toAddresses: string[]) {
 /**
  * Looks up a ticket by its globally-unique ticketNumber (or a referenced
  * Message-ID) without knowing the tenant in advance. Uses the
- * `super_admin_read` RLS policy (see prisma/rls_policies.sql) — a system
- * process (this webhook) reading across tenants to resolve routing, the
- * same trust boundary already granted to the cross-tenant health dashboard.
- * The tenantId passed to withRls is never checked by that policy branch, so
- * a placeholder is fine here.
+ * `super_admin_read` RLS policy — a system process (this webhook) reading
+ * across tenants to resolve routing, same trust boundary as the cross-tenant
+ * health dashboard.
  */
 async function findTicketAcrossTenants(where: { ticketNumber: string } | { emailMessageId: { in: string[] } }) {
   return withRls({ tenantId: "system", userId: null, role: "SUPER_ADMIN" }, (tx) => tx.ticket.findFirst({ where }));
 }
 
+type InboundSender = {
+  id: string;
+  email: string;
+  name: string;
+  organizationId: string | null;
+};
+
 /**
- * Finds a user by email within a tenant, or creates a PENDING one — see
- * email flow design §"Unknown sender behavior": nothing gets dropped, but a
- * brand-new sender can't log into the portal until an admin approves them.
- * A newly created sender gets a random temp password (same shape as
- * inviteUser() in actions/admin.ts) so there's something for them to log in
- * with once approved — otherwise "you're approved, log in" would be a dead
- * end for someone who only ever emailed support and never visited the portal.
+ * Z1.5b: finds a wrapper EndUser by email or creates one at PENDING.
+ * All inbound-email senders are CLIENT (EndUser) — email is never used as
+ * a staff-onboarding channel. No legacy user is created.
  */
-async function findOrCreateSender(tenantId: string, fromEmail: string, fromName: string) {
+async function findOrCreateSender(
+  tenantId: string,
+  fromEmail: string,
+  fromName: string
+): Promise<{ sender: InboundSender; tempPassword: string | null }> {
+  const ctx = systemContext(tenantId);
+
+  // Direct wrapper lookup via prisma under SUPER_ADMIN context (avoids
+  // exposing an unauthenticated matchEndUserByEmail on the wrapper).
+  const existing = await withRls({ tenantId, userId: null, role: "SUPER_ADMIN" }, (tx) =>
+    tx.endUser.findFirst({ where: { tenantId, email: fromEmail } })
+  );
+  if (existing) {
+    return {
+      sender: {
+        id: existing.id,
+        email: existing.email,
+        name: existing.name ?? existing.email,
+        organizationId: existing.organizationId,
+      },
+      tempPassword: null,
+    };
+  }
+
+  // New sender. Wrapper EndUser + credentials + lifecycle rows, all under
+  // one preserved subject id.
+  const organizationId = await matchCompanyByEmail(tenantId, fromEmail);
+  const subjectId = randomUUID();
   const tempPassword = crypto.randomBytes(9).toString("base64").replace(/[+/=]/g, "");
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  // Z1.9: organization auto-match by email domain (same lookup used at
-  // portal registration / admin invite). Happens outside the legacy tx
-  // because the wrapper opens its own tenant-scoped RLS internally.
-  const organizationId = await matchCompanyByEmail(tenantId, fromEmail);
-
-  const result = await withRls({ tenantId, userId: null }, async (tx) => {
-    const existing = await tx.user.findUnique({
-      where: { tenantId_email: { tenantId, email: fromEmail } },
-    });
-    if (existing) return { user: existing, tempPassword: null as string | null, created: false };
-
-    // Z1.9: create legacy User + Z1.8 companion rows atomically. Wrapper
-    // EndUser creation happens post-commit (see below) to match the same
-    // dual-write shape admin.ts inviteUser uses — cross-boundary writes
-    // don't share Support's tx.
-    const user = await tx.user.create({
-      data: {
-        tenantId,
-        email: fromEmail,
-        name: fromName || fromEmail,
-        passwordHash,
-        companyId: organizationId,
-        role: "CLIENT",
-        status: "PENDING",
-      },
-    });
-    await tx.authCredential.create({
-      data: { tenantId, subjectEndUserId: user.id, passwordHash },
-    });
-    await tx.endUserLifecycle.create({
-      data: { tenantId, subjectId: user.id, status: "PENDING" },
-    });
-    return { user, tempPassword, created: true };
+  const newEndUser = await createEndUser(ctx, {
+    id: subjectId,
+    email: fromEmail,
+    name: fromName || fromEmail,
+    organizationId,
   });
 
-  // Z1.9: create the wrapper EndUser counterpart with the preserved id.
-  // Post-commit (matches admin.ts inviteUser's shape) — on wrapper failure
-  // the legacy row exists without a wrapper counterpart, surfaced by
-  // scripts/z1_6_drift_check.mjs.
-  if (result.created) {
-    try {
-      await createEndUser(systemContext(tenantId), {
-        id: result.user.id,
-        email: result.user.email,
-        name: result.user.name,
-        organizationId,
-      });
-    } catch (e) {
-      // Non-fatal — legacy row is the safety net through Z1.5. Log for
-      // drift-check follow-up.
-      console.error(`[Z1.9] inbound-email wrapper EndUser create failed for ${result.user.email}:`, e);
-    }
-  }
+  await withRls({ tenantId, userId: null, role: "SUPER_ADMIN" }, async (tx) => {
+    await tx.authCredential.create({
+      data: { tenantId, subjectEndUserId: subjectId, passwordHash },
+    });
+    await tx.endUserLifecycle.create({
+      data: { tenantId, subjectId, status: "PENDING" },
+    });
+  });
 
-  return { user: result.user, tempPassword: result.tempPassword };
+  return {
+    sender: {
+      id: newEndUser.id,
+      email: newEndUser.email,
+      name: newEndUser.name ?? newEndUser.email,
+      organizationId: newEndUser.organizationId,
+    },
+    tempPassword,
+  };
 }
 
 function parseFromHeader(from: string): { email: string; name: string } {
@@ -147,8 +137,7 @@ function parseFromHeader(from: string): { email: string; name: string } {
  * §4 "The Full Email Flow", steps C and D). Called from
  * app/api/webhooks/email-inbound/route.ts after signature verification.
  * Returns a short status string for logging; never throws for "couldn't
- * route this email" cases — those clear the case for logging without
- * causing the webhook provider to retry into a permanent failure.
+ * route this email" cases.
  */
 export async function handleInboundEmail(eventData: ReceivedEmailEventData): Promise<string> {
   if (!resend) return "skipped: RESEND_API_KEY not configured";
@@ -173,18 +162,16 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
       : null;
 
   if (existingTicket) {
-    const { user: sender, tempPassword } = await findOrCreateSender(existingTicket.tenantId, fromEmail, fromName);
+    const { sender, tempPassword } = await findOrCreateSender(existingTicket.tenantId, fromEmail, fromName);
 
     const { ticket, assignedAgent, branding } = await withRls(
-      { tenantId: existingTicket.tenantId, userId: sender.id, role: sender.role },
+      { tenantId: existingTicket.tenantId, userId: sender.id, role: "CLIENT" },
       async (tx) => {
-        const senderDual = dualFkForUser(sender.id, sender.role);
         await tx.message.create({
           data: {
             tenantId: existingTicket.tenantId,
             ticketId: existingTicket.id,
-            senderId: sender.id,
-            ...senderCols(senderDual),
+            senderEndUserId: sender.id,
             senderRole: "CLIENT",
             body,
           },
@@ -197,8 +184,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
             data: {
               tenantId: existingTicket.tenantId,
               ticketId: existingTicket.id,
-              actorId: sender.id,
-              ...actorCols(senderDual),
+              actorEndUserId: sender.id,
               action: "STATUS_CHANGE",
               fromValue: "PENDING",
               toValue: "IN_PROGRESS",
@@ -209,13 +195,11 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
           data: {
             tenantId: existingTicket.tenantId,
             ticketId: existingTicket.id,
-            actorId: sender.id,
-            ...actorCols(senderDual),
+            actorEndUserId: sender.id,
             action: "REPLY",
           },
         });
 
-        // Z1.4b: assignedTeamMemberId → wrapper TeamMember (preserved id).
         const assignedAgent = ticket.assignedTeamMemberId
           ? await getTeamMember(systemContext(existingTicket.tenantId), ticket.assignedTeamMemberId)
           : null;
@@ -243,17 +227,10 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
   const tenant = await resolveTenantByInboundAddress(full.to);
   if (!tenant) return `skipped: no tenant matches inbound address(es) ${full.to.join(", ")}`;
 
-  const { user: sender, tempPassword } = await findOrCreateSender(tenant.id, fromEmail, fromName);
+  const { sender, tempPassword } = await findOrCreateSender(tenant.id, fromEmail, fromName);
 
-  const { ticket, branding } = await withRls({ tenantId: tenant.id, userId: sender.id, role: sender.role }, async (tx) => {
+  const { ticket, branding } = await withRls({ tenantId: tenant.id, userId: sender.id, role: "CLIENT" }, async (tx) => {
     const t = await tx.tenant.findUniqueOrThrow({ where: { id: tenant.id } });
-
-    const senderDual = dualFkForUser(sender.id, sender.role);
-    // Z1.4b: organizationId sourced from wrapper's EndUser.organizationId.
-    // Non-CLIENT senders (Employee Service Suite path) get null.
-    const wrapperCtx = systemContext(tenant.id);
-    const senderEndUser =
-      sender.role === "CLIENT" ? await getEndUser(wrapperCtx, sender.id) : null;
 
     const ticket = await createWithReference(t.name, ({ reference, ticketNumber }) =>
       tx.ticket.create({
@@ -263,9 +240,8 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
           ticketNumber,
           title: full.subject.replace(/^(re|fwd?):\s*/i, "").slice(0, 200) || "Email support request",
           description: body,
-          clientId: sender.id,
-          ...ticketClientCols(senderDual),
-          organizationId: senderEndUser?.organizationId ?? null,
+          clientEndUserId: sender.id,
+          organizationId: sender.organizationId,
           status: "OPEN",
           source: "email",
         },
@@ -276,8 +252,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
       data: {
         tenantId: tenant.id,
         ticketId: ticket.id,
-        actorId: sender.id,
-        ...actorCols(senderDual),
+        actorEndUserId: sender.id,
         action: "CREATE",
         toValue: "OPEN",
       },
