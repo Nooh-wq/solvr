@@ -524,8 +524,13 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
   const { user, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.id, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
+      // Z1.6 matrix tightening: was a silent `WHERE status: "PENDING"`
+      // filter that returned null on invalid state. Now uses the shared
+      // team-matrix guard so the failure surfaces with a clear message
+      // consistent with the other 8 admin actions.
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("approve", target.status, { isLastSuperAdmin: false });
 
       const user = await tx.user.update({
         where: { id: target.id },
@@ -560,8 +565,10 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
   const { user, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.id, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId, status: "PENDING" } });
+      // Z1.6 matrix tightening: same shape as approveUser above.
+      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
       if (!target) throw new Error("NOT_FOUND");
+      assertActionAllowed("reject", target.status, { isLastSuperAdmin: false });
 
       const user = await tx.user.update({
         where: { id: target.id },
