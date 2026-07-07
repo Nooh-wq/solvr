@@ -2,8 +2,8 @@
 // See: Stralis_Ticketing_TRD.md §3, Stralis_Build_Spec.md §B-3
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
   // "native" = the dev machine; "debian-openssl-3.0.x" is for the Docker
   // image (node:*-bookworm-slim, AWS/Azure container option); "rhel-openssl-3.0.x"
   // is for Vercel's serverless functions (Amazon Linux 2023 runtime). All
@@ -32,28 +32,6 @@ enum TenantStatus {
   ACTIVE
   SUSPENDED
   TRIAL
-}
-
-// Legacy user-role enum. On borrowed time — Z1's Six-Object Model Refactor
-// replaces this with the Shared Platform's `Role` MODEL (rows per tenant,
-// custom-role support), consumed via the TeamMember relation. This enum
-// stays until Z1.5 drops the legacy User table entirely; every reference
-// to `LegacyRole` here or in application code should ultimately migrate to
-// a `TeamMember.role.name` string lookup.
-enum LegacyRole {
-  CLIENT
-  AGENT
-  ADMIN
-  SUPER_ADMIN
-
-  // Z1.6: schema.prisma renamed the enum to LegacyRole during Z1.1 to
-  // avoid Prisma-model collision with the mirrored wrapper Role table,
-  // but the DB enum was never renamed alongside. Adds the mapping so
-  // Prisma queries reference the correct DB type "Role". First user
-  // write since Z1.3 backfill unmasked this — the ~5 months between
-  // then and now had no `prisma.user.create` runs. Z1.5 drops the
-  // enum entirely alongside the users table.
-  @@map("Role")
 }
 
 // PENDING: self-registered, awaiting a tenant admin's approval (see the
@@ -116,18 +94,16 @@ model Tenant {
   customDomain String?      @unique
   createdAt    DateTime     @default(now())
 
-  branding      TenantBranding?
-  chatbotConfig ChatbotConfig?
-  users         User[]
-  tickets       Ticket[]
-  categories    Category[]
-  kbArticles    KbArticle[]
-  chatConversations ChatConversation[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  ticketGuests  TicketGuest[]
-  surveyResponses SurveyResponse[]
-  companies     Company[]
+  branding             TenantBranding?
+  chatbotConfig        ChatbotConfig?
+  tickets              Ticket[]
+  categories           Category[]
+  kbArticles           KbArticle[]
+  chatConversations    ChatConversation[]
+  auditLogs            AuditLog[]
+  notifications        Notification[]
+  ticketGuests         TicketGuest[]
+  surveyResponses      SurveyResponse[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -136,13 +112,13 @@ model Tenant {
 }
 
 model TenantBranding {
-  tenantId      String  @id
-  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  logoUrl       String?
-  faviconUrl    String?
-  primaryColor  String  @default("#FF6A00")
-  accentColor   String  @default("#000000")
-  productName   String  @default("Support")
+  tenantId       String  @id
+  tenant         Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logoUrl        String?
+  faviconUrl     String?
+  primaryColor   String  @default("#FF6A00")
+  accentColor    String  @default("#000000")
+  productName    String  @default("Support")
   // The tenant's one dedicated inbound support address (e.g.
   // support@acme.com) — inbound webhook matches on this to route an email
   // to the right tenant before any ticket/user exists. Unique so two
@@ -151,9 +127,9 @@ model TenantBranding {
   // Provider-side inbound route/webhook id (Resend inbound route), stored
   // for reference/cleanup — not read by the app at request time.
   inboundRouteId String?
-  emailFromName String?
-  emailDomain   String?
-  customCss     String?
+  emailFromName  String?
+  emailDomain    String?
+  customCss      String?
 
   @@map("tenant_branding")
 }
@@ -162,90 +138,12 @@ model TenantBranding {
 // Identity
 // ---------------------------------------------------------------------------
 
-model User {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  passwordHash String // bcrypt. TODO(decision): swap to Supabase Auth (or another provider) before production.
-  name         String
-  email        String
-  role         LegacyRole @default(CLIENT)
-  // Legacy free-text company field — retained for backwards compatibility
-  // during the Team & Roles v2 backfill. New writes should populate
-  // companyId (below) via the auto-match-by-email-domain flow in
-  // registerClient/inviteUser; this string will be dropped once every
-  // active row has been backfilled to a Company reference.
-  company      String?
-  companyId    String?
-  companyRef   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  status       UserStatus @default(PENDING)
-  avatarUrl    String?
-  createdAt    DateTime @default(now())
-  // Set whenever the password changes. Any session JWT issued (iat) before
-  // this instant is rejected in getSessionUser(), so a password change
-  // invalidates all *other* existing sessions (the changing session is
-  // re-issued a fresh cookie). See src/lib/auth.ts + src/actions/profile.ts.
-  passwordChangedAt DateTime?
-
-  // Team & Roles v2 audit trail (spec §2). *ById fields are deliberately
-  // not FK'd back to User to keep the audit stub around even if the acting
-  // admin later gets deleted — same reasoning as AuditLog.actorId. Every
-  // action (approve/reject/invite/deactivate) writes an AuditLog row too;
-  // these here are the "most recent of each event" summary for the row.
-  lastActiveAt DateTime?
-  invitedAt    DateTime?
-  invitedById  String?
-  approvedAt   DateTime?
-  approvedById String?
-  rejectedAt   DateTime?
-  rejectedById String?
-
-  tickets       Ticket[]      @relation("ClientTickets")
-  assigned      Ticket[]      @relation("AssignedAgent")
-  messages      Message[]
-  uploadedAttachments Attachment[]
-  chatConversations ChatConversation[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  invitedGuests TicketGuest[]
-  loginOtps     LoginOtp[]
-
-  @@unique([tenantId, email])
-  @@index([tenantId])
-  @@index([tenantId, companyId])
-  @@map("users")
-}
-
-// Companies scope users by organizational membership. `domain` is used to
-// auto-match new registrants (e.g. someone signing up with @northwind.io
-// gets linked to the Northwind Retail company automatically instead of an
-// admin doing it by hand — see registerClient/inviteUser). `country` is
-// ISO 3166-1 alpha-2 (matches the same convention as Ticket.clientCountry
-// so it can feed the analytics region map). @@unique([tenantId, name])
-// prevents accidental dupes; there is *no* unique on domain because two
-// tenants can validly claim to be the "Acme Corp" they both know about.
-model Company {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  country   String?
-  domain    String?
-  createdAt DateTime @default(now())
-
-  users User[]
-
-  @@unique([tenantId, name])
-  @@index([tenantId, domain])
-  @@map("companies")
-}
-
 model Category {
-  id       String  @id @default(cuid())
+  id       String   @id @default(cuid())
   tenantId String
-  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name     String
-  isActive Boolean @default(true)
+  isActive Boolean  @default(true)
   tickets  Ticket[]
 
   @@unique([tenantId, name])
@@ -257,75 +155,67 @@ model Category {
 // ---------------------------------------------------------------------------
 
 model Ticket {
-  id           String       @id @default(cuid())
-  tenantId     String
-  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  reference    String
+  id                   String       @id @default(cuid())
+  tenantId             String
+  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reference            String
   // Short numeric id (e.g. "12707664") embedded in every notification
   // subject as "[#12707664]" — kept separate from `reference` because email
   // clients mangle subject lines, so inbound reply-matching needs the
   // simplest possible token to regex out. Globally unique (not per-tenant)
   // since the inbound webhook doesn't know the tenant until it's resolved
   // the ticket this number belongs to.
-  ticketNumber String       @unique
+  ticketNumber         String       @unique
   // Message-ID of the last outbound notification for this ticket, so a
   // client's email reply can thread back via In-Reply-To/References as a
   // fallback when the subject tag itself got stripped.
-  emailMessageId String?
-  title        String
-  description  String
-  status       TicketStatus @default(OPEN)
-  priority     Priority     @default(MEDIUM)
-  categoryId   String?
-  category     Category?    @relation(fields: [categoryId], references: [id])
-  clientId     String?
-  client       User?        @relation("ClientTickets", fields: [clientId], references: [id])
-  assignedToId String?
-  assignedTo   User?        @relation("AssignedAgent", fields: [assignedToId], references: [id])
-  // Z1.4a: dual-FK bridge columns. clientId can point at either an EndUser
-  // (external requester on the CLIENT tenant) or a TeamMember (staff filing
-  // a ticket in their own tenant — Employee Service Suite pattern).
-  // §7.7 in docs/shared-platform-boundary.md explains why Ticket got the
-  // dual-FK treatment instead of the §7.1 clean-rename shape. Raw scalars,
-  // no Prisma relations across the boundary (rule 3). CHECK
-  // tickets_client_exclusive enforces num_nonnulls(clientEndUserId,
-  // clientTeamMemberId) <= 1 (see prisma/z1_4a_migration.sql).
-  clientEndUserId       String?
-  clientTeamMemberId    String?
-  assignedTeamMemberId  String?
+  emailMessageId       String?
+  title                String
+  description          String
+  status               TicketStatus @default(OPEN)
+  priority             Priority     @default(MEDIUM)
+  categoryId           String?
+  category             Category?    @relation(fields: [categoryId], references: [id])
+  // Dual-FK client — CLIENT (EndUser) or staff (TeamMember, Employee
+  // Service Suite pattern). Raw scalars, no Prisma relations across the
+  // boundary (rule 3, docs/shared-platform-boundary.md §3). CHECK
+  // tickets_client_exclusive enforces num_nonnulls <= 1.
+  clientEndUserId      String?
+  clientTeamMemberId   String?
+  assignedTeamMemberId String?
   // Ticket.organizationId denormalizes the client's Organization for
   // analytics/routing. Populated at backfill from users.companyId; on
   // new writes populated by looking up the EndUser's primary org via
   // the wrapper's matchOrganizationByEmailDomain / EndUser.organizationId.
-  organizationId        String?
-  source       String       @default("portal") // portal | chatbot | email
-  firstReplyAt DateTime?
-  resolvedAt   DateTime?
+  organizationId       String?
+  source               String       @default("portal") // portal | chatbot | email
+  firstReplyAt         DateTime?
+  resolvedAt           DateTime?
   // Reopen tracking (analytics: reopen-rate KPI). reopenedAt is the most
   // recent reopen timestamp; reopenCount is a running total across the
   // ticket's lifetime, incremented whenever it transitions OUT of
   // RESOLVED/CLOSED back into an active status (see reopenTicket() and
   // updateTicket() in actions/tickets.ts).
-  reopenedAt   DateTime?
-  reopenCount  Int          @default(0)
+  reopenedAt           DateTime?
+  reopenCount          Int          @default(0)
   // Captured at creation time from the requester's HTTP request (portal/
   // chatbot only — email-sourced tickets have no live request, so both stay
   // null). clientCountry is an ISO 3166-1 alpha-2 code resolved from
   // clientIp via geoip-lite (offline lookup, no external API call) —
   // powers the analytics "clients by region" map/table. Never backfilled
   // for tickets created before this field existed.
-  clientIp      String?
-  clientCountry String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  clientIp             String?
+  clientCountry        String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
-  messages    Message[]
-  attachments Attachment[]
-  auditLogs   AuditLog[]
+  messages          Message[]
+  attachments       Attachment[]
+  auditLogs         AuditLog[]
   chatConversations ChatConversation[]
-  notifications Notification[]
-  guests      TicketGuest[]
-  surveyResponse SurveyResponse?
+  notifications     Notification[]
+  guests            TicketGuest[]
+  surveyResponse    SurveyResponse?
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -356,41 +246,24 @@ model SurveyResponse {
 }
 
 model Message {
-  id         String      @id @default(cuid())
-  tenantId   String
-  ticketId   String
-  ticket     Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  senderId   String?
-  sender     User?       @relation(fields: [senderId], references: [id])
-  // Set instead of senderId when a GUEST (see TicketGuest) wrote this message
-  // — a guest never gets a User row, so this is how the message is attributed.
-  guestId    String?
-  guest      TicketGuest? @relation(fields: [guestId], references: [id])
-  // Z1.1b: dual-FK author columns for the Six-Object Model Refactor. Post-Z1
-  // a message's sender is either an EndUser (client-side) or a TeamMember
-  // (staff-side). Kept as raw scalar columns (no Prisma relation) because
-  // per the shared-platform boundary rules, this repo does not declare
-  // Prisma relations across to the shared core tables — see
-  // docs/shared-platform-boundary.md §3 rule 3. The wrapper service layer
-  // resolves the reference at read time.
-  //
-  // Both columns are nullable during the transition. A CHECK constraint
-  // in prisma/z1_1b_migration.sql (messages_sender_exclusive) enforces
-  // "at most one of {senderId, senderEndUserId, senderTeamMemberId,
-  // guestId} is non-null" — SYSTEM/BOT rows still legitimately have all
-  // four null (senderRole disambiguates). guestId is included in the
-  // CHECK on purpose so all four author paths are DB-enforced, not just
-  // three of them under an honor-system contract for the fourth (see
-  // boundary doc §7.2 Z1.5 tightening + rule 8).
-  //
-  // Z1.5 will drop the legacy senderId column and tighten the CHECK to
-  // "at most one of {senderEndUserId, senderTeamMemberId, guestId}".
+  id                 String       @id @default(cuid())
+  tenantId           String
+  ticketId           String
+  ticket             Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  // Guest author: no wrapper counterpart (no account) — a guest never has an
+  // EndUser row, so this identifies who wrote the message.
+  guestId            String?
+  guest              TicketGuest? @relation(fields: [guestId], references: [id])
+  // Dual-FK author (wrapper): EndUser (client) or TeamMember (staff). Raw
+  // scalars, no Prisma relations across the boundary (rule 3). CHECK
+  // messages_sender_exclusive: num_nonnulls(senderEndUserId,
+  // senderTeamMemberId, guestId) <= 1 — SYSTEM/BOT rows are all-null.
   senderEndUserId    String?
   senderTeamMemberId String?
-  senderRole SenderRole
-  body       String
-  isInternal Boolean     @default(false)
-  createdAt  DateTime    @default(now())
+  senderRole         SenderRole
+  body               String
+  isInternal         Boolean      @default(false)
+  createdAt          DateTime     @default(now())
 
   attachments Attachment[]
 
@@ -401,29 +274,28 @@ model Message {
 }
 
 model Attachment {
-  id         String   @id @default(cuid())
-  tenantId   String
-  ticketId   String
-  ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  id                     String   @id @default(cuid())
+  tenantId               String
+  ticketId               String
+  ticket                 Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   // Null until the composer's "Send" actually posts the message the file was
   // staged for (see actions/attachments.ts uploadTicketAttachment /
   // actions/tickets.ts's postAgentReply|postClientReply) — an uploaded-but-
   // never-sent file just stays unlinked, still visible in Files & Links.
-  messageId  String?
-  message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  uploadedById String?
-  uploadedBy   User?  @relation(fields: [uploadedById], references: [id])
-  // Z1.4a: dual-FK bridge columns (see boundary doc §7.1 + Ticket comment).
+  messageId              String?
+  message                Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  // Dual-FK uploader (wrapper). Raw scalars — no Prisma relations across
+  // the boundary (rule 3).
   uploadedByEndUserId    String?
   uploadedByTeamMemberId String?
   // Storage object PATH, not a public URL — this bucket is private (ticket
   // attachments aren't "public by nature" like branding logos/avatars are).
   // Resolved to a short-lived signed URL on read; see lib/storage.ts.
-  fileUrl    String
-  fileName   String
-  mimeType   String
-  sizeBytes  Int
-  uploadedAt DateTime @default(now())
+  fileUrl                String
+  fileName               String
+  mimeType               String
+  sizeBytes              Int
+  uploadedAt             DateTime @default(now())
 
   @@index([tenantId, ticketId])
   @@index([messageId])
@@ -441,21 +313,19 @@ model Attachment {
 // except this one needs server-side state since it's revocable/long-lived
 // rather than a short single-use JWT).
 model TicketGuest {
-  id          String    @id @default(cuid())
-  tenantId    String
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId    String
-  ticket      Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  email       String
-  name        String?
-  tokenHash   String    @unique
-  invitedById String?
-  invitedBy   User?     @relation(fields: [invitedById], references: [id])
-  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  id                    String    @id @default(cuid())
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId              String
+  ticket                Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  email                 String
+  name                  String?
+  tokenHash             String    @unique
+  // Dual-FK inviter (wrapper). Raw scalars.
   invitedByEndUserId    String?
   invitedByTeamMemberId String?
-  createdAt   DateTime  @default(now())
-  revokedAt   DateTime?
+  createdAt             DateTime  @default(now())
+  revokedAt             DateTime?
 
   messages Message[]
 
@@ -472,43 +342,36 @@ model TicketGuest {
 // (can't just re-derive/re-verify a signature the way a stateless token
 // works) and single-use tracked independent of any password change.
 model LoginOtp {
-  id         String    @id @default(cuid())
-  tenantId   String
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  id           String    @id @default(cuid())
+  tenantId     String
+  // Dual-FK subject (wrapper). Exactly one must be non-null (CHECK
+  // login_otps_subject_present enforces at DB level). Raw scalars.
   endUserId    String?
   teamMemberId String?
-  codeHash   String
-  expiresAt  DateTime
-  consumedAt DateTime?
-  createdAt  DateTime  @default(now())
+  codeHash     String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime  @default(now())
 
-  @@index([userId])
   @@index([endUserId])
   @@index([teamMemberId])
   @@map("login_otps")
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId  String?
-  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  actorId   String?
-  actor     User?    @relation(fields: [actorId], references: [id])
-  // Z1.1b: dual-FK actor columns. Same shape/reasoning as Message's
-  // senderEndUserId/senderTeamMemberId — see the comment there. actorId
-  // stays populated during the Z1 transition; new writes will populate
-  // exactly one of the three. SYSTEM-actor rows (backfills, crons) keep
-  // all three null. CHECK constraint in prisma/rls_policies.sql.
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId          String?
+  ticket            Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  // Dual-FK actor (wrapper). Raw scalars. CHECK audit_logs_actor_exclusive:
+  // num_nonnulls(actorEndUserId, actorTeamMemberId) <= 1 — SYSTEM rows all-null.
   actorEndUserId    String?
   actorTeamMemberId String?
-  action    String // STATUS_CHANGE | PRIORITY_CHANGE | ASSIGN | REPLY | REOPEN | ...
-  fromValue String?
-  toValue   String?
-  createdAt DateTime @default(now())
+  action            String // STATUS_CHANGE | PRIORITY_CHANGE | ASSIGN | REPLY | REOPEN | ...
+  fromValue         String?
+  toValue           String?
+  createdAt         DateTime @default(now())
 
   @@index([tenantId, ticketId])
   @@index([tenantId, actorEndUserId])
@@ -529,25 +392,23 @@ model AuditLog {
 // has no RETURNING, sidestepping the problem entirely — we don't need the
 // created row back anyway.
 model Notification {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Dual-FK recipient (wrapper). Exactly one must be non-null (CHECK
+  // notifications_recipient_present).
   recipientEndUserId    String?
   recipientTeamMemberId String?
-  type      String // TICKET_REPLY | STATUS_CHANGE | ASSIGNED | REGISTRATION_PENDING | REGISTRATION_APPROVED | REGISTRATION_REJECTED
-  title     String
-  body      String?
-  ticketId  String?
-  ticket    Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  type                  String // TICKET_REPLY | STATUS_CHANGE | ASSIGNED | REGISTRATION_PENDING | REGISTRATION_APPROVED | REGISTRATION_REJECTED
+  title                 String
+  body                  String?
+  ticketId              String?
+  ticket                Ticket?  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  isRead                Boolean  @default(false)
+  createdAt             DateTime @default(now())
 
-  @@index([tenantId, userId, isRead, createdAt])
-  @@index([tenantId, recipientEndUserId])
-  @@index([tenantId, recipientTeamMemberId])
+  @@index([tenantId, recipientEndUserId, isRead, createdAt])
+  @@index([tenantId, recipientTeamMemberId, isRead, createdAt])
   @@map("notifications")
 }
 
@@ -576,16 +437,16 @@ model Notification {
 //     stays read-authoritative until Z1.5 removes it.
 
 model AuthCredential {
-  id                     String    @id @default(cuid())
-  tenantId               String
-  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  subjectEndUserId       String?
-  subjectTeamMemberId    String?
-  passwordHash           String
-  passwordChangedAt      DateTime?
-  mfaSecret              String?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectEndUserId    String?
+  subjectTeamMemberId String?
+  passwordHash        String
+  passwordChangedAt   DateTime?
+  mfaSecret           String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([tenantId, subjectEndUserId])
   @@index([tenantId, subjectTeamMemberId])
@@ -593,38 +454,38 @@ model AuthCredential {
 }
 
 model TeamMemberLifecycle {
-  subjectId      String     @id
-  tenantId       String
-  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  status         UserStatus
-  invitedAt      DateTime?
-  invitedById    String?
-  approvedAt     DateTime?
-  approvedById   String?
-  rejectedAt     DateTime?
-  rejectedById   String?
-  lastActiveAt   DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  subjectId    String     @id
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status       UserStatus
+  invitedAt    DateTime?
+  invitedById  String?
+  approvedAt   DateTime?
+  approvedById String?
+  rejectedAt   DateTime?
+  rejectedById String?
+  lastActiveAt DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([tenantId, status])
   @@map("team_member_lifecycle")
 }
 
 model EndUserLifecycle {
-  subjectId      String     @id
-  tenantId       String
-  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  status         UserStatus
-  invitedAt      DateTime?
-  invitedById    String?
-  approvedAt     DateTime?
-  approvedById   String?
-  rejectedAt     DateTime?
-  rejectedById   String?
-  lastActiveAt   DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  subjectId    String     @id
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status       UserStatus
+  invitedAt    DateTime?
+  invitedById  String?
+  approvedAt   DateTime?
+  approvedById String?
+  rejectedAt   DateTime?
+  rejectedById String?
+  lastActiveAt DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([tenantId, status])
   @@map("end_user_lifecycle")
@@ -678,19 +539,17 @@ model ChatbotConfig {
 }
 
 model ChatConversation {
-  id        String        @id @default(cuid())
-  tenantId  String
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  userId    String?
-  user      User?         @relation(fields: [userId], references: [id])
-  // Z1.4a: dual-FK bridge (see boundary doc §7.1).
+  id           String        @id @default(cuid())
+  tenantId     String
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Dual-FK subject (wrapper). Raw scalars.
   endUserId    String?
   teamMemberId String?
-  status    String        @default("active") // active | escalated | closed
-  ticketId  String?
-  ticket    Ticket?       @relation(fields: [ticketId], references: [id])
-  createdAt DateTime      @default(now())
-  messages  ChatMessage[]
+  status       String        @default("active") // active | escalated | closed
+  ticketId     String?
+  ticket       Ticket?       @relation(fields: [ticketId], references: [id])
+  createdAt    DateTime      @default(now())
+  messages     ChatMessage[]
 
   @@index([tenantId])
   @@index([tenantId, endUserId])
@@ -780,8 +639,8 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  endUsers            EndUser[]
-  endUserMemberships  EndUserOrganization[]
+  endUsers           EndUser[]
+  endUserMemberships EndUserOrganization[]
 
   @@unique([tenantId, name])
   @@index([tenantId, domain])

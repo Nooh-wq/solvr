@@ -187,7 +187,6 @@ export async function startImpersonation(tenantId: string) {
       // Z1.4a: super.ts is SUPER_ADMIN-only (staff).
       data: {
         tenantId,
-        actorId: session.subjectId,
         actorTeamMemberId: session.subjectId,
         action: "IMPERSONATION_START",
         toValue: `${session.name} <${session.email}>`,
@@ -208,7 +207,6 @@ export async function stopImpersonation() {
     tx.auditLog.create({
       data: {
         tenantId: session.tenantId,
-        actorId: session.subjectId,
         actorTeamMemberId: session.subjectId,
         action: "IMPERSONATION_END",
         toValue: `${session.name} <${session.email}>`,

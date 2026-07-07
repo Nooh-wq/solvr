@@ -70,7 +70,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           ticketId={ticket.id}
           status={ticket.status}
           priority={ticket.priority}
-          assignedToId={ticket.assignedToId}
+          assignedToId={ticket.assignedTeamMemberId}
           agents={agents.map((a) => ({ id: a.id, name: a.name ?? a.email }))}
         />
 

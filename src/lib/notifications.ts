@@ -65,19 +65,18 @@ export async function notify(
     }
   }
 
-  await tx.notification.createMany({
-    data: inputs.map((n) => {
-      const kind = roleById.get(n.userId);
-      return {
-        tenantId: n.tenantId,
-        userId: n.userId,
-        recipientEndUserId: kind === "END_USER" ? n.userId : null,
-        recipientTeamMemberId: kind === "TEAM_MEMBER" ? n.userId : null,
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        ticketId: n.ticketId,
-      };
-    }),
+  const rows = inputs.flatMap((n) => {
+    const kind = roleById.get(n.userId);
+    if (!kind) return []; // recipient not resolvable in either wrapper store — skip
+    return [{
+      tenantId: n.tenantId,
+      recipientEndUserId: kind === "END_USER" ? n.userId : null,
+      recipientTeamMemberId: kind === "TEAM_MEMBER" ? n.userId : null,
+      type: n.type,
+      title: n.title,
+      body: n.body,
+      ticketId: n.ticketId,
+    }];
   });
+  if (rows.length > 0) await tx.notification.createMany({ data: rows });
 }
