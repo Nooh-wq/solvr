@@ -6,50 +6,89 @@ import { z } from "zod";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { updateProfileSchema, changePasswordSchema } from "@/lib/validation/profile";
-import { uploadImage } from "@/lib/storage";
 import { createSessionCookie } from "@/lib/session";
 import { roleToSubjectKind } from "@/lib/z1-dual-fk";
+import {
+  systemContext,
+  getEndUser,
+  getTeamMember,
+  updateEndUser,
+  updateTeamMember,
+} from "@/lib/shared-platform";
 
-export async function getMyProfile() {
+type ProfileDto = {
+  id: string;
+  name: string;
+  email: string;
+  company: string | null;
+  role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN";
+  avatarUrl: string | null;
+  createdAt: Date;
+};
+
+export async function getMyProfile(): Promise<ProfileDto> {
   const session = await requireSession();
-  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
-    tx.user.findUniqueOrThrow({
-      where: { id: session.subjectId },
-      select: { id: true, name: true, email: true, company: true, role: true, avatarUrl: true, createdAt: true },
-    })
-  );
+  const ctx = systemContext(session.tenantId);
+
+  // Z1.5b: identity read from wrapper (not legacy users). company is
+  // deprecated free-text — returned as null until Z1.7 lands a proper
+  // organization-name display path. avatarUrl null per boundary §7.10.
+  if (session.role === "CLIENT") {
+    const endUser = await getEndUser(ctx, session.subjectId);
+    if (!endUser) throw new Error("PROFILE_NOT_FOUND");
+    return {
+      id: endUser.id,
+      name: endUser.name ?? endUser.email,
+      email: endUser.email,
+      company: null,
+      role: "CLIENT",
+      avatarUrl: null,
+      createdAt: endUser.createdAt,
+    };
+  }
+  const teamMember = await getTeamMember(ctx, session.subjectId);
+  if (!teamMember) throw new Error("PROFILE_NOT_FOUND");
+  return {
+    id: teamMember.id,
+    name: teamMember.name ?? teamMember.email,
+    email: teamMember.email,
+    company: null,
+    role: session.role,
+    avatarUrl: null,
+    createdAt: teamMember.createdAt,
+  };
 }
 
-/** Uploads a profile picture to Supabase Storage and saves the resulting public URL — see lib/storage.ts. */
-export async function uploadProfilePicture(formData: FormData) {
-  const session = await requireSession();
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return { ok: false as const, error: "No file provided." };
-
-  const ext = file.name.split(".").pop()?.toLowerCase() || "png";
-  const result = await uploadImage("avatars", `${session.subjectId}/avatar.${ext}`, file);
-  if (!result.ok) return { ok: false as const, error: result.error };
-
-  // Fixed storage path (upsert) means the public URL never changes, so a
-  // cache-busting query param is needed or the old picture keeps showing.
-  const url = `${result.url}?v=${Date.now()}`;
-
-  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
-    tx.user.update({ where: { id: session.subjectId }, data: { avatarUrl: url } })
-  );
-
-  revalidatePath("/", "layout");
-  return { ok: true as const, url };
+/**
+ * Z1.5b: avatar upload is intentionally disabled between Z1.4b and Z1.7.
+ * The legacy users.avatarUrl column is dropped by Z1.5; wrapper DTOs don't
+ * expose avatarUrl yet. Z1.7 (post-Z1.5, cross-repo Shared Platform
+ * migration) restores it. UI degrades to initials-only per §7.10.
+ */
+export async function uploadProfilePicture(
+  _formData: FormData
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  await requireSession();
+  return {
+    ok: false,
+    error: "Profile pictures are temporarily unavailable while Z1.7 is in flight. See boundary doc §7.10.",
+  };
 }
 
-/** Self-service — name/company only. Email, role, and status are managed by admins (see actions/admin.ts). */
+/** Self-service — name only. Email, role, and status are managed by admins (see actions/admin.ts). */
 export async function updateProfile(input: z.infer<typeof updateProfileSchema>) {
   const session = await requireSession();
   const data = updateProfileSchema.parse(input);
+  const ctx = systemContext(session.tenantId);
 
-  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
-    tx.user.update({ where: { id: session.subjectId }, data: { name: data.name, company: data.company } })
-  );
+  // Z1.5b: name write goes to wrapper. company (legacy free-text) is
+  // dropped — organization membership lives on wrapper's EndUserOrganization
+  // and is not writable through the self-service profile form.
+  if (session.role === "CLIENT") {
+    await updateEndUser(ctx, session.subjectId, { name: data.name });
+  } else {
+    await updateTeamMember(ctx, session.subjectId, { name: data.name });
+  }
 
   revalidatePath("/", "layout");
   return { ok: true as const };
@@ -62,20 +101,20 @@ export async function changeMyPassword(input: z.infer<typeof changePasswordSchem
   const data = parsed.data;
 
   const result = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
-    const user = await tx.user.findUniqueOrThrow({ where: { id: session.subjectId } });
-    const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
+    // Z1.5b: read passwordHash from auth_credentials (not legacy users).
+    // Match by subject_* dual-FK; see prisma/z1_8a_migration.sql header
+    // for the id-preservation convention.
+    const subjectField = session.role === "CLIENT" ? "subjectEndUserId" : "subjectTeamMemberId";
+    const cred = await tx.authCredential.findFirst({
+      where: { tenantId: session.tenantId, [subjectField]: session.subjectId },
+    });
+    if (!cred) return { error: "Account not found." as const };
+
+    const valid = await bcrypt.compare(data.currentPassword, cred.passwordHash);
     if (!valid) return { error: "Current password is incorrect." as const };
 
     const passwordHash = await bcrypt.hash(data.newPassword, 10);
     const now = new Date();
-    // Stamp the change so getSessionUser() invalidates every session issued
-    // before now — this is what actually revokes other/stolen sessions.
-    await tx.user.update({ where: { id: session.subjectId }, data: { passwordHash, passwordChangedAt: now } });
-    // Z1.8a dual-write: mirror password change to auth_credentials.
-    // Match by dual-FK, NOT by id (auth_credentials.id is fresh cuid; the
-    // subject_* columns are preserved from Z1.3). See prisma/z1_8a_migration.sql
-    // header for the id-preservation convention.
-    const subjectField = session.role === "CLIENT" ? "subjectEndUserId" : "subjectTeamMemberId";
     await tx.authCredential.updateMany({
       where: { tenantId: session.tenantId, [subjectField]: session.subjectId },
       data: { passwordHash, passwordChangedAt: now },
@@ -87,8 +126,7 @@ export async function changeMyPassword(input: z.infer<typeof changePasswordSchem
 
   // Re-issue THIS session's cookie with a fresh iat (>= passwordChangedAt) so
   // the user who just changed their password stays logged in on this device,
-  // while all their other sessions are invalidated. Done outside the tx —
-  // cookies() is only writable in the action body, not mid-transaction.
+  // while all their other sessions are invalidated.
   await createSessionCookie({
     subjectId: session.subjectId,
     subjectKind: roleToSubjectKind(session.role),

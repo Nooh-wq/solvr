@@ -537,7 +537,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
       if (!data.isInternal) {
         await notify(tx, {
           tenantId: session.tenantId,
-          userId: ticket.clientId,
+          userId: client.id,
           type: "TICKET_REPLY",
           title: `New reply on ${ticket.reference}`,
           body: data.body.slice(0, 140),
@@ -673,7 +673,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
       if (statusChanged) {
         await notify(tx, {
           tenantId: session.tenantId,
-          userId: ticket.clientId,
+          userId: client.id,
           type: "STATUS_CHANGE",
           title: `${ticket.reference} is now ${data.status?.replace("_", " ").toLowerCase()}`,
           ticketId: ticket.id,

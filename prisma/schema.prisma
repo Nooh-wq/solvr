@@ -278,8 +278,8 @@ model Ticket {
   priority     Priority     @default(MEDIUM)
   categoryId   String?
   category     Category?    @relation(fields: [categoryId], references: [id])
-  clientId     String
-  client       User         @relation("ClientTickets", fields: [clientId], references: [id])
+  clientId     String?
+  client       User?        @relation("ClientTickets", fields: [clientId], references: [id])
   assignedToId String?
   assignedTo   User?        @relation("AssignedAgent", fields: [assignedToId], references: [id])
   // Z1.4a: dual-FK bridge columns. clientId can point at either an EndUser
