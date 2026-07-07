@@ -5,11 +5,20 @@ import { redirect } from "next/navigation";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { withRls } from "@/lib/db";
+import { prisma, withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { sendAgentInviteEmail } from "@/lib/email/events";
 import { createTenantSchema } from "@/lib/validation/super";
 import { createImpersonationCookie, destroyImpersonationCookie } from "@/lib/session";
+import {
+  systemContext,
+  seedStandardRoles,
+  getRoleByName,
+  createTeamMember,
+  getOrCreateDefaultGroup,
+  assignTeamMemberToGroup,
+} from "@/lib/shared-platform";
+import { randomUUID } from "node:crypto";
 
 const DEFAULT_CATEGORIES = ["Technical", "Billing", "General", "Other"];
 
@@ -40,9 +49,17 @@ export async function listTenantsWithHealth() {
       where: { slug: { not: { startsWith: "_z18-staging-" } } },
       orderBy: { createdAt: "asc" },
     });
-    const userCounts = await tx.user.groupBy({ by: ["tenantId"], _count: true });
-    const ticketCounts = await tx.ticket.groupBy({ by: ["tenantId"], _count: true });
-    const userByTenant = new Map(userCounts.map((u) => [u.tenantId, u._count]));
+    // Z1.5b: user counts come from the wrapper's identity tables (end_users +
+    // team_members). SUPER_ADMIN scope + tenant_isolation policies let the
+    // groupBy run cross-tenant here.
+    const [euCounts, tmCounts, ticketCounts] = await Promise.all([
+      tx.endUser.groupBy({ by: ["tenantId"], _count: true }),
+      tx.teamMember.groupBy({ by: ["tenantId"], _count: true }),
+      tx.ticket.groupBy({ by: ["tenantId"], _count: true }),
+    ]);
+    const userByTenant = new Map<string, number>();
+    for (const r of euCounts) userByTenant.set(r.tenantId, (userByTenant.get(r.tenantId) ?? 0) + r._count);
+    for (const r of tmCounts) userByTenant.set(r.tenantId, (userByTenant.get(r.tenantId) ?? 0) + r._count);
     const ticketByTenant = new Map(ticketCounts.map((t) => [t.tenantId, t._count]));
     return tenants.map((t) => ({
       ...t,
@@ -78,35 +95,49 @@ export async function createTenant(input: z.infer<typeof createTenantSchema>) {
       await tx.category.create({ data: { tenantId: tenant.id, name } });
     }
 
-    const adminUser = await tx.user.create({
-      data: {
-        tenantId: tenant.id,
-        name: data.adminName,
-        email: data.adminEmail,
-        role: "ADMIN",
-        passwordHash,
-        status: "ACTIVE",
-      },
-    });
-    // Z1.8b: seed credentials + lifecycle for the initial ADMIN alongside
-    // the legacy user. Runs inside the same super_admin_write RLS scope.
-    await tx.authCredential.create({
-      data: {
-        tenantId: tenant.id,
-        subjectTeamMemberId: adminUser.id,
-        passwordHash,
-      },
-    });
-    await tx.teamMemberLifecycle.create({
-      data: {
-        tenantId: tenant.id,
-        subjectId: adminUser.id,
-        status: "ACTIVE",
-      },
-    });
-
     return tenant;
   });
+
+  // Z1.5b: post-tx wrapper provisioning. Seeds standard roles + default
+  // group, creates the initial ADMIN as a TeamMember (not a legacy user),
+  // and pairs it with credentials + lifecycle. The wrapper opens its own
+  // tenant-scoped RLS transactions internally.
+  const ctx = systemContext(tenant.id);
+  await seedStandardRoles(ctx);
+  const adminRole = await getRoleByName(ctx, "Admin");
+  if (!adminRole) throw new Error("STANDARD_ROLES_NOT_SEEDED");
+  const defaultGroup = await getOrCreateDefaultGroup(ctx);
+
+  const adminSubjectId = randomUUID();
+  const adminTeamMember = await createTeamMember(ctx, {
+    id: adminSubjectId,
+    email: data.adminEmail,
+    name: data.adminName,
+    roleId: adminRole.id,
+  });
+  await assignTeamMemberToGroup(ctx, adminTeamMember.id, defaultGroup.id);
+
+  // Support-owned auth companion rows for the new admin. These use
+  // super_admin_write scope on the new tenant.
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      await tx.authCredential.create({
+        data: {
+          tenantId: tenant.id,
+          subjectTeamMemberId: adminTeamMember.id,
+          passwordHash,
+        },
+      });
+      await tx.teamMemberLifecycle.create({
+        data: {
+          tenantId: tenant.id,
+          subjectId: adminTeamMember.id,
+          status: "ACTIVE",
+        },
+      });
+    }
+  );
 
   // Sent using the new tenant's (just-created, default) branding.
   const branding = await withRls({ tenantId: tenant.id, userId: null, role: "SUPER_ADMIN" }, (tx) =>

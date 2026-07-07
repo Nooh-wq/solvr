@@ -11,6 +11,15 @@ import {
 import { signTenantSignupToken, verifyTenantSignupToken, createSessionCookie } from "@/lib/session";
 import { sendLoginOtpEmail } from "@/lib/email/events";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
+import {
+  systemContext,
+  seedStandardRoles,
+  getRoleByName,
+  createTeamMember,
+  getOrCreateDefaultGroup,
+  assignTeamMemberToGroup,
+} from "@/lib/shared-platform";
+import { randomUUID } from "node:crypto";
 
 // Default seed data for a brand-new client tenant. Kept in sync with
 // super.ts's createTenant() so the two paths produce identical starting
@@ -58,7 +67,12 @@ export async function startTenantSignup(input: z.infer<typeof tenantSignupSchema
     { tenantId: hostTenant.id, userId: null, role: "SUPER_ADMIN" },
     async (tx) => ({
       slugTaken: await tx.tenant.findUnique({ where: { slug: data.slug } }),
-      emailTaken: await tx.user.findFirst({ where: { email: data.adminEmail } }),
+      // Z1.5b: email uniqueness now checks wrapper tables (team_members +
+      // end_users) cross-tenant under SUPER_ADMIN scope. Legacy users table
+      // is gone.
+      emailTaken:
+        (await tx.teamMember.findFirst({ where: { email: data.adminEmail } })) ??
+        (await tx.endUser.findFirst({ where: { email: data.adminEmail } })),
     })
   );
   if (uniqueness.slugTaken) return { ok: false, error: "That workspace URL is taken — pick another.", field: "slug" };
@@ -121,7 +135,10 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
     async (tx) => {
       const slugTaken = await tx.tenant.findUnique({ where: { slug: payload.slug } });
       if (slugTaken) throw new Error("SLUG_TAKEN");
-      const emailTaken = await tx.user.findFirst({ where: { email: payload.adminEmail } });
+      // Z1.5b: cross-tenant email uniqueness on wrapper tables.
+      const emailTaken =
+        (await tx.teamMember.findFirst({ where: { email: payload.adminEmail } })) ??
+        (await tx.endUser.findFirst({ where: { email: payload.adminEmail } }));
       if (emailTaken) throw new Error("EMAIL_TAKEN");
 
       const tenant = await tx.tenant.create({
@@ -139,32 +156,22 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
         await tx.category.create({ data: { tenantId: tenant.id, name } });
       }
 
+      // Z1.5b: allocate the subject id up-front so credentials + lifecycle
+      // + audit-log rows all reference the same id the wrapper TeamMember
+      // will get post-tx. Same shape as super.ts::createTenant.
+      const subjectId = randomUUID();
       const now = new Date();
-      const user = await tx.user.create({
-        data: {
-          tenantId: tenant.id,
-          name: payload.adminName,
-          email: payload.adminEmail,
-          role: "SUPER_ADMIN",
-          passwordHash: payload.passwordHash,
-          status: "ACTIVE",
-          approvedAt: now,
-          lastActiveAt: now,
-        },
-      });
-      // Z1.8b: seed credentials + lifecycle for the initial SUPER_ADMIN
-      // alongside the legacy user. RLS-scoped by the transaction's tenantId.
       await tx.authCredential.create({
         data: {
           tenantId: tenant.id,
-          subjectTeamMemberId: user.id,
+          subjectTeamMemberId: subjectId,
           passwordHash: payload.passwordHash,
         },
       });
       await tx.teamMemberLifecycle.create({
         data: {
           tenantId: tenant.id,
-          subjectId: user.id,
+          subjectId,
           status: "ACTIVE",
           approvedAt: now,
           lastActiveAt: now,
@@ -172,17 +179,16 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
       });
 
       await tx.auditLog.create({
-        // Z1.4a: newly created tenant's SUPER_ADMIN is always staff → TeamMember.
+        // Newly created tenant's SUPER_ADMIN is always staff → TeamMember.
         data: {
           tenantId: tenant.id,
-          actorId: user.id,
-          actorTeamMemberId: user.id,
+          actorTeamMemberId: subjectId,
           action: "TENANT_CREATED",
           toValue: tenant.name,
         },
       });
 
-      return { tenantId: tenant.id, userId: user.id };
+      return { tenantId: tenant.id, userId: subjectId };
     }
   ).catch((e) => {
     if (e instanceof Error && e.message === "SLUG_TAKEN") return { failed: "SLUG_TAKEN" as const };
@@ -199,6 +205,22 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
           : "An account with this email was just created elsewhere. Log in instead.",
     };
   }
+
+  // Z1.5b: wrapper provisioning happens post-tx. Seeds standard roles +
+  // default group, then materializes the wrapper TeamMember at the same
+  // subjectId that the credentials + lifecycle rows already reference.
+  const ctx = systemContext(created.tenantId);
+  await seedStandardRoles(ctx);
+  const superAdminRole = await getRoleByName(ctx, "Super Admin");
+  if (!superAdminRole) throw new Error("STANDARD_ROLES_NOT_SEEDED");
+  const defaultGroup = await getOrCreateDefaultGroup(ctx);
+  const adminTeamMember = await createTeamMember(ctx, {
+    id: created.userId,
+    email: payload.adminEmail,
+    name: payload.adminName,
+    roleId: superAdminRole.id,
+  });
+  await assignTeamMemberToGroup(ctx, adminTeamMember.id, defaultGroup.id);
 
   // Tenant signup creates the initial SUPER_ADMIN — always a TEAM_MEMBER.
   await createSessionCookie({
