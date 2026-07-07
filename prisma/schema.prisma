@@ -107,6 +107,7 @@ model Tenant {
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
+  subjectAvatars       SubjectAvatar[]
 
   @@map("tenants")
 }
@@ -470,6 +471,24 @@ model TeamMemberLifecycle {
 
   @@index([tenantId, status])
   @@map("team_member_lifecycle")
+}
+
+// Z1.7 — Support-owned avatar store. Same Set B rationale as
+// AuthCredential + *Lifecycle: wrapper stays identity-only, Support
+// owns UI concerns. Keyed by subjectId (unique across end_users /
+// team_members thanks to Z1.3 preserved-ids). Written by
+// actions/profile.ts's uploadProfilePicture; read by getSessionUser
+// and by list views via lib/avatars.ts's getAvatarUrlsByIds().
+model SubjectAvatar {
+  subjectId String   @id
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  avatarUrl String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("subject_avatars")
 }
 
 model EndUserLifecycle {

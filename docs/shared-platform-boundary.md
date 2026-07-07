@@ -426,9 +426,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 - (a) Add `avatarUrl String?` directly to `end_users` / `team_members` in Shared Platform. Simple, ships fast, mildly polluting to the identity DTO surface with a UI concern.
 - (b) Introduce a `user_preferences` (or `avatars`) table in Shared Platform keyed by `(tenantId, endUserId | teamMemberId)`. Wrapper adds `getAvatarUrlsByIds(ctx, ids[])`. More flexible if UI ever needs more per-person UI state (dark-mode preference, notification prefs, etc.) — matches how a real product tends to accumulate these fields.
 
-**Ordering:** Z1.7 lands **last** in the Z1 chain — after Z1.5 (which drops the legacy `users` table, making `users.avatarUrl` unreachable). Full sequence in §7.11. There's no fixed calendar gate on Z1.7; Support runs on initials-only avatars until it lands. Named here so it can't be silently forgotten.
+**Chosen (Z1.7 landed): option (c) — Support-owned `SubjectAvatar` table.** Both (a) and (b) require a cross-repo change to the Shared Platform's schema. Support decided to defer that decision indefinitely and instead extend the Set B precedent (`AuthCredential`, `TeamMemberLifecycle`, `EndUserLifecycle` — Support owns UI/auth companion tables; wrapper stays identity-only) to avatars. Ships as `prisma/z1_7_migration.sql` + `src/lib/avatars.ts` + a `SubjectAvatar` model in `schema.prisma`, keyed by `subjectId` (unique across the two wrapper stores thanks to Z1.3's preserved-ids). If the Shared Platform later grows its own avatar/preferences surface (option a or b), `SubjectAvatar` backfills into it with one query keyed on `subjectId` — the boundary invariant stays intact.
 
-**Concrete signal that Z1.7 needs to be scheduled:** the first "why did avatars disappear?" internal user report. Until then, it's a background item.
+**Ordering:** Z1.7 landed **last** in the Z1 chain — after Z1.5 (which dropped the legacy `users` table, making `users.avatarUrl` unreachable). Full sequence in §7.11.
 
 ### 7.11 Post-Z1.4b milestone sequence (authoritative)
 

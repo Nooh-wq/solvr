@@ -16,6 +16,7 @@ import {
   getTeamMember,
   getTeamMembersByIds,
 } from "@/lib/shared-platform";
+import { getAvatarUrlsByIds } from "@/lib/avatars";
 import { resolveMessageSender } from "@/lib/z1-view-models";
 import { dualFkForUser, inviterCols } from "@/lib/z1-dual-fk";
 import type { TenantBranding } from "@/generated/prisma";
@@ -180,9 +181,10 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
     if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
     if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(guest.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
   const clientName =
     (ticket.clientEndUserId && endUsers.get(ticket.clientEndUserId)?.name) ||
@@ -206,6 +208,7 @@ export async function getGuestTicketView(rawToken: string): Promise<GuestTicketV
           },
           endUsers,
           teamMembers,
+          avatars,
         ),
       ),
       attachments: await Promise.all(
@@ -262,9 +265,10 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
     if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
     if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(guest.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   return Promise.all(
@@ -284,6 +288,7 @@ export async function getGuestTicketMessages(rawToken: string): Promise<GuestTic
           },
           endUsers,
           teamMembers,
+          avatars,
         ),
       ),
       attachments: await Promise.all(

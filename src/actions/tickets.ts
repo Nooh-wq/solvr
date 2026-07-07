@@ -47,6 +47,7 @@ import {
   type TeamMember,
   type Organization,
 } from "@/lib/shared-platform";
+import { getAvatarUrlsByIds } from "@/lib/avatars";
 import {
   resolveUserLike,
   resolveMessageSender,
@@ -185,9 +186,10 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
     if (t.clientTeamMemberId) teamMemberIds.add(t.clientTeamMemberId);
     if (t.assignedTeamMemberId) teamMemberIds.add(t.assignedTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(session.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   return rows.map((t) => ({
@@ -196,11 +198,12 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
       { endUserId: t.clientEndUserId, teamMemberId: t.clientTeamMemberId },
       endUsers,
       teamMembers,
+      avatars,
     ),
     assignedTo: t.assignedTeamMemberId
       ? (() => {
           const tm = teamMembers.get(t.assignedTeamMemberId);
-          return tm ? teamMemberToUserLike(tm) : null;
+          return tm ? teamMemberToUserLike(tm, avatars) : null;
         })()
       : null,
   }));
@@ -258,21 +261,23 @@ export async function getTicket(ticketId: string) {
       if (a.uploadedByTeamMemberId) teamMemberIds.add(a.uploadedByTeamMemberId);
     }
   }
-  const [endUsers, teamMembers, organizations] = await Promise.all([
+  const [endUsers, teamMembers, organizations, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
     getOrganizationsByIds(wrapperCtx, [...organizationIds]),
+    getAvatarUrlsByIds(session.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   const client: UserLike | null = resolveUserLike(
     { endUserId: ticket.clientEndUserId, teamMemberId: ticket.clientTeamMemberId },
     endUsers,
     teamMembers,
+    avatars,
   );
   const assignedTo: UserLike | null = ticket.assignedTeamMemberId
     ? (() => {
         const tm = teamMembers.get(ticket.assignedTeamMemberId);
-        return tm ? teamMemberToUserLike(tm) : null;
+        return tm ? teamMemberToUserLike(tm, avatars) : null;
       })()
     : null;
   const organization: Organization | null = ticket.organizationId
@@ -295,6 +300,7 @@ export async function getTicket(ticketId: string) {
           },
           endUsers,
           teamMembers,
+          avatars,
         ),
         attachments: await Promise.all(
           m.attachments.map(async (a) => ({
@@ -303,6 +309,7 @@ export async function getTicket(ticketId: string) {
               { endUserId: a.uploadedByEndUserId, teamMemberId: a.uploadedByTeamMemberId },
               endUsers,
               teamMembers,
+              avatars,
             ),
             fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
           }))
@@ -316,6 +323,7 @@ export async function getTicket(ticketId: string) {
           { endUserId: a.uploadedByEndUserId, teamMemberId: a.uploadedByTeamMemberId },
           endUsers,
           teamMembers,
+          avatars,
         ),
         fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
       }))
@@ -363,9 +371,10 @@ export async function getTicketMessages(ticketId: string) {
     if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
     if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(session.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   return Promise.all(
@@ -384,6 +393,7 @@ export async function getTicketMessages(ticketId: string) {
         },
         endUsers,
         teamMembers,
+        avatars,
       ),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({

@@ -3,11 +3,14 @@
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { updateProfileSchema, changePasswordSchema } from "@/lib/validation/profile";
 import { createSessionCookie } from "@/lib/session";
 import { roleToSubjectKind } from "@/lib/z1-dual-fk";
+import { uploadImage } from "@/lib/storage";
+import { getAvatarUrl } from "@/lib/avatars";
 import {
   systemContext,
   getEndUser,
@@ -30,9 +33,10 @@ export async function getMyProfile(): Promise<ProfileDto> {
   const session = await requireSession();
   const ctx = systemContext(session.tenantId);
 
-  // Z1.5b: identity read from wrapper (not legacy users). company is
-  // deprecated free-text — returned as null until Z1.7 lands a proper
-  // organization-name display path. avatarUrl null per boundary §7.10.
+  // Identity from wrapper; avatar from Support-owned SubjectAvatar
+  // (Z1.7). Organization-name display path is separate work; `company`
+  // stays null on the DTO for now.
+  const avatarUrl = await getAvatarUrl(session.tenantId, session.subjectId);
   if (session.role === "CLIENT") {
     const endUser = await getEndUser(ctx, session.subjectId);
     if (!endUser) throw new Error("PROFILE_NOT_FOUND");
@@ -42,7 +46,7 @@ export async function getMyProfile(): Promise<ProfileDto> {
       email: endUser.email,
       company: null,
       role: "CLIENT",
-      avatarUrl: null,
+      avatarUrl,
       createdAt: endUser.createdAt,
     };
   }
@@ -54,25 +58,47 @@ export async function getMyProfile(): Promise<ProfileDto> {
     email: teamMember.email,
     company: null,
     role: session.role,
-    avatarUrl: null,
+    avatarUrl,
     createdAt: teamMember.createdAt,
   };
 }
 
+const AVATAR_BUCKET = "profile-avatars";
+
 /**
- * Z1.5b: avatar upload is intentionally disabled between Z1.4b and Z1.7.
- * The legacy users.avatarUrl column is dropped by Z1.5; wrapper DTOs don't
- * expose avatarUrl yet. Z1.7 (post-Z1.5, cross-repo Shared Platform
- * migration) restores it. UI degrades to initials-only per §7.10.
+ * Uploads the acting session's own profile picture to the public
+ * avatar bucket and upserts the SubjectAvatar row (Z1.7). Wrapper
+ * DTOs stay identity-only; avatars live Support-side.
  */
 export async function uploadProfilePicture(
-  _formData: FormData
+  formData: FormData
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
-  await requireSession();
-  return {
-    ok: false,
-    error: "Profile pictures are temporarily unavailable while Z1.7 is in flight. See boundary doc §7.10.",
-  };
+  const session = await requireSession();
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "No file provided." };
+  }
+
+  const ext = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : "png";
+  const path = `${session.tenantId}/${session.subjectId}/${crypto.randomUUID()}.${ext}`;
+  const upload = await uploadImage(AVATAR_BUCKET, path, file);
+  if (!upload.ok) return upload;
+
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) =>
+      tx.subjectAvatar.upsert({
+        where: { subjectId: session.subjectId },
+        create: {
+          subjectId: session.subjectId,
+          tenantId: session.tenantId,
+          avatarUrl: upload.url,
+        },
+        update: { avatarUrl: upload.url },
+      })
+  );
+
+  return { ok: true, url: upload.url };
 }
 
 /** Self-service — name only. Email, role, and status are managed by admins (see actions/admin.ts). */

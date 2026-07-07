@@ -9,11 +9,12 @@
 // bypass the wrapper. Widening in one place keeps the surface small
 // and the widening decision auditable.
 //
-// Legacy-only fields (avatarUrl, status) are documented as null in
-// Z1.4b — the wrapper does not yet expose them. If they turn out to
-// be truly required post-Z1.5, the fix is to widen the Shared Platform
-// EndUser/TeamMember schema (cross-repo migration), not to keep dual
-// reads live in Support long-term.
+// Z1.7 restored avatarUrl via the Support-owned SubjectAvatar table
+// (see boundary doc §7.10). Consumers pass a batch-fetched Map<
+// subjectId, url> alongside the wrapper Maps; a subject with no
+// SubjectAvatar row surfaces as avatarUrl: null (initials-only UI).
+// `status` remains null — Support lifecycle state doesn't belong on
+// the person view-model itself (see the comment on the field below).
 
 import type { EndUser, TeamMember } from "@/lib/shared-platform";
 
@@ -47,24 +48,24 @@ export type UserLike = {
 // DTO → view-model converters
 // ---------------------------------------------------------------------------
 
-export function endUserToUserLike(eu: EndUser): UserLike {
+export function endUserToUserLike(eu: EndUser, avatars?: Map<string, string>): UserLike {
   return {
     id: eu.id,
     name: eu.name,
     email: eu.email,
     kind: "END_USER",
-    avatarUrl: null,
+    avatarUrl: avatars?.get(eu.id) ?? null,
     status: null,
   };
 }
 
-export function teamMemberToUserLike(tm: TeamMember): UserLike {
+export function teamMemberToUserLike(tm: TeamMember, avatars?: Map<string, string>): UserLike {
   return {
     id: tm.id,
     name: tm.name,
     email: tm.email,
     kind: "TEAM_MEMBER",
-    avatarUrl: null,
+    avatarUrl: avatars?.get(tm.id) ?? null,
     status: null,
   };
 }
@@ -88,15 +89,16 @@ export function teamMemberToUserLike(tm: TeamMember): UserLike {
 export function resolveUserLike(
   cols: { endUserId: string | null; teamMemberId: string | null },
   endUsers: Map<string, EndUser>,
-  teamMembers: Map<string, TeamMember>
+  teamMembers: Map<string, TeamMember>,
+  avatars?: Map<string, string>
 ): UserLike | null {
   if (cols.endUserId) {
     const eu = endUsers.get(cols.endUserId);
-    return eu ? endUserToUserLike(eu) : null;
+    return eu ? endUserToUserLike(eu, avatars) : null;
   }
   if (cols.teamMemberId) {
     const tm = teamMembers.get(cols.teamMemberId);
-    return tm ? teamMemberToUserLike(tm) : null;
+    return tm ? teamMemberToUserLike(tm, avatars) : null;
   }
   return null;
 }
@@ -155,12 +157,14 @@ export function resolveMessageSender(
     senderRole: string; // "CLIENT" | "AGENT" | "ADMIN" | "BOT" | "SYSTEM" | ...
   },
   endUsers: Map<string, EndUser>,
-  teamMembers: Map<string, TeamMember>
+  teamMembers: Map<string, TeamMember>,
+  avatars?: Map<string, string>
 ): MessageSender {
   const user = resolveUserLike(
     { endUserId: cols.senderEndUserId, teamMemberId: cols.senderTeamMemberId },
     endUsers,
-    teamMembers
+    teamMembers,
+    avatars
   );
   if (user) return user;
   if (cols.guest) {
@@ -195,12 +199,14 @@ export function resolveAuditActor(
     actorTeamMemberId: string | null;
   },
   endUsers: Map<string, EndUser>,
-  teamMembers: Map<string, TeamMember>
+  teamMembers: Map<string, TeamMember>,
+  avatars?: Map<string, string>
 ): AuditActor {
   const user = resolveUserLike(
     { endUserId: cols.actorEndUserId, teamMemberId: cols.actorTeamMemberId },
     endUsers,
-    teamMembers
+    teamMembers,
+    avatars
   );
   if (user) return user;
   return {
