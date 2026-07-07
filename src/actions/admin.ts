@@ -42,13 +42,21 @@ import {
   getRoleByName,
   createEndUser,
   createTeamMember,
+  updateEndUser,
   updateTeamMember,
   deleteEndUser,
   deleteTeamMember,
   WrapperNotFoundError,
 } from "@/lib/shared-platform";
 import { resolveAuditActor } from "@/lib/z1-view-models";
-import type { LegacyRole, Priority } from "@/generated/prisma";
+import type { LegacyRole, Priority, UserStatus } from "@/generated/prisma";
+
+// Z1.5b: single canonical role string, subset of LegacyRole. Every Set B
+// consumer already accepts the same widened literal (auth.ts UserRole,
+// team-directory role prop). We keep `LegacyRole` as the underlying
+// alias so callers importing it type-check unchanged; Z1.5c will collapse
+// this back to a bare string literal when the enum is dropped.
+type TeamRole = LegacyRole;
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
 // Not a configurable policy engine — see the analytics-v2 plan's explicit
@@ -67,129 +75,285 @@ function generateTempPassword() {
 type Tx = Prisma.TransactionClient;
 
 /**
- * Lockout guard (spec §1.1). Returns true only when `userId` IS the last
+ * Lockout guard (spec §1.1). Returns true only when `subjectId` IS the last
  * remaining ACTIVE Super Admin on this tenant — i.e. this specific row is
  * a Super Admin, currently ACTIVE, and no other ACTIVE Super Admins exist.
  * Any code changing role/status/deletion of a user must consult this to
  * avoid leaving the tenant with no one able to manage roles.
+ *
+ * Z1.5b: sources shifted to wrapper Role + TeamMemberLifecycle. A CLIENT
+ * is trivially not a Super Admin — short-circuit false. Otherwise resolve
+ * the tenant's Super Admin wrapper role id, then count TeamMembers with
+ * that role whose lifecycle row is ACTIVE.
  */
 async function isLastSuperAdmin(
   tx: Tx,
-  userId: string,
+  subjectId: string,
   tenantId: string,
-  role: string,
-  status: string
+  role: TeamRole,
+  status: UserStatus
 ): Promise<boolean> {
   if (role !== "SUPER_ADMIN" || status !== "ACTIVE") return false;
-  const count = await tx.user.count({
-    where: { tenantId, role: "SUPER_ADMIN", status: "ACTIVE" },
+  const superAdminRole = await tx.role.findFirst({
+    where: { tenantId, name: "Super Admin" },
+    select: { id: true },
   });
-  // If we're the only one, count is 1 — deactivating/demoting/deleting us
-  // drops it to 0. Any count > 1 is safe.
-  return count <= 1;
+  if (!superAdminRole) return false;
+  const superAdmins = await tx.teamMember.findMany({
+    where: { tenantId, roleId: superAdminRole.id },
+    select: { id: true },
+  });
+  if (superAdmins.length === 0) return false;
+  const activeCount = await tx.teamMemberLifecycle.count({
+    where: {
+      tenantId,
+      status: "ACTIVE",
+      subjectId: { in: superAdmins.map((s) => s.id) },
+    },
+  });
+  // If we're the only one, activeCount is 1 — deactivating/demoting/deleting
+  // us drops it to 0. Any count > 1 is safe. Guard target must be in the
+  // set for the check to be meaningful.
+  const targetIsSuperAdmin = superAdmins.some((s) => s.id === subjectId);
+  return targetIsSuperAdmin && activeCount <= 1;
+}
+
+// ---------------------------------------------------------------------------
+// Set B loaders — a "team row" is the merged view of one subject (EndUser
+// or TeamMember) with its lifecycle + org + role. Replaces every previous
+// tx.user.* read. Kept here rather than in a helper file because it's
+// admin.ts-scoped: only the /admin/team surface consumes this shape.
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified team-row shape returned by loadTeamRow / loadTeamRows. Field
+ * names match the previous TEAM_ROW_SELECT so /admin/team's page.tsx
+ * consumes it without change. `avatarUrl` is intentionally always null:
+ * Z1.7 will thread it back through the wrapper (boundary doc §7.10).
+ * `company` (legacy free-text) is always null since it was dropped from
+ * the wrapper — `companyRef.name` is the sole company source now.
+ */
+export type TeamRow = {
+  id: string;
+  name: string | null;
+  email: string;
+  role: TeamRole;
+  status: UserStatus;
+  company: string | null;
+  companyRef: { id: string; name: string } | null;
+  lastActiveAt: Date | null;
+  invitedAt: Date | null;
+  invitedById: string | null;
+  approvedAt: Date | null;
+  approvedById: string | null;
+  rejectedAt: Date | null;
+  rejectedById: string | null;
+  avatarUrl: string | null;
+  createdAt: Date;
+};
+
+const SUPER_ADMIN_ROLE_NAME = "Super Admin";
+const ADMIN_ROLE_NAME = "Admin";
+const AGENT_ROLE_NAME = "Agent";
+
+/** Wrapper Role.name → LegacyRole enum. Unknown roles fall to "AGENT" (safest tier). */
+function wrapperRoleNameToTeamRole(name: string): TeamRole {
+  if (name === SUPER_ADMIN_ROLE_NAME) return "SUPER_ADMIN";
+  if (name === ADMIN_ROLE_NAME) return "ADMIN";
+  if (name === AGENT_ROLE_NAME) return "AGENT";
+  return "AGENT";
+}
+
+/** LegacyRole enum → wrapper Role.name for staff roles. Throws on CLIENT (not a wrapper role). */
+function teamRoleToWrapperRoleName(role: TeamRole): string {
+  if (role === "SUPER_ADMIN") return SUPER_ADMIN_ROLE_NAME;
+  if (role === "ADMIN") return ADMIN_ROLE_NAME;
+  if (role === "AGENT") return AGENT_ROLE_NAME;
+  throw new Error(`CLIENT is not a wrapper staff role`);
+}
+
+/**
+ * Loads one team row by subject id. Returns null if the id doesn't match
+ * an EndUser OR a TeamMember on this tenant. Two wrapper reads + one
+ * lifecycle read + optional Organization read.
+ */
+async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise<TeamRow | null> {
+  const [endUser, teamMember] = await Promise.all([
+    tx.endUser.findFirst({
+      where: { id: subjectId, tenantId },
+    }),
+    tx.teamMember.findFirst({
+      where: { id: subjectId, tenantId },
+      include: { role: { select: { name: true } } },
+    }),
+  ]);
+  if (!endUser && !teamMember) return null;
+
+  const [endUserLifecycle, teamMemberLifecycle, org] = await Promise.all([
+    endUser ? tx.endUserLifecycle.findUnique({ where: { subjectId } }) : Promise.resolve(null),
+    teamMember ? tx.teamMemberLifecycle.findUnique({ where: { subjectId } }) : Promise.resolve(null),
+    endUser?.organizationId
+      ? tx.organization.findFirst({
+          where: { id: endUser.organizationId, tenantId },
+          select: { id: true, name: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  if (endUser) {
+    const lc = endUserLifecycle;
+    return {
+      id: endUser.id,
+      name: endUser.name,
+      email: endUser.email,
+      role: "CLIENT",
+      status: lc?.status ?? "PENDING",
+      company: null,
+      companyRef: org ? { id: org.id, name: org.name } : null,
+      lastActiveAt: lc?.lastActiveAt ?? null,
+      invitedAt: lc?.invitedAt ?? null,
+      invitedById: lc?.invitedById ?? null,
+      approvedAt: lc?.approvedAt ?? null,
+      approvedById: lc?.approvedById ?? null,
+      rejectedAt: lc?.rejectedAt ?? null,
+      rejectedById: lc?.rejectedById ?? null,
+      avatarUrl: null,
+      createdAt: endUser.createdAt,
+    };
+  }
+  const tm = teamMember!;
+  const lc = teamMemberLifecycle;
+  return {
+    id: tm.id,
+    name: tm.name,
+    email: tm.email,
+    role: wrapperRoleNameToTeamRole(tm.role.name),
+    status: lc?.status ?? "PENDING",
+    company: null,
+    companyRef: null,
+    lastActiveAt: lc?.lastActiveAt ?? null,
+    invitedAt: lc?.invitedAt ?? null,
+    invitedById: lc?.invitedById ?? null,
+    approvedAt: lc?.approvedAt ?? null,
+    approvedById: lc?.approvedById ?? null,
+    rejectedAt: lc?.rejectedAt ?? null,
+    rejectedById: lc?.rejectedById ?? null,
+    avatarUrl: null,
+    createdAt: tm.createdAt,
+  };
+}
+
+/**
+ * Loads all team rows for a tenant. Optional status filter applies to the
+ * merged rows (a subject with no lifecycle row defaults to PENDING). Sorted
+ * by createdAt asc — same order the previous tx.user.findMany used.
+ */
+async function loadTeamRows(
+  tx: Tx,
+  tenantId: string,
+  opts: { statusIn?: UserStatus[] } = {}
+): Promise<TeamRow[]> {
+  const [endUsers, teamMembers, endUserLcs, teamMemberLcs] = await Promise.all([
+    tx.endUser.findMany({ where: { tenantId } }),
+    tx.teamMember.findMany({
+      where: { tenantId },
+      include: { role: { select: { name: true } } },
+    }),
+    tx.endUserLifecycle.findMany({ where: { tenantId } }),
+    tx.teamMemberLifecycle.findMany({ where: { tenantId } }),
+  ]);
+
+  const endUserLcById = new Map(endUserLcs.map((l) => [l.subjectId, l]));
+  const teamMemberLcById = new Map(teamMemberLcs.map((l) => [l.subjectId, l]));
+
+  const orgIds = Array.from(
+    new Set(endUsers.map((eu) => eu.organizationId).filter((id): id is string => !!id))
+  );
+  const orgs =
+    orgIds.length > 0
+      ? await tx.organization.findMany({
+          where: { id: { in: orgIds }, tenantId },
+          select: { id: true, name: true },
+        })
+      : [];
+  const orgById = new Map(orgs.map((o) => [o.id, o]));
+
+  const rows: TeamRow[] = [];
+
+  for (const eu of endUsers) {
+    const lc = endUserLcById.get(eu.id);
+    const status = lc?.status ?? ("PENDING" as UserStatus);
+    if (opts.statusIn && !opts.statusIn.includes(status)) continue;
+    const org = eu.organizationId ? orgById.get(eu.organizationId) : undefined;
+    rows.push({
+      id: eu.id,
+      name: eu.name,
+      email: eu.email,
+      role: "CLIENT",
+      status,
+      company: null,
+      companyRef: org ? { id: org.id, name: org.name } : null,
+      lastActiveAt: lc?.lastActiveAt ?? null,
+      invitedAt: lc?.invitedAt ?? null,
+      invitedById: lc?.invitedById ?? null,
+      approvedAt: lc?.approvedAt ?? null,
+      approvedById: lc?.approvedById ?? null,
+      rejectedAt: lc?.rejectedAt ?? null,
+      rejectedById: lc?.rejectedById ?? null,
+      avatarUrl: null,
+      createdAt: eu.createdAt,
+    });
+  }
+
+  for (const tm of teamMembers) {
+    const lc = teamMemberLcById.get(tm.id);
+    const status = lc?.status ?? ("PENDING" as UserStatus);
+    if (opts.statusIn && !opts.statusIn.includes(status)) continue;
+    rows.push({
+      id: tm.id,
+      name: tm.name,
+      email: tm.email,
+      role: wrapperRoleNameToTeamRole(tm.role.name),
+      status,
+      company: null,
+      companyRef: null,
+      lastActiveAt: lc?.lastActiveAt ?? null,
+      invitedAt: lc?.invitedAt ?? null,
+      invitedById: lc?.invitedById ?? null,
+      approvedAt: lc?.approvedAt ?? null,
+      approvedById: lc?.approvedById ?? null,
+      rejectedAt: lc?.rejectedAt ?? null,
+      rejectedById: lc?.rejectedById ?? null,
+      avatarUrl: null,
+      createdAt: tm.createdAt,
+    });
+  }
+
+  return rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
 
 // ---------------------------------------------------------------------------
 // Team & roles
 // ---------------------------------------------------------------------------
 
-// Z1.6 merged-read pattern: wrapper as source of truth for identity
-// (id, name, email), legacy as source of truth for lifecycle
-// (status, role, timestamps, company link). See boundary doc §7.11.
-//
-// Three roundtrips in parallel — bounded by kind, not by row count.
-// Team sizes on a single tenant are small in practice (<200); if any
-// tenant grows past that, the wrapper cursor can be threaded through
-// here.
-//
-// Drift-safety: silent fallback to legacy name/email when the wrapper
-// doesn't have a matching row (see Q1 answer in the Z1.6 planning
-// checkpoint). Detected out-of-band via scripts/z1_6_drift_check.mjs.
-
+// Z1.5b: reads are wrapper + lifecycle only. Identity (name/email/role)
+// comes from EndUser / TeamMember + wrapper Role, status/timestamps
+// from EndUserLifecycle / TeamMemberLifecycle, org from wrapper
+// Organization. See docs/shared-platform-boundary.md §7.11.
 export async function listTeam() {
   const session = await requireSession({ minRole: "ADMIN" });
-  const wrapperCtx = systemContext(session.tenantId);
-
-  const [endUsersPage, teamMembersPage, legacyRows] = await Promise.all([
-    listEndUsers(wrapperCtx, { limit: 200 }),
-    listTeamMembers(wrapperCtx, { limit: 200 }),
-    withRls(
-      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-      (tx) =>
-        tx.user.findMany({
-          where: { tenantId: session.tenantId },
-          orderBy: { createdAt: "asc" },
-          select: TEAM_ROW_SELECT,
-        })
-    ),
-  ]);
-
-  return mergeTeamRows(legacyRows, endUsersPage.items, teamMembersPage.items);
+  return withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) => loadTeamRows(tx, session.tenantId)
+  );
 }
 
 export async function listPendingUsers() {
   const session = await requireSession({ minRole: "ADMIN" });
-  const wrapperCtx = systemContext(session.tenantId);
-
-  const [endUsersPage, teamMembersPage, legacyRows] = await Promise.all([
-    listEndUsers(wrapperCtx, { limit: 200 }),
-    listTeamMembers(wrapperCtx, { limit: 200 }),
-    withRls(
-      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-      (tx) =>
-        tx.user.findMany({
-          where: { tenantId: session.tenantId, status: "PENDING" },
-          orderBy: { createdAt: "asc" },
-          select: TEAM_ROW_SELECT,
-        })
-    ),
-  ]);
-
-  return mergeTeamRows(legacyRows, endUsersPage.items, teamMembersPage.items);
-}
-
-// Shared select-list: only the fields the Team page UI actually
-// consumes flow out. Drops passwordHash and other legacy columns that
-// were previously returned by include-less findMany — small hygiene
-// improvement while migrating.
-const TEAM_ROW_SELECT = {
-  id: true,
-  name: true,           // fallback under drift-safety
-  email: true,          // fallback under drift-safety
-  role: true,           // legacy enum, still owned by legacy users through Z1.8
-  status: true,         // lifecycle, owned by legacy through Z1.8
-  company: true,        // free-text legacy field
-  companyRef: { select: { id: true, name: true } },
-  lastActiveAt: true,
-  invitedAt: true,
-  invitedById: true,
-  approvedAt: true,
-  approvedById: true,
-  rejectedAt: true,
-  rejectedById: true,
-  avatarUrl: true,      // stays legacy through Z1.7
-  createdAt: true,
-} as const;
-
-type TeamLegacyRow = Prisma.UserGetPayload<{ select: typeof TEAM_ROW_SELECT }>;
-
-function mergeTeamRows(
-  legacyRows: TeamLegacyRow[],
-  endUsers: readonly { id: string; name: string | null; email: string }[],
-  teamMembers: readonly { id: string; name: string | null; email: string }[]
-): TeamLegacyRow[] {
-  const identityById = new Map<string, { name: string | null; email: string }>();
-  for (const eu of endUsers) identityById.set(eu.id, { name: eu.name, email: eu.email });
-  for (const tm of teamMembers) identityById.set(tm.id, { name: tm.name, email: tm.email });
-
-  return legacyRows.map((legacy) => {
-    const wrapper = identityById.get(legacy.id);
-    return {
-      ...legacy,
-      name: wrapper?.name ?? legacy.name,
-      email: wrapper?.email ?? legacy.email,
-    };
-  });
+  return withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) => loadTeamRows(tx, session.tenantId, { statusIn: ["PENDING"] })
+  );
 }
 
 type InviteUserResult = { ok: true } | { ok: false; error: string };
@@ -207,116 +371,104 @@ type InviteUserResult = { ok: true } | { ok: false; error: string };
 export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promise<InviteUserResult> {
   const session = await requireSession({ minRole: "ADMIN" });
 
-  // safeParse (not .parse) so a validation failure — e.g. the native <input
-  // type="email"> lets through addresses like "te@e" that HTML5 accepts but
-  // Zod rejects — returns a specific, user-facing message instead of
-  // throwing. A thrown error from a Server Action gets its message redacted
-  // by Next.js in production ("An error occurred in the Server Components
-  // render..."), which is what was surfacing here.
+  // safeParse: preserve specific validation errors through the Server Action
+  // boundary (throwing gets the message redacted by Next.js in production).
   const parsed = inviteUserSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
 
   const placeholderHash = await bcrypt.hash(generateTempPassword(), 10);
+  const organizationId = await matchCompanyByEmail(session.tenantId, data.email);
+  const ctx = systemContext(session.tenantId);
+  const subjectId = crypto.randomUUID();
 
-  // Z1.6: companyId auto-match now routes through the wrapper's
-  // matchOrganizationByEmailDomain (see src/lib/company-match.ts). Same
-  // returned id — preserved-id from Z1.3 means legacy.companyId ==
-  // wrapper Organization.id, so a single lookup value serves both stores.
-  const companyId = await matchCompanyByEmail(session.tenantId, data.email);
-
-  let user: { id: string; email: string; name: string; role: LegacyRole };
-  let branding: Awaited<ReturnType<typeof getBranding>>;
-  try {
-    ({ user, branding } = await withRls(
-      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-      async (tx) => {
-        const existing = await tx.user.findUnique({
-          where: { tenantId_email: { tenantId: session.tenantId, email: data.email } },
-        });
-        if (existing) throw new Error("EXISTS");
-
-        const user = await tx.user.create({
-          data: {
-            tenantId: session.tenantId,
-            name: data.name,
-            email: data.email,
-            role: data.role,
-            company: data.company,
-            companyId,
-            passwordHash: placeholderHash,
-            status: "INVITED",
-            invitedAt: new Date(),
-            invitedById: session.subjectId,
-          },
-        });
-        // Z1.8a dual-write: lifecycle row for the new user. Same-tx (not
-        // post-commit) because lifecycle tables are Support-owned — no
-        // cross-boundary concern like the wrapper dual-write below.
-        // Upsert defensively in case a residual staging row exists.
-        const lifecycleData = {
-          tenantId: session.tenantId,
-          status: "INVITED" as const,
-          invitedAt: new Date(),
-          invitedById: session.subjectId,
-        };
-        if (data.role === "CLIENT") {
-          await tx.endUserLifecycle.upsert({
-            where: { subjectId: user.id },
-            create: { subjectId: user.id, ...lifecycleData },
-            update: lifecycleData,
-          });
-        } else {
-          await tx.teamMemberLifecycle.upsert({
-            where: { subjectId: user.id },
-            create: { subjectId: user.id, ...lifecycleData },
-            update: lifecycleData,
-          });
-        }
-        // Z1.9 correction: also create the auth_credentials row with the
-        // placeholder hash. Without this, acceptInvite's updateMany would
-        // silently no-op the password write (updateMany doesn't create),
-        // leaving invited users with a divergent legacy vs credentials hash
-        // after they accept.
-        await tx.authCredential.create({
-          data: {
-            tenantId: session.tenantId,
-            subjectEndUserId: data.role === "CLIENT" ? user.id : null,
-            subjectTeamMemberId: data.role === "CLIENT" ? null : user.id,
-            passwordHash: placeholderHash,
-          },
-        });
-        await tx.auditLog.create({
-          data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_USER", toValue: user.email },
-        });
-        const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-        return { user, branding };
-      }
-    ));
-  } catch (e) {
-    if (e instanceof Error && e.message === "EXISTS") {
-      return { ok: false, error: "An account with this email already exists." };
+  // Pre-tx uniqueness check across both stores under SUPER_ADMIN scope so
+  // we can return a clean {ok:false, error} instead of P2002 exceptions.
+  const exists = await withRls(
+    { tenantId: session.tenantId, userId: null, role: "SUPER_ADMIN" },
+    async (tx) => {
+      const [eu, tm] = await Promise.all([
+        tx.endUser.findFirst({ where: { tenantId: session.tenantId, email: data.email } }),
+        tx.teamMember.findFirst({ where: { tenantId: session.tenantId, email: data.email } }),
+      ]);
+      return Boolean(eu || tm);
     }
-    throw e;
+  );
+  if (exists) return { ok: false, error: "An account with this email already exists." };
+
+  // Wrapper counterpart first (fails cleanly if e.g. wrapper role missing).
+  // Cross-boundary correctness: wrapper create happens outside the Support
+  // withRls so the wrapper's own tenant-scoped tx isn't nested.
+  if (data.role === "CLIENT") {
+    await createEndUser(ctx, {
+      id: subjectId,
+      email: data.email,
+      name: data.name,
+      organizationId,
+    });
+  } else {
+    const wrapperRole = await getRoleByName(ctx, teamRoleToWrapperRoleName(data.role));
+    if (!wrapperRole) {
+      return {
+        ok: false,
+        error: `Wrapper role "${teamRoleToWrapperRoleName(data.role)}" is not seeded on this tenant.`,
+      };
+    }
+    await createTeamMember(ctx, {
+      id: subjectId,
+      email: data.email,
+      name: data.name,
+      roleId: wrapperRole.id,
+    });
   }
 
-  // Z1.6 dual-write: after the legacy transaction commits, create the
-  // wrapper counterpart with the preserved id. On wrapper failure the
-  // legacy row exists without a wrapper counterpart — drift-check
-  // script detects and reports; manual re-run of drift catch-up
-  // backfills. Same safety-net posture as the listTeam drift fallback.
-  await createWrapperCounterpart({
-    tenantId: session.tenantId,
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    organizationId: companyId,
-  });
+  // Lifecycle + credentials + audit — Support-owned tables, one tx.
+  const branding = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      const lifecycleData = {
+        tenantId: session.tenantId,
+        status: "INVITED" as const,
+        invitedAt: new Date(),
+        invitedById: session.subjectId,
+      };
+      if (data.role === "CLIENT") {
+        await tx.endUserLifecycle.upsert({
+          where: { subjectId },
+          create: { subjectId, ...lifecycleData },
+          update: lifecycleData,
+        });
+      } else {
+        await tx.teamMemberLifecycle.upsert({
+          where: { subjectId },
+          create: { subjectId, ...lifecycleData },
+          update: lifecycleData,
+        });
+      }
+      await tx.authCredential.create({
+        data: {
+          tenantId: session.tenantId,
+          subjectEndUserId: data.role === "CLIENT" ? subjectId : null,
+          subjectTeamMemberId: data.role === "CLIENT" ? null : subjectId,
+          passwordHash: placeholderHash,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "INVITE_USER",
+          toValue: data.email,
+        },
+      });
+      return tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
+    }
+  );
 
-  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const inviteToken = await signInviteToken({ userId: subjectId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
-  await sendUserInviteEmail(user.email, acceptUrl, branding);
+  await sendUserInviteEmail(data.email, acceptUrl, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
@@ -427,21 +579,24 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = updateUserSchema.parse(input);
 
-  const { targetRole, updated, roleChanged } = await withRls(
+  const { target, roleChanged, statusChanged } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) throw new Error("NOT_FOUND");
       if (target.id === session.subjectId && data.role && data.role !== target.role) {
         throw new Error("Cannot change your own role.");
       }
 
-      // Last-Super-Admin lockout guard (spec §1.1): the only remaining
-      // Super Admin on this tenant cannot be demoted or deactivated — either
-      // would leave the tenant with no one who can manage roles/tenant-wide
-      // settings. Computed here inside the transaction so the count reflects
-      // any concurrent updates.
-      const isTargetLastSuperAdmin = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      // Last-Super-Admin lockout guard (spec §1.1). See isLastSuperAdmin
+      // above — resolves against wrapper Role + TeamMemberLifecycle now.
+      const isTargetLastSuperAdmin = await isLastSuperAdmin(
+        tx,
+        target.id,
+        session.tenantId,
+        target.role,
+        target.status
+      );
       const isRoleChange = data.role !== undefined && data.role !== target.role;
       const isDeactivate = data.status === "SUSPENDED";
       const isReactivate = data.status === "ACTIVE";
@@ -456,107 +611,133 @@ export async function updateUser(input: z.infer<typeof updateUserSchema>) {
         assertActionAllowed("reactivate", target.status, { isLastSuperAdmin: false });
       }
 
-      const updated = await tx.user.update({
-        where: { id: target.id },
-        data: { role: data.role, status: data.status },
-      });
+      const statusChanged = data.status !== undefined && data.status !== target.status;
 
-      if (data.role && data.role !== target.role) {
+      if (statusChanged) {
+        const lifecyclePatch = { status: data.status! };
+        if (target.role === "CLIENT") {
+          await tx.endUserLifecycle.upsert({
+            where: { subjectId: target.id },
+            create: { subjectId: target.id, tenantId: session.tenantId, ...lifecyclePatch },
+            update: lifecyclePatch,
+          });
+        } else {
+          await tx.teamMemberLifecycle.upsert({
+            where: { subjectId: target.id },
+            create: { subjectId: target.id, tenantId: session.tenantId, ...lifecyclePatch },
+            update: lifecyclePatch,
+          });
+        }
+      }
+
+      if (isRoleChange) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
+            actorId: session.subjectId,
+            ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
-            toValue: data.role,
+            toValue: data.role!,
           },
         });
       }
-      if (data.status !== undefined && data.status !== target.status) {
+      if (statusChanged) {
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
+            actorId: session.subjectId,
+            ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: data.status === "ACTIVE" ? "REACTIVATE_USER" : "DEACTIVATE_USER",
             toValue: target.email,
           },
         });
       }
 
-      return { targetRole: target.role, updated, roleChanged: isRoleChange };
+      return { target, roleChanged: isRoleChange, statusChanged };
     }
   );
 
-  // Z1.6 dual-write: role changes propagate to the wrapper TeamMember.
-  // Cross-boundary role changes (CLIENT ↔ staff) throw explicitly —
-  // see updateWrapperCounterpartRole. Status/timestamp changes stay
-  // legacy-only through Z1.8.
+  // Role changes propagate to the wrapper TeamMember. Cross-boundary role
+  // changes (CLIENT ↔ staff) throw explicitly — see
+  // updateWrapperCounterpartRole. Fires after the Support-side tx commits
+  // so wrapper failure doesn't roll back the lifecycle/audit rows.
   if (roleChanged && data.role) {
-    await updateWrapperCounterpartRole(session.tenantId, updated.id, targetRole, data.role);
+    await updateWrapperCounterpartRole(session.tenantId, target.id, target.role, data.role);
   }
 
+  const nextStatus = statusChanged ? data.status! : target.status;
+  const nextRole = roleChanged ? data.role! : target.role;
+
   revalidatePath("/admin/team");
-  return { ok: true, user: updated };
+  return {
+    ok: true,
+    user: { id: target.id, email: target.email, role: nextRole, status: nextStatus },
+  };
 }
 
 /**
- * Permanently removes a user. `tickets.clientId` is `ON DELETE RESTRICT`
- * (see prisma/migrations/20260701012236_init), so this fails cleanly with a
- * clear message for any CLIENT who has ever opened a ticket — deleting them
- * would either silently orphan that ticket's history or require deciding
- * what to do with it, neither of which "delete a person" should do
- * implicitly. Agents/admins delete cleanly even with history: their
- * `messages.senderId`/`audit_logs.actorId`/`tickets.assignedToId` references
- * are all `ON DELETE SET NULL`, the same "this person left" behavior the
- * schema already uses.
+ * Permanently removes a user. Wrapper FKs on tickets (clientEndUserId /
+ * assignedTeamMemberId) enforce the same "no orphan history" invariant
+ * the legacy schema did — a P2003 surfaces as the same friendly message.
+ * Fires: Support-side audit + lifecycle delete → wrapper counterpart
+ * delete. Order matters: wrapper delete after Support-side commit so a
+ * P2003 from the wrapper doesn't half-delete the Support rows.
  */
 export async function deleteUser(input: z.infer<typeof userIdSchema>): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
   if (data.userId === session.subjectId) return { ok: false, error: "You can't delete your own account." };
 
-  try {
-    const outcome = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
-      if (!target) return { ok: false as const, error: "User not found." };
+  const outcome = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
+    const target = await loadTeamRow(tx, session.tenantId, data.userId);
+    if (!target) return { ok: false as const, error: "User not found." };
 
-      // Lockout guard (spec §1.1). Same reasoning as updateUser above,
-      // but returned as a user-facing error instead of a thrown one since
-      // the caller here already handles a `{ ok: false, error }` shape.
-      if (await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status)) {
-        return { ok: false as const, error: "Can't delete the last Super Admin on this tenant. Promote another Admin first." };
-      }
+    if (await isLastSuperAdmin(tx, target.id, session.tenantId, target.role, target.status)) {
+      return { ok: false as const, error: "Can't delete the last Super Admin on this tenant. Promote another Admin first." };
+    }
 
-      await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "DELETE_USER", toValue: target.email },
-      });
-      // Z1.8a dual-write: delete lifecycle row. deleteMany is idempotent —
-      // no error if the row doesn't exist (e.g. legacy user pre-Z1.8a backfill).
-      if (target.role === "CLIENT") {
-        await tx.endUserLifecycle.deleteMany({ where: { subjectId: target.id } });
-      } else {
-        await tx.teamMemberLifecycle.deleteMany({ where: { subjectId: target.id } });
-      }
-      await tx.user.delete({ where: { id: target.id } });
-
-      return { ok: true as const, deletedId: target.id, deletedRole: target.role };
+    await tx.auditLog.create({
+      data: {
+        tenantId: session.tenantId,
+        actorId: session.subjectId,
+        ...actorCols(dualFkForUser(session.subjectId, session.role)),
+        action: "DELETE_USER",
+        toValue: target.email,
+      },
     });
+    // Credentials + lifecycle are Support-owned; wipe both before the
+    // wrapper delete so a wrapper failure leaves the subject in a clean
+    // "orphaned-wrapper" state (drift-check can heal it), never a
+    // "credentials exist for a deleted wrapper subject" state.
+    await tx.authCredential.deleteMany({
+      where: {
+        tenantId: session.tenantId,
+        OR: [{ subjectEndUserId: target.id }, { subjectTeamMemberId: target.id }],
+      },
+    });
+    if (target.role === "CLIENT") {
+      await tx.endUserLifecycle.deleteMany({ where: { subjectId: target.id } });
+    } else {
+      await tx.teamMemberLifecycle.deleteMany({ where: { subjectId: target.id } });
+    }
 
-    if (!outcome.ok) return outcome;
+    return { ok: true as const, deletedId: target.id, deletedRole: target.role };
+  });
 
-    // Z1.6 dual-write: mirror the delete to the wrapper. Fires after
-    // the legacy transaction commits (drift-safety: wrapper failure
-    // doesn't block a successful legacy delete).
+  if (!outcome.ok) return outcome;
+
+  try {
     await deleteWrapperCounterpart(session.tenantId, outcome.deletedId, outcome.deletedRole);
-
-    revalidatePath("/admin/team");
-    return { ok: true as const };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
       return { ok: false, error: "Can't delete — this person still has tickets on record. Deactivate them instead." };
     }
     throw e;
   }
+
+  revalidatePath("/admin/team");
+  return { ok: true as const };
 }
 
 /** Approves a PENDING registration (email flow design §"Registration Approval Gate"). */
@@ -564,24 +745,14 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
 
-  const { user, branding } = await withRls(
+  const { targetEmail, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      // Z1.6 matrix tightening: was a silent `WHERE status: "PENDING"`
-      // filter that returned null on invalid state. Now uses the shared
-      // team-matrix guard so the failure surfaces with a clear message
-      // consistent with the other 8 admin actions.
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("approve", target.status, { isLastSuperAdmin: false });
 
-      const user = await tx.user.update({
-        where: { id: target.id },
-        data: { status: "ACTIVE", approvedAt: new Date(), approvedById: session.subjectId },
-      });
-      // Z1.8a dual-write: mirror status + approval fields to lifecycle table.
-      const approveLifecycle = {
-        tenantId: session.tenantId,
+      const patch = {
         status: "ACTIVE" as const,
         approvedAt: new Date(),
         approvedById: session.subjectId,
@@ -589,32 +760,38 @@ export async function approveUser(input: z.infer<typeof userIdSchema>) {
       if (target.role === "CLIENT") {
         await tx.endUserLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...approveLifecycle },
-          update: approveLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       } else {
         await tx.teamMemberLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...approveLifecycle },
-          update: approveLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "APPROVE_USER", toValue: user.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "APPROVE_USER",
+          toValue: target.email,
+        },
       });
       await notify(tx, {
         tenantId: session.tenantId,
-        userId: user.id,
+        userId: target.id,
         type: "REGISTRATION_APPROVED",
         title: "Your account was approved",
         body: "You can now log in.",
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { user, branding };
+      return { targetEmail: target.email, branding };
     }
   );
 
-  await sendRegistrationApprovedEmail(user.email, branding);
+  await sendRegistrationApprovedEmail(targetEmail, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
@@ -625,21 +802,14 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
 
-  const { user, branding } = await withRls(
+  const { targetEmail, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      // Z1.6 matrix tightening: same shape as approveUser above.
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("reject", target.status, { isLastSuperAdmin: false });
 
-      const user = await tx.user.update({
-        where: { id: target.id },
-        data: { status: "REJECTED", rejectedAt: new Date(), rejectedById: session.subjectId },
-      });
-      // Z1.8a dual-write.
-      const rejectLifecycle = {
-        tenantId: session.tenantId,
+      const patch = {
         status: "REJECTED" as const,
         rejectedAt: new Date(),
         rejectedById: session.subjectId,
@@ -647,25 +817,31 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
       if (target.role === "CLIENT") {
         await tx.endUserLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...rejectLifecycle },
-          update: rejectLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       } else {
         await tx.teamMemberLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...rejectLifecycle },
-          update: rejectLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "REJECT_USER", toValue: user.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "REJECT_USER",
+          toValue: target.email,
+        },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { user, branding };
+      return { targetEmail: target.email, branding };
     }
   );
 
-  await sendRegistrationRejectedEmail(user.email, branding);
+  await sendRegistrationRejectedEmail(targetEmail, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
@@ -684,24 +860,30 @@ export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
 
-  const { user, branding } = await withRls(
+  const { targetId, targetEmail, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("resendInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_RESENT", toValue: target.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "INVITE_RESENT",
+          toValue: target.email,
+        },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { user: target, branding };
+      return { targetId: target.id, targetEmail: target.email, branding };
     }
   );
 
-  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const inviteToken = await signInviteToken({ userId: targetId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
-  await sendUserInviteEmail(user.email, acceptUrl, branding);
+  await sendUserInviteEmail(targetEmail, acceptUrl, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
@@ -722,20 +904,30 @@ export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise
   const outcome = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) return { ok: false as const, error: "User not found." };
       assertActionAllowed("revokeInvite", target.status, { isLastSuperAdmin: false });
 
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "INVITE_REVOKED", toValue: target.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "INVITE_REVOKED",
+          toValue: target.email,
+        },
       });
-      // Z1.8a dual-write: delete lifecycle row before legacy delete.
+      await tx.authCredential.deleteMany({
+        where: {
+          tenantId: session.tenantId,
+          OR: [{ subjectEndUserId: target.id }, { subjectTeamMemberId: target.id }],
+        },
+      });
       if (target.role === "CLIENT") {
         await tx.endUserLifecycle.deleteMany({ where: { subjectId: target.id } });
       } else {
         await tx.teamMemberLifecycle.deleteMany({ where: { subjectId: target.id } });
       }
-      await tx.user.delete({ where: { id: target.id } });
 
       return { ok: true as const, deletedId: target.id, deletedRole: target.role };
     }
@@ -743,7 +935,6 @@ export async function revokeInvite(input: z.infer<typeof userIdSchema>): Promise
 
   if (!outcome.ok) return outcome;
 
-  // Z1.6 dual-write: mirror the delete to the wrapper.
   await deleteWrapperCounterpart(session.tenantId, outcome.deletedId, outcome.deletedRole);
 
   revalidatePath("/admin/team");
@@ -763,43 +954,44 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
   const session = await requireSession({ minRole: "ADMIN" });
   const data = userIdSchema.parse(input);
 
-  const { user, branding } = await withRls(
+  const { targetId, targetEmail, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const target = await tx.user.findFirst({ where: { id: data.userId, tenantId: session.tenantId } });
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
       if (!target) throw new Error("NOT_FOUND");
       assertActionAllowed("reinvite", target.status, { isLastSuperAdmin: false });
 
-      const updated = await tx.user.update({ where: { id: target.id }, data: { status: "INVITED" } });
-      // Z1.8a dual-write: reinvite transitions status back to INVITED.
-      const reinviteLifecycle = {
-        tenantId: session.tenantId,
-        status: "INVITED" as const,
-      };
+      const patch = { status: "INVITED" as const };
       if (target.role === "CLIENT") {
         await tx.endUserLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...reinviteLifecycle },
-          update: reinviteLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       } else {
         await tx.teamMemberLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...reinviteLifecycle },
-          update: reinviteLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "REINVITE_USER", toValue: updated.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "REINVITE_USER",
+          toValue: target.email,
+        },
       });
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { user: updated, branding };
+      return { targetId: target.id, targetEmail: target.email, branding };
     }
   );
 
-  const inviteToken = await signInviteToken({ userId: user.id, tenantId: session.tenantId });
+  const inviteToken = await signInviteToken({ userId: targetId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
-  await sendUserInviteEmail(user.email, acceptUrl, branding);
+  await sendUserInviteEmail(targetEmail, acceptUrl, branding);
 
   revalidatePath("/admin/team");
   return { ok: true };
@@ -825,13 +1017,11 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
   const { result, wrapperUpdates } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const targets = await tx.user.findMany({
-        where: { id: { in: data.userIds }, tenantId: session.tenantId },
-      });
-      const found = new Map(targets.map((t) => [t.id, t]));
+      const rows = await loadTeamRows(tx, session.tenantId);
+      const found = new Map(rows.map((r) => [r.id, r]));
 
       const result: BulkActionResult = { succeeded: [], failed: [] };
-      const wrapperUpdates: { id: string; fromRole: LegacyRole; toRole: LegacyRole }[] = [];
+      const wrapperUpdates: { id: string; fromRole: TeamRole; toRole: TeamRole }[] = [];
 
       for (const id of data.userIds) {
         const target = found.get(id);
@@ -843,7 +1033,7 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
           result.failed.push({ userId: id, reason: "You can't change your own role." });
           continue;
         }
-        const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+        const lastSuper = await isLastSuperAdmin(tx, target.id, session.tenantId, target.role, target.status);
         try {
           assertActionAllowed("changeRole", target.status, { isLastSuperAdmin: lastSuper });
         } catch (e) {
@@ -854,11 +1044,11 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
           result.succeeded.push(id); // Already the target role — no-op counts as success.
           continue;
         }
-        await tx.user.update({ where: { id: target.id }, data: { role: data.role } });
         await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)),
+            actorId: session.subjectId,
+            ...actorCols(dualFkForUser(session.subjectId, session.role)),
             action: "ROLE_CHANGE",
             fromValue: target.role,
             toValue: data.role,
@@ -872,16 +1062,13 @@ export async function bulkChangeRole(input: z.infer<typeof bulkChangeRoleSchema>
     }
   );
 
-  // Z1.6 dual-write: propagate every successful role change to the
-  // wrapper. Cross-boundary changes (CLIENT ↔ staff) throw, which
-  // demotes the row to `failed`. That's a behavior change (legacy
-  // silently drifted the wrapper); admin sees an explicit reason now.
+  // Wrapper role propagation happens after the Support-side tx commits.
+  // Cross-boundary changes (CLIENT ↔ staff) throw and get demoted to
+  // `failed` — legacy behavior silently drifted; explicit reasons now.
   for (const upd of wrapperUpdates) {
     try {
       await updateWrapperCounterpartRole(session.tenantId, upd.id, upd.fromRole, upd.toRole);
     } catch (e) {
-      // Move the entry from succeeded → failed on wrapper failure.
-      // Legacy row already updated — surfaces via drift-check.
       const idx = result.succeeded.indexOf(upd.id);
       if (idx >= 0) result.succeeded.splice(idx, 1);
       result.failed.push({
@@ -900,10 +1087,8 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
   const data = bulkUserIdsSchema.parse(input);
 
   return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
-    const targets = await tx.user.findMany({
-      where: { id: { in: data.userIds }, tenantId: session.tenantId },
-    });
-    const found = new Map(targets.map((t) => [t.id, t]));
+    const rows = await loadTeamRows(tx, session.tenantId);
+    const found = new Map(rows.map((r) => [r.id, r]));
 
     const result: BulkActionResult = { succeeded: [], failed: [] };
     for (const id of data.userIds) {
@@ -916,31 +1101,35 @@ export async function bulkDeactivate(input: z.infer<typeof bulkUserIdsSchema>): 
         result.failed.push({ userId: id, reason: "You can't deactivate yourself." });
         continue;
       }
-      const lastSuper = await isLastSuperAdmin(tx, target.id, target.tenantId, target.role, target.status);
+      const lastSuper = await isLastSuperAdmin(tx, target.id, session.tenantId, target.role, target.status);
       try {
         assertActionAllowed("deactivate", target.status, { isLastSuperAdmin: lastSuper });
       } catch (e) {
         result.failed.push({ userId: id, reason: e instanceof Error ? e.message : "Not allowed." });
         continue;
       }
-      await tx.user.update({ where: { id: target.id }, data: { status: "SUSPENDED" } });
-      // Z1.8a dual-write: mirror SUSPENDED status to lifecycle table.
-      const suspendLifecycle = { tenantId: session.tenantId, status: "SUSPENDED" as const };
+      const patch = { status: "SUSPENDED" as const };
       if (target.role === "CLIENT") {
         await tx.endUserLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...suspendLifecycle },
-          update: suspendLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       } else {
         await tx.teamMemberLifecycle.upsert({
           where: { subjectId: target.id },
-          create: { subjectId: target.id, ...suspendLifecycle },
-          update: suspendLifecycle,
+          create: { subjectId: target.id, tenantId: session.tenantId, ...patch },
+          update: patch,
         });
       }
       await tx.auditLog.create({
-        data: { tenantId: session.tenantId, actorId: session.subjectId, ...actorCols(dualFkForUser(session.subjectId, session.role)), action: "DEACTIVATE_USER", toValue: target.email },
+        data: {
+          tenantId: session.tenantId,
+          actorId: session.subjectId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "DEACTIVATE_USER",
+          toValue: target.email,
+        },
       });
       result.succeeded.push(id);
     }
@@ -961,12 +1150,15 @@ export async function bulkExport(input: z.infer<typeof bulkUserIdsSchema>): Prom
   const session = await requireSession({ minRole: "ADMIN" });
   const data = bulkUserIdsSchema.parse(input);
 
-  const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
-    tx.user.findMany({
-      where: { id: { in: data.userIds }, tenantId: session.tenantId },
-      include: { companyRef: { select: { name: true } } },
-      orderBy: { name: "asc" },
-    })
+  const rows = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      const all = await loadTeamRows(tx, session.tenantId);
+      const wanted = new Set(data.userIds);
+      return all
+        .filter((r) => wanted.has(r.id))
+        .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+    }
   );
 
   if (rows.length === 0) return { ok: false, error: "No rows found for export." };
