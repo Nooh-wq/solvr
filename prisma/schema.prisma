@@ -81,6 +81,25 @@ enum SenderRole {
   GUEST
 }
 
+// Z2.1 — Custom Fields (Support-owned). Values live in one polymorphic
+// table keyed on (targetType, targetId); no Prisma relation to wrapper
+// models (rule 3, docs/shared-platform-boundary.md §3), so USER/ORG
+// targetIds are raw scalars. TICKET targetIds are Support-owned but
+// still stored as raw scalars to keep one shape for all three scopes.
+enum CustomFieldScope {
+  USER
+  ORG
+  TICKET
+}
+
+// Z2.1 subset only — DROPDOWN/MULTISELECT/LOOKUP land in Z2.2/Z2.5.
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  CHECKBOX
+}
+
 // ---------------------------------------------------------------------------
 // Tenancy
 // ---------------------------------------------------------------------------
@@ -108,6 +127,8 @@ model Tenant {
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
   subjectAvatars       SubjectAvatar[]
+  customFieldDefinitions CustomFieldDefinition[]
+  customFieldValues      CustomFieldValue[]
 
   @@map("tenants")
 }
@@ -508,6 +529,72 @@ model EndUserLifecycle {
 
   @@index([tenantId, status])
   @@map("end_user_lifecycle")
+}
+
+// ---------------------------------------------------------------------------
+// Z2.1 — Custom Fields
+//
+// One definition table + one polymorphic value table. `key` is immutable
+// (label/isRequired/position can change); placeholder resolvers
+// (`{{ticket.custom_fields.<key>}}`) and integrations depend on the key
+// staying stable. Uniqueness is (tenantId, scope, key) so USER and TICKET
+// can both have a "priority" key without collision.
+//
+// Deactivation, not deletion: definitions carry `isActive` — values are
+// kept so historical tickets keep their sidebar data. See Z2 spec §3.
+// ---------------------------------------------------------------------------
+
+model CustomFieldDefinition {
+  id          String           @id @default(cuid())
+  tenantId    String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scope       CustomFieldScope
+  type        CustomFieldType
+  // Immutable after create — see §3 of the Z2 spec. Lowercase snake_case,
+  // cannot start with a digit; enforced at the action layer (Zod) and
+  // the unique index below.
+  key         String
+  label       String
+  description String?
+  isActive    Boolean          @default(true)
+  isRequired  Boolean          @default(false)
+  // Display order within a (scope) column on admin/detail sidebars.
+  position    Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  values CustomFieldValue[]
+
+  @@unique([tenantId, scope, key])
+  @@index([tenantId, scope, isActive])
+  @@map("custom_field_definitions")
+}
+
+model CustomFieldValue {
+  id                String                @id @default(cuid())
+  tenantId          String
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fieldDefinitionId String
+  fieldDefinition   CustomFieldDefinition @relation(fields: [fieldDefinitionId], references: [id], onDelete: Cascade)
+  // Polymorphic target — mirrors the definition's scope. targetId is a
+  // raw scalar for USER (end_users.id) / ORG (organizations.id) because
+  // those are wrapper-owned; TICKET (tickets.id) is Support-owned but
+  // stored the same way so all three scopes share one query shape.
+  targetType        CustomFieldScope
+  targetId          String
+  // Typed value columns. Exactly one is populated per row, matching the
+  // definition's `type`. A CHECK constraint in the migration enforces
+  // this at the DB level; the actions layer enforces it in Zod first.
+  valueText         String?
+  valueNumber       Decimal?              @db.Decimal(20, 6)
+  valueDate         DateTime?
+  valueBoolean      Boolean?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([fieldDefinitionId, targetId])
+  @@index([tenantId, targetType, targetId])
+  @@map("custom_field_values")
 }
 
 // ---------------------------------------------------------------------------
