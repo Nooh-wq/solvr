@@ -70,6 +70,29 @@ export async function matchEndUserByEmail(
   return row ? toDto(row) : null;
 }
 
+/**
+ * Batch id lookup. Returns a Map keyed by id — callers can `.get(id)`
+ * without needing to array-search. Missing ids are simply absent from
+ * the Map (no throw, no null entry). Empty input returns empty Map.
+ *
+ * Z1.4b addition — see docs/shared-platform-boundary.md §7.9.
+ * Post-M7, this maps to `GET /api/v1/end-users?ids=...`.
+ */
+export async function getEndUsersByIds(
+  ctx: WrapperContext,
+  ids: readonly string[]
+): Promise<Map<string, EndUser>> {
+  if (ids.length === 0) return new Map();
+  const rows = await withRls(
+    { tenantId: ctx.tenantId, userId: ctx.actor?.teamMemberId ?? null, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.endUser.findMany({
+        where: { tenantId: ctx.tenantId, id: { in: [...ids] } },
+      })
+  );
+  return new Map(rows.map((r) => [r.id, toDto(r)]));
+}
+
 // ---------------------------------------------------------------------------
 // Write
 // ---------------------------------------------------------------------------

@@ -6,6 +6,12 @@ import { requireSession } from "@/lib/auth";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
 import { dualFkForUser, uploaderCols } from "@/lib/z1-dual-fk";
+import {
+  systemContext,
+  getEndUsersByIds,
+  getTeamMembersByIds,
+} from "@/lib/shared-platform";
+import { resolveUserLike } from "@/lib/z1-view-models";
 
 /** Every ticket-attachment action needs "does this session have any business touching this ticket" — same rule getTicket() already applies (staff: tenant match; client: must be the ticket's own client). */
 async function assertTicketAccess(
@@ -94,20 +100,39 @@ export async function listTicketAttachments(ticketId: string): Promise<TicketAtt
     (tx) =>
       tx.attachment.findMany({
         where: { ticketId, tenantId: session.tenantId },
-        include: { uploadedBy: { select: { name: true } } },
         orderBy: { uploadedAt: "desc" },
       })
   );
 
+  // Z1.4b: batch-resolve uploaders via wrapper.
+  const wrapperCtx = systemContext(session.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  for (const r of rows) {
+    if (r.uploadedByEndUserId) endUserIds.add(r.uploadedByEndUserId);
+    if (r.uploadedByTeamMemberId) teamMemberIds.add(r.uploadedByTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+
   return Promise.all(
-    rows.map(async (r) => ({
-      id: r.id,
-      fileName: r.fileName,
-      mimeType: r.mimeType,
-      sizeBytes: r.sizeBytes,
-      previewUrl: await getAttachmentSignedUrl(r.fileUrl),
-      uploadedAt: r.uploadedAt.toISOString(),
-      uploadedByName: r.uploadedBy?.name ?? null,
-    }))
+    rows.map(async (r) => {
+      const uploader = resolveUserLike(
+        { endUserId: r.uploadedByEndUserId, teamMemberId: r.uploadedByTeamMemberId },
+        endUsers,
+        teamMembers,
+      );
+      return {
+        id: r.id,
+        fileName: r.fileName,
+        mimeType: r.mimeType,
+        sizeBytes: r.sizeBytes,
+        previewUrl: await getAttachmentSignedUrl(r.fileUrl),
+        uploadedAt: r.uploadedAt.toISOString(),
+        uploadedByName: uploader?.name ?? null,
+      };
+    })
   );
 }

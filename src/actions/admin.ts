@@ -28,6 +28,14 @@ import { COUNTRIES, countryName } from "@/lib/countries";
 import { assertActionAllowed } from "@/lib/team-matrix";
 import { matchCompanyByEmail } from "@/lib/company-match";
 import { dualFkForUser, actorCols } from "@/lib/z1-dual-fk";
+import {
+  systemContext,
+  getEndUsersByIds,
+  getTeamMembersByIds,
+  listTeamMembers,
+  getRoleByName,
+} from "@/lib/shared-platform";
+import { resolveAuditActor } from "@/lib/z1-view-models";
 import type { Priority } from "@/generated/prisma";
 
 // Fixed per-priority first-response targets (analytics: SLA compliance KPI).
@@ -721,15 +729,40 @@ export async function listAuditLog(filter: Partial<z.infer<typeof auditLogFilter
   const f = auditLogFilterSchema.parse(filter);
   const PAGE_SIZE = 50;
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
     tx.auditLog.findMany({
       where: { tenantId: session.tenantId, action: f.action },
-      include: { actor: true, ticket: true },
+      include: { ticket: true },
       orderBy: { createdAt: "desc" },
       skip: (f.page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     })
   );
+
+  // Z1.4b: actor resolution via wrapper. Actor may be an EndUser, a
+  // TeamMember, or fully null (SYSTEM — auto-close, backfills, etc.).
+  // See docs/shared-platform-boundary.md §7.2 for why the CHECK allows
+  // 0 non-nulls.
+  const wrapperCtx = systemContext(session.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  for (const r of rows) {
+    if (r.actorEndUserId) endUserIds.add(r.actorEndUserId);
+    if (r.actorTeamMemberId) teamMemberIds.add(r.actorTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+
+  return rows.map((r) => ({
+    ...r,
+    actor: resolveAuditActor(
+      { actorEndUserId: r.actorEndUserId, actorTeamMemberId: r.actorTeamMemberId },
+      endUsers,
+      teamMembers,
+    ),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,11 +1079,11 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       _count: true,
     });
     const agentIds = byAgent.map((a) => a.assignedToId).filter((id): id is string => id !== null);
-    const agentsById =
-      agentIds.length > 0
-        ? await tx.user.findMany({ where: { id: { in: agentIds }, tenantId }, select: { id: true, name: true } })
-        : [];
-    const agentNameById = new Map(agentsById.map((a) => [a.id, a.name]));
+    // Z1.4b: agent names come from the wrapper (TeamMember, preserved id).
+    const agentsByIdMap = await getTeamMembersByIds(systemContext(tenantId), agentIds);
+    const agentNameById = new Map<string, string | null>(
+      Array.from(agentsByIdMap.values()).map((tm) => [tm.id, tm.name]),
+    );
     // Avg resolution time needs raw created/resolved pairs (groupBy can't avg
     // a computed diff) — pulled once and reused for both each agent's own
     // average AND the KPI-level overall average, to avoid two overlapping
@@ -1117,11 +1150,18 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     });
-    const allAgents = await tx.user.findMany({
-      where: { tenantId, role: { in: ["AGENT", "ADMIN"] }, status: "ACTIVE" },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    });
+    // Z1.4b: agent list for the analytics filter dropdown comes from
+    // the wrapper. Same "exclude Super Admin, sort by name" shape as
+    // listAgents() in actions/tickets.ts — same rationale.
+    const wrapperCtxAnalytics = systemContext(tenantId);
+    const [tmPage, superAdminRole] = await Promise.all([
+      listTeamMembers(wrapperCtxAnalytics, { limit: 200 }),
+      getRoleByName(wrapperCtxAnalytics, "Super Admin"),
+    ]);
+    const allAgents = tmPage.items
+      .filter((tm) => !superAdminRole || tm.roleId !== superAdminRole.id)
+      .map((tm) => ({ id: tm.id, name: tm.name ?? "" }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     return {
       filter: f,

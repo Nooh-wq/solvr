@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@/generated/prisma";
+import { systemContext, getEndUsersByIds, getTeamMembersByIds } from "@/lib/shared-platform";
 
 export type NotificationType =
   | "TICKET_REPLY"
@@ -32,32 +33,46 @@ export type NotificationInput = {
  * problem entirely — nothing here needs the created row back anyway.
  */
 export async function notify(
-  tx: Pick<PrismaClient, "notification" | "user">,
+  tx: Pick<PrismaClient, "notification">,
   ...inputs: NotificationInput[]
 ): Promise<void> {
   if (inputs.length === 0) return;
 
-  // Z1.4a: dual-write the recipient dual-FK columns. Batch a single
-  // findMany() to resolve each recipient's role rather than N-per-notify
-  // round-trips. RLS is scoped to tenantId (same tenant for every
-  // recipient in one notify() call — server actions always pass one
-  // tenantId), so this stays inside the caller's transaction.
-  const userIds = Array.from(new Set(inputs.map((n) => n.userId)));
-  const users = await tx.user.findMany({
-    where: { id: { in: userIds } },
-    select: { id: true, role: true },
-  });
-  const roleById = new Map(users.map((u) => [u.id, u.role]));
+  // Z1.4b: resolve recipient role via wrapper (batched). Notify()
+  // callers pass tenantId per input; every call today groups its
+  // notifications within a single tenant, so bucketing by tenantId is
+  // a defense-in-depth: if a future caller ever mixes tenants, the
+  // wrapper's tenant-scoped RLS naturally isolates each bucket.
+  const idsByTenant = new Map<string, Set<string>>();
+  for (const n of inputs) {
+    if (!idsByTenant.has(n.tenantId)) idsByTenant.set(n.tenantId, new Set());
+    idsByTenant.get(n.tenantId)!.add(n.userId);
+  }
+  const roleById = new Map<string, "END_USER" | "TEAM_MEMBER">();
+  for (const [tenantId, idSet] of idsByTenant) {
+    const wrapperCtx = systemContext(tenantId);
+    const ids = [...idSet];
+    const [endUsers, teamMembers] = await Promise.all([
+      getEndUsersByIds(wrapperCtx, ids),
+      getTeamMembersByIds(wrapperCtx, ids),
+    ]);
+    for (const id of ids) {
+      if (endUsers.has(id)) roleById.set(id, "END_USER");
+      else if (teamMembers.has(id)) roleById.set(id, "TEAM_MEMBER");
+      // absent: recipient exists in legacy users only (e.g. a fresh
+      // user created but never backfilled). Both dual-FK cols stay
+      // null — allowed by notifications_recipient_exclusive (<=1).
+    }
+  }
 
   await tx.notification.createMany({
     data: inputs.map((n) => {
-      const role = roleById.get(n.userId);
+      const kind = roleById.get(n.userId);
       return {
         tenantId: n.tenantId,
         userId: n.userId,
-        recipientEndUserId: role === "CLIENT" ? n.userId : null,
-        recipientTeamMemberId:
-          role === "AGENT" || role === "ADMIN" || role === "SUPER_ADMIN" ? n.userId : null,
+        recipientEndUserId: kind === "END_USER" ? n.userId : null,
+        recipientTeamMemberId: kind === "TEAM_MEMBER" ? n.userId : null,
         type: n.type,
         title: n.title,
         body: n.body,

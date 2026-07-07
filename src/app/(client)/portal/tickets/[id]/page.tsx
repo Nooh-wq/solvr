@@ -6,7 +6,6 @@ import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { ClientAiChatPanel } from "@/components/client-ai-chat-panel";
 import { participantNames } from "@/lib/participants";
-import { resolveMessageSender } from "@/lib/message-sender";
 import { TicketThread } from "./ticket-thread";
 import { TicketActions } from "./ticket-actions";
 
@@ -15,7 +14,9 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
   const [ticket, guests] = await Promise.all([getTicket(id), listTicketGuests(id)]);
   if (!ticket) notFound();
 
-  const mentionNames = participantNames(ticket.client.name, ticket.messages);
+  // Z1.4b: ticket.client is UserLike | null; sender is MessageSender (pre-resolved by getTicket).
+  const clientName = ticket.client?.name ?? "Unknown";
+  const mentionNames = participantNames(clientName, ticket.messages);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -34,17 +35,25 @@ export default async function ClientTicketPage({ params }: { params: Promise<{ i
 
         <TicketThread
           description={ticket.description}
-          clientName={ticket.client.name}
+          clientName={clientName}
           ticketId={ticket.id}
           mentionNames={mentionNames}
-          onPoll={getTicketMessages.bind(null, ticket.id)}
+          onPoll={async () => {
+            "use server";
+            const msgs = await getTicketMessages(ticket.id);
+            if (!msgs) return null;
+            return msgs.map((m) => ({
+              ...m,
+              sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
+            }));
+          }}
           messages={ticket.messages.map((m) => ({
             id: m.id,
             body: m.body,
             senderRole: m.senderRole,
             isInternal: m.isInternal,
             createdAt: m.createdAt.toISOString(),
-            sender: resolveMessageSender(m),
+            sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
             attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
           }))}
         />

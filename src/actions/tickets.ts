@@ -24,7 +24,6 @@ import {
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
 import { getAttachmentSignedUrl } from "@/lib/storage";
-import { resolveMessageSender } from "@/lib/message-sender";
 import { signCsatToken } from "@/lib/session";
 import {
   dualFkForUser,
@@ -33,6 +32,26 @@ import {
   senderCols,
   assignedTeamMemberCol,
 } from "@/lib/z1-dual-fk";
+import {
+  systemContext,
+  getEndUser,
+  getEndUsersByIds,
+  getTeamMember,
+  getTeamMembersByIds,
+  getOrganizationsByIds,
+  matchOrganizationByEmailDomain,
+  listTeamMembers,
+  getRoleByName,
+  type EndUser,
+  type TeamMember,
+  type Organization,
+} from "@/lib/shared-platform";
+import {
+  resolveUserLike,
+  resolveMessageSender,
+  teamMemberToUserLike,
+  type UserLike,
+} from "@/lib/z1-view-models";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -56,14 +75,12 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
     async (tx) => {
       const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
-      // Z1.4a: also populate the dual-FK columns + organizationId. The
-      // legacy users.companyId lookup here mirrors what the Z1.4a
-      // backfill did for historical rows; migrates to the wrapper's
-      // EndUser.organizationId in Z1.4b.
-      const clientUser = await tx.user.findUnique({
-        where: { id: session.id },
-        select: { companyId: true },
-      });
+      // Z1.4b: organizationId comes from the wrapper's EndUser.
+      // Staff-authored tickets (Employee Service Suite path) resolve
+      // to null organizationId — TeamMembers have no primary org.
+      const wrapperCtx = systemContext(session.tenantId);
+      const clientEndUser =
+        session.role === "CLIENT" ? await getEndUser(wrapperCtx, session.id) : null;
       const clientDual = dualFkForUser(session.id, session.role);
 
       const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
@@ -78,7 +95,7 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             priority: data.priority,
             clientId: session.id,
             ...ticketClientCols(clientDual),
-            organizationId: clientUser?.companyId ?? null,
+            organizationId: clientEndUser?.organizationId ?? null,
             status: "OPEN",
             source: "portal",
             clientIp: clientIp !== "unknown" ? clientIp : null,
@@ -135,7 +152,7 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
   const f = ticketFilterSchema.parse(filter);
   const PAGE_SIZE = 50;
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
     tx.ticket.findMany({
       where: {
         tenantId: session.tenantId,
@@ -143,47 +160,125 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
         priority: f.priority,
         categoryId: f.categoryId,
         assignedToId: f.assignedToId === "unassigned" ? null : f.assignedToId || undefined,
+        // Search on ticket title stays; the legacy `client.name` search
+        // subquery is dropped for Z1.4b — wrapper-side text search is a
+        // Z1.5+ concern (see boundary doc §7.9). Practical impact:
+        // typing a client name in the queue search box only matches
+        // ticket titles; agents can filter by assignee via the dropdown.
         ...(f.search
-          ? {
-              OR: [
-                { title: { contains: f.search, mode: "insensitive" } },
-                { client: { name: { contains: f.search, mode: "insensitive" } } },
-              ],
-            }
+          ? { title: { contains: f.search, mode: "insensitive" } }
           : {}),
       },
-      include: { category: true, client: true, assignedTo: true },
+      include: { category: true },
       orderBy: { updatedAt: "desc" },
       skip: (f.page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     })
   );
+
+  // Z1.4b: batch-resolve client + assignedTo across the returned page.
+  // One roundtrip per kind regardless of page size (up to 50 rows).
+  const wrapperCtx = systemContext(session.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  for (const t of rows) {
+    if (t.clientEndUserId) endUserIds.add(t.clientEndUserId);
+    if (t.clientTeamMemberId) teamMemberIds.add(t.clientTeamMemberId);
+    if (t.assignedTeamMemberId) teamMemberIds.add(t.assignedTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+
+  return rows.map((t) => ({
+    ...t,
+    client: resolveUserLike(
+      { endUserId: t.clientEndUserId, teamMemberId: t.clientTeamMemberId },
+      endUsers,
+      teamMembers,
+    ),
+    assignedTo: t.assignedTeamMemberId
+      ? (() => {
+          const tm = teamMembers.get(t.assignedTeamMemberId);
+          return tm ? teamMemberToUserLike(tm) : null;
+        })()
+      : null,
+  }));
 }
 
 /** Returns the ticket + messages, filtering internal notes for clients. Every attachment's fileUrl comes back as a ready-to-use, short-lived signed URL (the DB only ever stores the private storage path). */
 export async function getTicket(ticketId: string) {
   const session = await requireSession();
 
+  // Z1.4b: identity comes from the wrapper (see docs/shared-platform-boundary.md
+  // §7.9). Only category / guest / attachments (as rows) / messages
+  // (as rows) stay as Prisma includes — those are Support-owned.
   const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
-    const ticket = await tx.ticket.findFirst({
+    const t = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
       include: {
         category: true,
-        client: true,
-        assignedTo: true,
-        attachments: { orderBy: { uploadedAt: "desc" }, include: { uploadedBy: { select: { name: true } } } },
+        attachments: { orderBy: { uploadedAt: "desc" } },
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
-          include: { sender: true, guest: { select: { name: true, email: true } }, attachments: true },
+          include: {
+            // Guest stays: Support-owned model, not the wrapper's turf.
+            guest: { select: { name: true, email: true } },
+            attachments: true,
+          },
         },
       },
     });
-    if (!ticket) return null;
-    if (session.role === "CLIENT" && ticket.clientId !== session.id) return null;
-    return ticket;
+    if (!t) return null;
+    if (session.role === "CLIENT" && t.clientId !== session.id) return null;
+    return t;
   });
   if (!ticket) return null;
+
+  // Batch-resolve every identity referenced in this ticket tree.
+  // Three roundtrips per ticket, regardless of message/attachment count.
+  const wrapperCtx = systemContext(session.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  const organizationIds = new Set<string>();
+  if (ticket.clientEndUserId) endUserIds.add(ticket.clientEndUserId);
+  if (ticket.clientTeamMemberId) teamMemberIds.add(ticket.clientTeamMemberId);
+  if (ticket.assignedTeamMemberId) teamMemberIds.add(ticket.assignedTeamMemberId);
+  if (ticket.organizationId) organizationIds.add(ticket.organizationId);
+  for (const a of ticket.attachments) {
+    if (a.uploadedByEndUserId) endUserIds.add(a.uploadedByEndUserId);
+    if (a.uploadedByTeamMemberId) teamMemberIds.add(a.uploadedByTeamMemberId);
+  }
+  for (const m of ticket.messages) {
+    if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
+    if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
+    for (const a of m.attachments) {
+      if (a.uploadedByEndUserId) endUserIds.add(a.uploadedByEndUserId);
+      if (a.uploadedByTeamMemberId) teamMemberIds.add(a.uploadedByTeamMemberId);
+    }
+  }
+  const [endUsers, teamMembers, organizations] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getOrganizationsByIds(wrapperCtx, [...organizationIds]),
+  ]);
+
+  const client: UserLike | null = resolveUserLike(
+    { endUserId: ticket.clientEndUserId, teamMemberId: ticket.clientTeamMemberId },
+    endUsers,
+    teamMembers,
+  );
+  const assignedTo: UserLike | null = ticket.assignedTeamMemberId
+    ? (() => {
+        const tm = teamMembers.get(ticket.assignedTeamMemberId);
+        return tm ? teamMemberToUserLike(tm) : null;
+      })()
+    : null;
+  const organization: Organization | null = ticket.organizationId
+    ? organizations.get(ticket.organizationId) ?? null
+    : null;
 
   // Resolving signed URLs is an external Storage call, not a DB query — done
   // outside the transaction above so the interactive tx isn't held open
@@ -192,15 +287,43 @@ export async function getTicket(ticketId: string) {
     Promise.all(
       ticket.messages.map(async (m) => ({
         ...m,
+        sender: resolveMessageSender(
+          {
+            senderEndUserId: m.senderEndUserId,
+            senderTeamMemberId: m.senderTeamMemberId,
+            guest: m.guest,
+            senderRole: m.senderRole,
+          },
+          endUsers,
+          teamMembers,
+        ),
         attachments: await Promise.all(
-          m.attachments.map(async (a) => ({ ...a, fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl }))
+          m.attachments.map(async (a) => ({
+            ...a,
+            uploadedBy: resolveUserLike(
+              { endUserId: a.uploadedByEndUserId, teamMemberId: a.uploadedByTeamMemberId },
+              endUsers,
+              teamMembers,
+            ),
+            fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
+          }))
         ),
       }))
     ),
-    Promise.all(ticket.attachments.map(async (a) => ({ ...a, fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl }))),
+    Promise.all(
+      ticket.attachments.map(async (a) => ({
+        ...a,
+        uploadedBy: resolveUserLike(
+          { endUserId: a.uploadedByEndUserId, teamMemberId: a.uploadedByTeamMemberId },
+          endUsers,
+          teamMembers,
+        ),
+        fileUrl: (await getAttachmentSignedUrl(a.fileUrl)) ?? a.fileUrl,
+      }))
+    ),
   ]);
 
-  return { ...ticket, messages, attachments };
+  return { ...ticket, client, assignedTo, organization, messages, attachments };
 }
 
 /**
@@ -214,6 +337,7 @@ export async function getTicket(ticketId: string) {
 export async function getTicketMessages(ticketId: string) {
   const session = await requireSession();
 
+  // Z1.4b: same pattern as getTicket() but messages-only.
   const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
     const t = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
@@ -222,7 +346,7 @@ export async function getTicketMessages(ticketId: string) {
         messages: {
           where: session.role === "CLIENT" ? { isInternal: false } : undefined,
           orderBy: { createdAt: "asc" },
-          include: { sender: true, guest: { select: { name: true, email: true } }, attachments: true },
+          include: { guest: { select: { name: true, email: true } }, attachments: true },
         },
       },
     });
@@ -232,6 +356,18 @@ export async function getTicketMessages(ticketId: string) {
   });
   if (!ticket) return null;
 
+  const wrapperCtx = systemContext(session.tenantId);
+  const endUserIds = new Set<string>();
+  const teamMemberIds = new Set<string>();
+  for (const m of ticket.messages) {
+    if (m.senderEndUserId) endUserIds.add(m.senderEndUserId);
+    if (m.senderTeamMemberId) teamMemberIds.add(m.senderTeamMemberId);
+  }
+  const [endUsers, teamMembers] = await Promise.all([
+    getEndUsersByIds(wrapperCtx, [...endUserIds]),
+    getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+  ]);
+
   return Promise.all(
     ticket.messages.map(async (m) => ({
       id: m.id,
@@ -239,7 +375,16 @@ export async function getTicketMessages(ticketId: string) {
       senderRole: m.senderRole,
       isInternal: m.isInternal,
       createdAt: m.createdAt.toISOString(),
-      sender: resolveMessageSender(m),
+      sender: resolveMessageSender(
+        {
+          senderEndUserId: m.senderEndUserId,
+          senderTeamMemberId: m.senderTeamMemberId,
+          guest: m.guest,
+          senderRole: m.senderRole,
+        },
+        endUsers,
+        teamMembers,
+      ),
       attachments: await Promise.all(
         m.attachments.map(async (a) => ({
           id: a.id,
@@ -311,8 +456,9 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
         });
       }
 
-      const assignedAgent = ticket.assignedToId
-        ? await tx.user.findUnique({ where: { id: ticket.assignedToId } })
+      // Z1.4b: assignedTeamMemberId → wrapper TeamMember (preserved id).
+      const assignedAgent = ticket.assignedTeamMemberId
+        ? await getTeamMember(systemContext(session.tenantId), ticket.assignedTeamMemberId)
         : null;
       if (assignedAgent) {
         await notify(tx, {
@@ -379,11 +525,19 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         },
       });
 
-      const client = await tx.user.findUniqueOrThrow({ where: { id: ticket.clientId } });
+      // Z1.4b: resolve client via wrapper. Ticket.clientEndUserId or
+      // .clientTeamMemberId is guaranteed non-null (dual-write invariant).
+      const wrapperCtx = systemContext(session.tenantId);
+      const client = ticket.clientEndUserId
+        ? await getEndUser(wrapperCtx, ticket.clientEndUserId)
+        : ticket.clientTeamMemberId
+          ? await getTeamMember(wrapperCtx, ticket.clientTeamMemberId)
+          : null;
+      if (!client) throw new Error("CLIENT_MISSING");
       if (!data.isInternal) {
         await notify(tx, {
           tenantId: session.tenantId,
-          userId: client.id,
+          userId: ticket.clientId,
           type: "TICKET_REPLY",
           title: `New reply on ${ticket.reference}`,
           body: data.body.slice(0, 140),
@@ -478,11 +632,13 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         // "Unassigned → Jordan Reyes" rather than a meaningless cuid. Sequential
         // (not Promise.all): concurrent queries on one interactive-tx client are
         // unsupported by Prisma.
-        const fromAgent = ticket.assignedToId
-          ? await tx.user.findUnique({ where: { id: ticket.assignedToId }, select: { name: true } })
+        // Z1.4b: agent name resolution via wrapper (staff → TeamMember).
+        const wrapperCtx = systemContext(session.tenantId);
+        const fromAgent = ticket.assignedTeamMemberId
+          ? await getTeamMember(wrapperCtx, ticket.assignedTeamMemberId)
           : null;
         const toAgent = data.assignedToId
-          ? await tx.user.findUnique({ where: { id: data.assignedToId }, select: { name: true } })
+          ? await getTeamMember(wrapperCtx, data.assignedToId)
           : null;
         await tx.auditLog.create({
           data: {
@@ -507,11 +663,17 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         }
       }
 
-      const client = await tx.user.findUniqueOrThrow({ where: { id: ticket.clientId } });
+      // Z1.4b: resolve client via wrapper (dual-FK invariant guarantees non-null).
+      const client = ticket.clientEndUserId
+        ? await getEndUser(systemContext(session.tenantId), ticket.clientEndUserId)
+        : ticket.clientTeamMemberId
+          ? await getTeamMember(systemContext(session.tenantId), ticket.clientTeamMemberId)
+          : null;
+      if (!client) throw new Error("CLIENT_MISSING");
       if (statusChanged) {
         await notify(tx, {
           tenantId: session.tenantId,
-          userId: client.id,
+          userId: ticket.clientId,
           type: "STATUS_CHANGE",
           title: `${ticket.reference} is now ${data.status?.replace("_", " ").toLowerCase()}`,
           ticketId: ticket.id,
@@ -607,10 +769,19 @@ export async function listCategories() {
 
 export async function listAgents() {
   const session = await requireSession({ minRole: "AGENT" });
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
-    tx.user.findMany({
-      where: { tenantId: session.tenantId, role: { in: ["AGENT", "ADMIN"] }, status: "ACTIVE" },
-      orderBy: { name: "asc" },
-    })
-  );
+  // Z1.4b: fetch every TeamMember on the tenant, then filter out the
+  // Super Admin role client-side (preserves legacy behavior — legacy
+  // listAgents excluded SUPER_ADMIN from the assignable pool). Not a
+  // wrapper limitation worth widening for one call site; Z1.6's admin
+  // refactor may generalize this if more places need role-filtered TM
+  // lists.
+  const wrapperCtx = systemContext(session.tenantId);
+  const [tmPage, superAdminRole] = await Promise.all([
+    listTeamMembers(wrapperCtx, { limit: 200 }),
+    getRoleByName(wrapperCtx, "Super Admin"),
+  ]);
+  const assignable = tmPage.items
+    .filter((tm) => !superAdminRole || tm.roleId !== superAdminRole.id)
+    .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+  return assignable;
 }

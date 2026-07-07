@@ -89,6 +89,29 @@ export async function matchOrganizationByEmailDomain(
   return row ? toDto(row) : null;
 }
 
+/**
+ * Batch id lookup. Returns a Map keyed by id — callers can `.get(id)`
+ * without needing to array-search. Missing ids are simply absent from
+ * the Map. Empty input returns empty Map.
+ *
+ * Z1.4b addition — see docs/shared-platform-boundary.md §7.9.
+ * Post-M7, this maps to `GET /api/v1/organizations?ids=...`.
+ */
+export async function getOrganizationsByIds(
+  ctx: WrapperContext,
+  ids: readonly string[]
+): Promise<Map<string, Organization>> {
+  if (ids.length === 0) return new Map();
+  const rows = await withRls(
+    { tenantId: ctx.tenantId, userId: ctx.actor?.teamMemberId ?? null, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.organization.findMany({
+        where: { tenantId: ctx.tenantId, id: { in: [...ids] } },
+      })
+  );
+  return new Map(rows.map((r) => [r.id, toDto(r)]));
+}
+
 // ---------------------------------------------------------------------------
 // Write
 // ---------------------------------------------------------------------------
