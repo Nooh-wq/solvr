@@ -11,6 +11,12 @@
 
 import type { UserStatus } from "@/generated/prisma";
 
+// Z1.6 note: `approve` and `reject` were already in this union but were
+// never routed through assertActionAllowed — approveUser/rejectUser in
+// admin.ts used raw `WHERE status: "PENDING"` filters that silently
+// returned null on invalid state. Z1.6 replaces those with explicit
+// assertActionAllowed calls (below). No union change needed; these were
+// always intended endpoints of the matrix.
 export type TeamAction =
   // PENDING (pending admin approval, spec's PENDING_APPROVAL)
   | "approve"

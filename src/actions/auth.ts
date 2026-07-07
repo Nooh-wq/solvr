@@ -75,7 +75,11 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
 
     // Auto-match Company by email domain (spec §5.1). Personal-email
     // domains (gmail.com, etc.) never match — see matchCompanyByEmail.
-    const companyId = await matchCompanyByEmail(tx, tenant.id, data.email);
+    // Z1.6 signature change: no longer takes a tx; wrapper opens its
+    // own tenant-scoped RLS internally. This call site is Z1.8 scope
+    // (auth model rework) — the signature update here is a mechanical
+    // fix to keep the build clean, not a Z1.6 auth migration.
+    const companyId = await matchCompanyByEmail(tenant.id, data.email);
 
     const user = await tx.user.create({
       data: {

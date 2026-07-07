@@ -400,7 +400,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 
 **Named milestone**: this refactor is now **Z1.6 (Admin/Team page consumer refactor)** — documenting the name in this boundary doc so it can't be silently deferred further. Any future scope-shuffle proposal that would push admin CRUD past Z1.6 needs to update this section explicitly and identify a new blocker gate for Z1.5.
 
-**Ordering guarantee**: the merged ordering is Z1.4a (✓) → Z1.4b → Z1.6 → Z1.5. Z1.5 has a documented dependency on Z1.6 landing first, not just on Z1.4b.
+**Ordering guarantee** — SUPERSEDED by §7.11's revised sequence: `Z1.4a (✓) → Z1.4b (✓) → Z1.6 → Z1.8 → Z1.9 → Z1.5 → Z1.7`. Z1.6 is no longer the direct blocker for Z1.5; two intermediate milestones (Z1.8 auth-model rework, Z1.9 findOrCreateSender) sit between them. Rationale in §7.11.
 
 ### 7.9 Scoping-miss note: batch id lookups added in Z1.4b, not Z1.2
 
@@ -426,6 +426,64 @@ CREATE UNIQUE INDEX IF NOT EXISTS "groups_one_default_per_tenant"
 - (a) Add `avatarUrl String?` directly to `end_users` / `team_members` in Shared Platform. Simple, ships fast, mildly polluting to the identity DTO surface with a UI concern.
 - (b) Introduce a `user_preferences` (or `avatars`) table in Shared Platform keyed by `(tenantId, endUserId | teamMemberId)`. Wrapper adds `getAvatarUrlsByIds(ctx, ids[])`. More flexible if UI ever needs more per-person UI state (dark-mode preference, notification prefs, etc.) — matches how a real product tends to accumulate these fields.
 
-**Ordering:** Z1.7 lands after Z1.5 (drops legacy tables) since the legacy `users.avatarUrl` becomes unreachable at Z1.5 anyway. There's no fixed calendar gate on Z1.7 — Support just runs with initials-only avatars until it lands. Named here so it can't be silently forgotten.
+**Ordering:** Z1.7 lands **last** in the Z1 chain — after Z1.5 (which drops the legacy `users` table, making `users.avatarUrl` unreachable). Full sequence in §7.11. There's no fixed calendar gate on Z1.7; Support runs on initials-only avatars until it lands. Named here so it can't be silently forgotten.
 
 **Concrete signal that Z1.7 needs to be scheduled:** the first "why did avatars disappear?" internal user report. Until then, it's a background item.
+
+### 7.11 Post-Z1.4b milestone sequence (authoritative)
+
+The Z1.4b state-summary pass surfaced six code paths still on legacy `tx.user.*` / `tx.company.*` after admin CRUD migrates. Rather than one mega-milestone dropping every remaining reader at once (unreviewable, mixes auth-model rework with mechanical drops), the remaining work is split into three architecturally coherent milestones:
+
+**Sequence:** `Z1.6 → Z1.8 → Z1.9 → Z1.5 → Z1.7`
+
+| # | Milestone | Concern | Blocks |
+|---|---|---|---|
+| Z1.6 | Admin/Team CRUD → wrapper | Support-side identity management surface (invite, approve, deactivate, role change, bulk ops). Scope in §7.8 (revised). | Z1.8 (session lookups depend on the wrapper being wired to admin flows first) |
+| Z1.8 | Session / auth / signup rework | Auth architecture. Session cookie shape, password hash storage, login/OTP/reset flows, signup uniqueness checks, cross-tenant tenant-health `groupBy`. Scope in §7.12. | Z1.9 (cleaner to migrate the inbound-email sender path after auth-model is settled) |
+| Z1.9 | `findOrCreateSender` refactor | Inbound-email path that creates a legacy `User` for unknown senders. Small, focused, distinct code path. Scope in §7.13. | Z1.5 (last remaining legacy-user-creation site) |
+| Z1.5 | Drop legacy tables + tighten CHECKs | Purely mechanical: `DROP TABLE users`, `DROP TABLE companies`, `DROP COLUMN` on legacy dual-FK columns, tighten CHECK constraints to §7.2's endpoint form, delete the transitional [src/lib/z1-dual-fk.ts](../src/lib/z1-dual-fk.ts) helper. | Z1.7 |
+| Z1.7 | avatarUrl migration | Cross-repo work with Shared Platform (widen wrapper DTOs OR add `user_preferences` table). Scope in §7.10. | — |
+
+**Why this sequencing (not one mega-PR):**
+
+The six deferred legacy-touching code paths cluster into **three coherent architectural concerns**:
+
+1. **Admin identity management** (admin.ts's Team CRUD) — Support-side workflow, invite/approve semantics, role guards. Cleanly wraps around the Shared Platform's `TeamMember`/`EndUser`/`Role` primitives once we do the mapping work. Owns **Z1.6**.
+2. **Auth model** (auth.ts, profile.ts, super.ts, signup.ts) — session cookie shape, password-hash storage, cross-tenant admin tooling. Genuinely separate architectural concern that surfaced as a Z1 dependency but was never Z1's original intent. Requires design decisions about where post-Z1.5 auth data lives. Owns **Z1.8**.
+3. **Inbound-email sender bootstrap** (findOrCreateSender in inbound-handler.ts) — creates a legacy `User` for unknown email senders. Different constraints from user-initiated signup (no live UI session, temp-password generation). Small enough to be its own milestone. Owns **Z1.9**.
+
+Bundling all six into one PR would (a) break the per-PR reviewability property held across every prior Z1 phase, (b) conflate auth-model design with mechanical drops, (c) create session-cookie-change + table-drop coupling that invalidates every existing session at deploy time. Splitting them lets each concern get its own scoping pass, dry-run, and review.
+
+**Why Z1.5 lands where it does (fourth, not last):**
+
+Once Z1.6 + Z1.8 + Z1.9 have all migrated their writes to the wrapper, no code path creates or reads from `users`/`companies`. Z1.5 becomes a purely mechanical `DROP` — the smallest, most predictable phase in the Z1 chain, ironically. Z1.7 (avatarUrl) is fifth because it's cross-repo work with an external calendar signal (first user report), so it can float relative to the Z1.5 gate.
+
+**Discipline reminder for Z1.8:** given Z1.8 bundles five files touching session-context code, its plan-review-implement-verify pass runs against a **staging tenant first**, not production tenant data. That's the extra safety concession for bundling auth reads/writes into a single milestone rather than splitting further. Cost of that extra safety: one dry-run pass; benefit: session-context refactor happens once, not three times.
+
+### 7.12 Z1.8 scope: session / auth / signup rework
+
+**Files in scope:**
+
+- **[src/lib/auth.ts](../src/lib/auth.ts)** — session cookie decode, `getSessionUser`, `requireSession`. Migrates session-identity lookup from `tx.user.findUnique({ where: { id: session.userId } })` to the wrapper. The session cookie's `userId` field may need to become `endUserId` / `teamMemberId` or stay as a neutral `subjectId` — that's the design decision Z1.8 makes.
+- **[src/actions/auth.ts](../src/actions/auth.ts)** — `registerClient`, `login`, `verifyRegistrationOtp`, `sendPasswordReset`, `resetPassword`, `verifyLoginOtp`, `acceptInvite`, `changePassword`. All touch either password-hash storage, session issuance, or OTP flows.
+- **[src/actions/profile.ts](../src/actions/profile.ts)** — user's own-profile CRUD (name, avatar-upload path today, password change). Migrates alongside session model since it also reads legacy `users` by session id.
+- **[src/actions/super.ts](../src/actions/super.ts)** — `listTenantsWithHealth` uses `tx.user.groupBy` across every tenant for the SUPER_ADMIN dashboard. Cross-tenant read is a distinct concern from the per-tenant CRUD Z1.6 handles.
+- **[src/actions/signup.ts](../src/actions/signup.ts)** — `startTenantSignup` / `verifyTenantSignup`. Cross-tenant email-uniqueness checks + tenant provisioning create the initial SUPER_ADMIN legacy `User`.
+
+**Key design questions Z1.8 must answer:**
+
+1. **Where does the password hash live post-Z1.5?** Wrapper's `TeamMember` / `EndUser` DTOs don't expose it. Options: (a) widen wrapper (cross-repo — but auth is arguably out of Shared Platform's remit), (b) new Support-owned `auth_credentials` table, (c) something else.
+2. **What's the session cookie's identity field?** `userId` → `teamMemberId` / `endUserId` / `subjectId` / dual? Affects every server action's `session.id` usage.
+3. **What happens to legacy `users.status` and lifecycle fields?** (INVITED / PENDING / ACTIVE / SUSPENDED / REJECTED). These are Support-side workflow state, not identity. Options: keep on a Support-owned `team_member_lifecycle` table, encode as a Shared Platform Role concern, etc.
+
+**Extra safety (per user directive):** Z1.8's dry-run runs against a **staging tenant**, not the production tenant data. Details in Z1.8's own design pass when it starts.
+
+### 7.13 Z1.9 scope: findOrCreateSender refactor
+
+**File in scope:** [src/lib/email/inbound-handler.ts](../src/lib/email/inbound-handler.ts) `findOrCreateSender` function.
+
+**Current behavior:** when an inbound email arrives from an unknown sender, this function creates a legacy `User` row with a random temp-password hash, `role: CLIENT`, `status: PENDING`. Post-Z1.5, this can't create a legacy `User` (the table's gone).
+
+**Post-Z1.9 shape (to be finalized in Z1.9's own design pass):** create an `EndUser` via the wrapper's `createEndUser`, with `organizationId` auto-matched by email domain. Any password-hash / status concerns Z1.9 inherits from Z1.8's decisions (that's why Z1.9 lands after Z1.8, not alongside).
+
+**Why not folded into Z1.8:** distinct code path (webhook trigger, no live UI session, temp-password generation). Different failure modes (email spam floods, unknown-tenant addresses, malformed sender headers). Small enough to review independently. Keeping it separate makes each PR's failure-mode analysis narrower.

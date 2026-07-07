@@ -45,6 +45,15 @@ enum LegacyRole {
   AGENT
   ADMIN
   SUPER_ADMIN
+
+  // Z1.6: schema.prisma renamed the enum to LegacyRole during Z1.1 to
+  // avoid Prisma-model collision with the mirrored wrapper Role table,
+  // but the DB enum was never renamed alongside. Adds the mapping so
+  // Prisma queries reference the correct DB type "Role". First user
+  // write since Z1.3 backfill unmasked this — the ~5 months between
+  // then and now had no `prisma.user.create` runs. Z1.5 drops the
+  // enum entirely alongside the users table.
+  @@map("Role")
 }
 
 // PENDING: self-registered, awaiting a tenant admin's approval (see the
