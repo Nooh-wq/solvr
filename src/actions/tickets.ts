@@ -71,7 +71,7 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
   const clientCountry = clientIp !== "unknown" ? (geoip.lookup(clientIp)?.country ?? null) : null;
 
   const { ticket, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
@@ -80,8 +80,8 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
       // to null organizationId — TeamMembers have no primary org.
       const wrapperCtx = systemContext(session.tenantId);
       const clientEndUser =
-        session.role === "CLIENT" ? await getEndUser(wrapperCtx, session.id) : null;
-      const clientDual = dualFkForUser(session.id, session.role);
+        session.role === "CLIENT" ? await getEndUser(wrapperCtx, session.subjectId) : null;
+      const clientDual = dualFkForUser(session.subjectId, session.role);
 
       const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
         tx.ticket.create({
@@ -93,7 +93,7 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             description: data.description,
             categoryId: data.categoryId,
             priority: data.priority,
-            clientId: session.id,
+            clientId: session.subjectId,
             ...ticketClientCols(clientDual),
             organizationId: clientEndUser?.organizationId ?? null,
             status: "OPEN",
@@ -108,7 +108,7 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          actorId: session.id,
+          actorId: session.subjectId,
           ...actorCols(clientDual),
           action: "CREATE",
           toValue: "OPEN",
@@ -132,11 +132,11 @@ export async function listMyTickets(filter: Partial<z.infer<typeof ticketFilterS
   const f = ticketFilterSchema.parse(filter);
   const PAGE_SIZE = 20;
 
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticket.findMany({
       where: {
         tenantId: session.tenantId,
-        clientId: session.id,
+        clientId: session.subjectId,
         status: f.status,
       },
       include: { category: true },
@@ -152,7 +152,7 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
   const f = ticketFilterSchema.parse(filter);
   const PAGE_SIZE = 50;
 
-  const rows = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticket.findMany({
       where: {
         tenantId: session.tenantId,
@@ -214,7 +214,7 @@ export async function getTicket(ticketId: string) {
   // Z1.4b: identity comes from the wrapper (see docs/shared-platform-boundary.md
   // §7.9). Only category / guest / attachments (as rows) / messages
   // (as rows) stay as Prisma includes — those are Support-owned.
-  const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  const ticket = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const t = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
       include: {
@@ -232,7 +232,7 @@ export async function getTicket(ticketId: string) {
       },
     });
     if (!t) return null;
-    if (session.role === "CLIENT" && t.clientId !== session.id) return null;
+    if (session.role === "CLIENT" && t.clientId !== session.subjectId) return null;
     return t;
   });
   if (!ticket) return null;
@@ -338,7 +338,7 @@ export async function getTicketMessages(ticketId: string) {
   const session = await requireSession();
 
   // Z1.4b: same pattern as getTicket() but messages-only.
-  const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  const ticket = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const t = await tx.ticket.findFirst({
       where: { id: ticketId, tenantId: session.tenantId },
       select: {
@@ -351,7 +351,7 @@ export async function getTicketMessages(ticketId: string) {
       },
     });
     if (!t) return null;
-    if (session.role === "CLIENT" && t.clientId !== session.id) return null;
+    if (session.role === "CLIENT" && t.clientId !== session.subjectId) return null;
     return t;
   });
   if (!ticket) return null;
@@ -412,19 +412,19 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
   const data = replySchema.parse(input);
 
   const { ticket, assignedAgent, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({
-        where: { id: data.ticketId, tenantId: session.tenantId, clientId: session.id },
+        where: { id: data.ticketId, tenantId: session.tenantId, clientId: session.subjectId },
       });
       if (!ticket) throw new Error("NOT_FOUND");
 
-      const clientDual = dualFkForUser(session.id, session.role);
+      const clientDual = dualFkForUser(session.subjectId, session.role);
       const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          senderId: session.id,
+          senderId: session.subjectId,
           ...senderCols(clientDual),
           senderRole: "CLIENT",
           body: data.body,
@@ -447,7 +447,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.id,
+            actorId: session.subjectId,
             ...actorCols(clientDual),
             action: "STATUS_CHANGE",
             fromValue: "PENDING",
@@ -487,17 +487,17 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
   const data = agentReplySchema.parse(input);
 
   const { ticket, client, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
 
-      const staffDual = dualFkForUser(session.id, session.role);
+      const staffDual = dualFkForUser(session.subjectId, session.role);
       const message = await tx.message.create({
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          senderId: session.id,
+          senderId: session.subjectId,
           ...senderCols(staffDual),
           senderRole: session.role === "ADMIN" || session.role === "SUPER_ADMIN" ? "ADMIN" : "AGENT",
           body: data.body,
@@ -519,7 +519,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         data: {
           tenantId: session.tenantId,
           ticketId: ticket.id,
-          actorId: session.id,
+          actorId: session.subjectId,
           ...actorCols(staffDual),
           action: data.isInternal ? "INTERNAL_NOTE" : "REPLY",
         },
@@ -561,7 +561,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
   const data = updateTicketSchema.parse(input);
 
   const { updated, statusChanged, client, branding } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
       if (!ticket) throw new Error("NOT_FOUND");
@@ -582,7 +582,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
         ["RESOLVED", "CLOSED"].includes(ticket.status) &&
         !["RESOLVED", "CLOSED"].includes(data.status!);
 
-      const staffDual = dualFkForUser(session.id, session.role);
+      const staffDual = dualFkForUser(session.subjectId, session.role);
       const updated = await tx.ticket.update({
         where: { id: ticket.id },
         data: {
@@ -606,7 +606,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.id,
+            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "STATUS_CHANGE",
             fromValue: ticket.status,
@@ -619,7 +619,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.id,
+            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "PRIORITY_CHANGE",
             fromValue: ticket.priority,
@@ -644,7 +644,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           data: {
             tenantId: session.tenantId,
             ticketId: ticket.id,
-            actorId: session.id,
+            actorId: session.subjectId,
             ...actorCols(staffDual),
             action: "ASSIGN",
             fromValue: fromAgent?.name ?? "Unassigned",
@@ -707,9 +707,9 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
 /** A-9: client may confirm resolution (-> Closed) or reopen; cannot arbitrarily close. */
 export async function confirmResolution(ticketId: string) {
   const session = await requireSession();
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const ticket = await tx.ticket.findFirst({
-      where: { id: ticketId, tenantId: session.tenantId, clientId: session.id, status: "RESOLVED" },
+      where: { id: ticketId, tenantId: session.tenantId, clientId: session.subjectId, status: "RESOLVED" },
     });
     if (!ticket) throw new Error("NOT_FOUND_OR_NOT_RESOLVED");
     await tx.ticket.update({ where: { id: ticket.id }, data: { status: "CLOSED" } });
@@ -717,8 +717,8 @@ export async function confirmResolution(ticketId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.id,
-        ...actorCols(dualFkForUser(session.id, session.role)),
+        actorId: session.subjectId,
+        ...actorCols(dualFkForUser(session.subjectId, session.role)),
         action: "STATUS_CHANGE",
         fromValue: "RESOLVED",
         toValue: "CLOSED",
@@ -731,10 +731,10 @@ export async function confirmResolution(ticketId: string) {
 
 export async function reopenTicket(ticketId: string) {
   const session = await requireSession();
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, async (tx) => {
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
     const where =
       session.role === "CLIENT"
-        ? { id: ticketId, tenantId: session.tenantId, clientId: session.id }
+        ? { id: ticketId, tenantId: session.tenantId, clientId: session.subjectId }
         : { id: ticketId, tenantId: session.tenantId };
     const ticket = await tx.ticket.findFirst({ where });
     if (!ticket || !["RESOLVED", "CLOSED"].includes(ticket.status)) throw new Error("NOT_FOUND_OR_NOT_REOPENABLE");
@@ -747,8 +747,8 @@ export async function reopenTicket(ticketId: string) {
       data: {
         tenantId: session.tenantId,
         ticketId: ticket.id,
-        actorId: session.id,
-        ...actorCols(dualFkForUser(session.id, session.role)),
+        actorId: session.subjectId,
+        ...actorCols(dualFkForUser(session.subjectId, session.role)),
         action: "REOPEN",
         fromValue: ticket.status,
         toValue: "IN_PROGRESS",
@@ -762,7 +762,7 @@ export async function reopenTicket(ticketId: string) {
 
 export async function listCategories() {
   const session = await requireSession();
-  return withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.category.findMany({ where: { tenantId: session.tenantId, isActive: true }, orderBy: { name: "asc" } })
   );
 }

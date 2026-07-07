@@ -10,10 +10,10 @@ const LIST_LIMIT = 20;
 export async function listNotifications() {
   const session = await requireSession();
   const notifications = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     (tx) =>
       tx.notification.findMany({
-        where: { tenantId: session.tenantId, userId: session.id },
+        where: { tenantId: session.tenantId, userId: session.subjectId },
         orderBy: { createdAt: "desc" },
         take: LIST_LIMIT,
       })
@@ -38,18 +38,18 @@ export async function listNotifications() {
  */
 export async function getNotificationSnapshot() {
   const session = await requireSession();
-  const ctx = { tenantId: session.tenantId, userId: session.id, role: session.role };
+  const ctx = { tenantId: session.tenantId, userId: session.subjectId, role: session.role };
   const { notifications, unreadCount } = await withRls(ctx, async (tx) => {
     // Run sequentially, not via Promise.all: both queries share this one
     // interactive-transaction connection, and issuing them concurrently on the
     // same tx client is unsupported by Prisma. Two indexed reads are cheap.
     const notifications = await tx.notification.findMany({
-      where: { tenantId: session.tenantId, userId: session.id },
+      where: { tenantId: session.tenantId, userId: session.subjectId },
       orderBy: { createdAt: "desc" },
       take: LIST_LIMIT,
     });
     const unreadCount = await tx.notification.count({
-      where: { tenantId: session.tenantId, userId: session.id, isRead: false },
+      where: { tenantId: session.tenantId, userId: session.subjectId, isRead: false },
     });
     return { notifications, unreadCount };
   });
@@ -66,9 +66,9 @@ export async function getNotificationSnapshot() {
 
 export async function markNotificationRead(notificationId: string) {
   const session = await requireSession();
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.notification.updateMany({
-      where: { id: notificationId, tenantId: session.tenantId, userId: session.id },
+      where: { id: notificationId, tenantId: session.tenantId, userId: session.subjectId },
       data: { isRead: true },
     })
   );
@@ -78,9 +78,9 @@ export async function markNotificationRead(notificationId: string) {
 
 export async function markAllNotificationsRead() {
   const session = await requireSession();
-  await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.notification.updateMany({
-      where: { tenantId: session.tenantId, userId: session.id, isRead: false },
+      where: { tenantId: session.tenantId, userId: session.subjectId, isRead: false },
       data: { isRead: true },
     })
   );

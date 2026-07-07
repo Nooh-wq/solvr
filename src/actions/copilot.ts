@@ -26,7 +26,7 @@ export async function summarizeTicket(ticketId: string) {
   const session = await requireSession({ minRole: "AGENT" });
   if (!aiProvider.isConfigured) return { error: "NOT_CONFIGURED" as const };
 
-  const ticket = await withRls({ tenantId: session.tenantId, userId: session.id, role: session.role }, (tx) =>
+  const ticket = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticket.findFirstOrThrow({
       where: { id: ticketId, tenantId: session.tenantId },
       include: { messages: { orderBy: { createdAt: "asc" } } },
@@ -44,7 +44,7 @@ export async function suggestReply(ticketId: string) {
   if (!aiProvider.isConfigured) return { error: "NOT_CONFIGURED" as const };
 
   const { ticket, context } = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirstOrThrow({
         where: { id: ticketId, tenantId: session.tenantId },

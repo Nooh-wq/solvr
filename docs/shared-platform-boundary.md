@@ -464,19 +464,25 @@ Once Z1.6 + Z1.8 + Z1.9 have all migrated their writes to the wrapper, no code p
 
 **Files in scope:**
 
-- **[src/lib/auth.ts](../src/lib/auth.ts)** — session cookie decode, `getSessionUser`, `requireSession`. Migrates session-identity lookup from `tx.user.findUnique({ where: { id: session.userId } })` to the wrapper. The session cookie's `userId` field may need to become `endUserId` / `teamMemberId` or stay as a neutral `subjectId` — that's the design decision Z1.8 makes.
-- **[src/actions/auth.ts](../src/actions/auth.ts)** — `registerClient`, `login`, `verifyRegistrationOtp`, `sendPasswordReset`, `resetPassword`, `verifyLoginOtp`, `acceptInvite`, `changePassword`. All touch either password-hash storage, session issuance, or OTP flows.
-- **[src/actions/profile.ts](../src/actions/profile.ts)** — user's own-profile CRUD (name, avatar-upload path today, password change). Migrates alongside session model since it also reads legacy `users` by session id.
-- **[src/actions/super.ts](../src/actions/super.ts)** — `listTenantsWithHealth` uses `tx.user.groupBy` across every tenant for the SUPER_ADMIN dashboard. Cross-tenant read is a distinct concern from the per-tenant CRUD Z1.6 handles.
-- **[src/actions/signup.ts](../src/actions/signup.ts)** — `startTenantSignup` / `verifyTenantSignup`. Cross-tenant email-uniqueness checks + tenant provisioning create the initial SUPER_ADMIN legacy `User`.
+- **[src/lib/auth.ts](../src/lib/auth.ts)** — session cookie decode, `getSessionUser`, `requireSession`. Migrates session-identity lookup from legacy `users` to wrapper.
+- **[src/actions/auth.ts](../src/actions/auth.ts)** — `registerClient`, `login`, `verifyRegistrationOtp`, `sendPasswordReset`, `resetPassword`, `verifyLoginOtp`, `acceptInvite`, `changePassword`. All touch password-hash storage, session issuance, or OTP flows.
+- **[src/actions/profile.ts](../src/actions/profile.ts)** — user's own-profile CRUD (name, avatar-upload path today, password change).
+- **[src/actions/super.ts](../src/actions/super.ts)** — `listTenantsWithHealth` cross-tenant `tx.user.groupBy` + tenant provisioning `tx.user.create`.
+- **[src/actions/signup.ts](../src/actions/signup.ts)** — `startTenantSignup` / `verifyTenantSignup`. Cross-tenant email-uniqueness checks + initial SUPER_ADMIN creation.
 
-**Key design questions Z1.8 must answer:**
+**Resolved decisions** (formerly "key design questions"):
 
-1. **Where does the password hash live post-Z1.5?** Wrapper's `TeamMember` / `EndUser` DTOs don't expose it. Options: (a) widen wrapper (cross-repo — but auth is arguably out of Shared Platform's remit), (b) new Support-owned `auth_credentials` table, (c) something else.
-2. **What's the session cookie's identity field?** `userId` → `teamMemberId` / `endUserId` / `subjectId` / dual? Affects every server action's `session.id` usage.
-3. **What happens to legacy `users.status` and lifecycle fields?** (INVITED / PENDING / ACTIVE / SUSPENDED / REJECTED). These are Support-side workflow state, not identity. Options: keep on a Support-owned `team_member_lifecycle` table, encode as a Shared Platform Role concern, etc.
+Answered in [`docs/design/z1-8-auth-model.md`](design/z1-8-auth-model.md) and ratified as **[ADR-001](adrs/adr-001-z1-8-auth-model-set-b.md)** — chosen shape is Set B:
 
-**Extra safety (per user directive):** Z1.8's dry-run runs against a **staging tenant**, not the production tenant data. Details in Z1.8's own design pass when it starts.
+- **Q1 — `passwordHash`**: 1B — new Support-owned `auth_credentials` table with dual-FK to `end_users` / `team_members`.
+- **Q2 — session cookie**: 2A — neutral `subjectId` + `subjectKind` field pair.
+- **Q3 — lifecycle state**: 3B — new Support-owned lifecycle tables (`team_member_lifecycle`, `end_user_lifecycle`).
+
+The three sit in one coherent architectural commitment: **wrapper stays identity-only; Support owns auth (credentials + lifecycle); session cookie is subject-neutral for HRMS/CRM extensibility.** Set A (widen wrapper for auth) and Set C (delegate to external IdP) were rejected in ADR-001's analysis — see the ADR for the coupling reasoning and HRMS/CRM implications.
+
+**Deferred to §7.14 (M-auth-migration)**: the "is Support-side auth the permanent shape, or should Shared Platform grow an auth service?" question. Z1.8 ships Set B as an explicit intermediate state; §7.14 is the named milestone that revisits the question when its trigger fires.
+
+**Extra safety (per Z1.8 rhythm):** Z1.8's dry-run runs against a **staging tenant**, not production tenant data. Staging fixture spec: [`docs/design/z1-8-staging-fixtures.md`](design/z1-8-staging-fixtures.md). Fresh throwaway per dry-run pass; idempotent seed script; tenant marker slug `_z18-staging-<timestamp>` for unmistakable distinguishability from production tenants.
 
 ### 7.13 Z1.9 scope: findOrCreateSender refactor
 
@@ -487,3 +493,54 @@ Once Z1.6 + Z1.8 + Z1.9 have all migrated their writes to the wrapper, no code p
 **Post-Z1.9 shape (to be finalized in Z1.9's own design pass):** create an `EndUser` via the wrapper's `createEndUser`, with `organizationId` auto-matched by email domain. Any password-hash / status concerns Z1.9 inherits from Z1.8's decisions (that's why Z1.9 lands after Z1.8, not alongside).
 
 **Why not folded into Z1.8:** distinct code path (webhook trigger, no live UI session, temp-password generation). Different failure modes (email spam floods, unknown-tenant addresses, malformed sender headers). Small enough to review independently. Keeping it separate makes each PR's failure-mode analysis narrower.
+
+### 7.14 Future ADR: M-auth-migration — Support-side auth vs Shared Platform auth service
+
+**Filed after Z1.8's Set B decision** ([ADR-001](adrs/adr-001-z1-8-auth-model-set-b.md)) as the durable name for the deferred architectural question. Parallel in shape to §7.3 (tenant ownership migration) — a real named milestone that carries the "is this the permanent shape?" question until its trigger fires, rather than a footnote that gets forgotten.
+
+**The question:** Set B ships Support-side `auth_credentials` + Support-side lifecycle tables. This is architecturally coherent for Z1.8 (near-zero cross-repo cost, HRMS/CRM friendly, high reversibility). But it commits Support to owning auth data indefinitely. Is that the right endpoint, or should Shared Platform eventually grow a proper auth service (SSO, credential management, session issuance) that all three apps (Support / HRMS / CRM) share?
+
+**Neither answer is right today.** The question depends on:
+- Whether HRMS's employee-auth story wants org-specific SSO (each customer's IdP), which points away from a shared auth service.
+- Whether CRM even authenticates its contacts (many don't), which affects the sizing of any shared auth investment.
+- Whether Shared Platform's team has bandwidth to design + own an auth service, which is a different investment than mirroring identity primitives.
+
+**Triggers (any one starts the M-auth-migration design pass):**
+
+1. **HRMS or CRM auth planning** — when either app reaches the "where does auth live?" question in its own roadmap. The answer will constrain Support's Z1.8 endpoint state.
+2. **Shared Platform readiness** — when Shared Platform's team decides they want to grow an auth service, either because two of the three apps want it or because operational patterns (per-tenant SSO config, shared session invalidation, etc.) become worth centralizing.
+3. **Support-side auth scaling** — if Support's `auth_credentials` table grows to the point where per-tenant partitioning, MFA support beyond a simple `mfaSecret` column, or SSO integration become substantial ongoing work. At that point centralizing may be cheaper than Support carrying it alone.
+
+**How the three apps should evolve while M-auth-migration is pending:**
+
+- **Support**: keeps `auth_credentials` + lifecycle tables. No proactive investment in generalizing them for other apps. Adds MFA / password policy features to its own tables as needed.
+- **HRMS**: when it starts, it should ship its own auth model (whatever fits its SSO-first requirements) without trying to share Support's tables. If it converges on the same shape as Support's `auth_credentials`, that's evidence for M-auth-migration; if it diverges, that's evidence against.
+- **CRM**: same as HRMS — its own auth model (or no auth at all if contacts don't authenticate).
+- **Shared Platform**: no auth-service design work until at least one of the triggers above fires. Wrapper stays identity-only.
+
+**What M-auth-migration does not commit to:** it doesn't pre-commit to "yes, we'll consolidate." The milestone is the design pass, not the outcome. Set B may turn out to be the permanent shape — that's a valid outcome. The point is having a named place where the question gets revisited on real evidence rather than architectural anxiety.
+
+**Ordering:** unblocked, unscheduled. No dependency on Z1.5, Z1.7, or anything currently on the roadmap. Sits on the same shelf as §7.3.
+
+### 7.15 Z1.8a session cookie grace-period removal
+
+**Filed as a durable item during Z1.8a implementation** so the follow-up commit that removes the old-shape decode branch from `getSessionUser` can't be forgotten.
+
+**Context.** Z1.8a's session cookie change (new-shape `{subjectId, subjectKind, tenantId}` replacing the pre-Z1.8 `{userId, tenantId}`) ships with a **7-day grace-period decode** in `src/lib/session.ts`'s `verifySessionToken` so existing sessions keep working after deploy — otherwise every active user would get logged out simultaneously. Analysis in [`docs/design/z1-8-implementation-plan.md`](design/z1-8-implementation-plan.md) Decision A.
+
+**Removal target.** Day 7 after Z1.8a deploys. One-file follow-up commit removes:
+- The `if (typeof payload.userId === "string") { ... }` old-shape branch in `verifySessionToken`.
+- Its associated comment tagging the removal date.
+- The imports that only the old-shape branch used, if any.
+
+Expected size: ~15 lines removed.
+
+**Day-7 contingency.** If day-7 log-scan shows non-trivial old-shape cookies still in circulation (rare — session TTL is 7 days, so any pre-Z1.8a cookie should have naturally expired by then), extend the grace period by another 7 days before removing the branch. Re-tag the comment with the new removal date. This is a real branch of the plan, not a hypothetical — capturing it here so the choice is deliberate and not implicit.
+
+**How to check readiness on day 7.**
+
+1. Grep server logs for any session verification that fell through the new-shape branch and matched the old-shape branch. If the logs don't already tag this (they don't as of Z1.8a-1), add a `logger.debug("z1_8a old-shape session decode", { tenantId })` line to the old-shape branch before deploy, so day-7 logs have a signal to grep.
+2. If old-shape decodes are <1% of all session decodes over the last 24h: proceed with removal.
+3. If old-shape decodes are >1%: extend contingency, re-file removal for day 14.
+
+**Post-removal.** Delete this §7.15 entry from the boundary doc in the same follow-up commit. The item's job is done.

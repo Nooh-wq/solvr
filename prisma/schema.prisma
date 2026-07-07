@@ -128,6 +128,9 @@ model Tenant {
   ticketGuests  TicketGuest[]
   surveyResponses SurveyResponse[]
   companies     Company[]
+  authCredentials      AuthCredential[]
+  teamMemberLifecycles TeamMemberLifecycle[]
+  endUserLifecycles    EndUserLifecycle[]
 
   @@map("tenants")
 }
@@ -546,6 +549,85 @@ model Notification {
   @@index([tenantId, recipientEndUserId])
   @@index([tenantId, recipientTeamMemberId])
   @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Auth + lifecycle (Z1.8 Set B — see docs/adrs/adr-001-z1-8-auth-model-set-b.md)
+// ---------------------------------------------------------------------------
+//
+// Support-owned tables introduced in Z1.8 to move password + lifecycle state
+// off the legacy `users` table ahead of Z1.5's drop. Set B (per ADR-001):
+// Support owns its auth surface; wrapper stays identity-only.
+//
+// Design notes:
+//   - subjectEndUserId / subjectTeamMemberId / subjectId are raw scalar
+//     columns (not Prisma relations), matching the Z1.4a dual-FK precedent —
+//     enforcement is via CHECK constraint on auth_credentials and via
+//     single-column PK on the lifecycle tables. See
+//     docs/shared-platform-boundary.md §3 rule 3. Cascade ownership stays
+//     on the wrapper's team.
+//   - status uses the existing UserStatus enum, preserving Team & Roles v2
+//     PR #21's 6-state model as ADR-001 committed to.
+//   - AuthCredential.id is a fresh cuid at row-creation time; matches to
+//     legacy `users.id` go via subjectEndUserId or subjectTeamMemberId
+//     (which ARE preserved from Z1.3), never by direct id comparison. See
+//     prisma/z1_8a_migration.sql header for the drift-check convention.
+//   - Dual-write with legacy `users` runs from Z1.8a through Z1.5. Legacy
+//     stays read-authoritative until Z1.5 removes it.
+
+model AuthCredential {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectEndUserId       String?
+  subjectTeamMemberId    String?
+  passwordHash           String
+  passwordChangedAt      DateTime?
+  mfaSecret              String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([tenantId, subjectEndUserId])
+  @@index([tenantId, subjectTeamMemberId])
+  @@map("auth_credentials")
+}
+
+model TeamMemberLifecycle {
+  subjectId      String     @id
+  tenantId       String
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status         UserStatus
+  invitedAt      DateTime?
+  invitedById    String?
+  approvedAt     DateTime?
+  approvedById   String?
+  rejectedAt     DateTime?
+  rejectedById   String?
+  lastActiveAt   DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([tenantId, status])
+  @@map("team_member_lifecycle")
+}
+
+model EndUserLifecycle {
+  subjectId      String     @id
+  tenantId       String
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status         UserStatus
+  invitedAt      DateTime?
+  invitedById    String?
+  approvedAt     DateTime?
+  approvedById   String?
+  rejectedAt     DateTime?
+  rejectedById   String?
+  lastActiveAt   DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([tenantId, status])
+  @@map("end_user_lifecycle")
 }
 
 // ---------------------------------------------------------------------------

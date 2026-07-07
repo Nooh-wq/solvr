@@ -55,7 +55,7 @@ export async function uploadTicketAttachment(
   if (!(file instanceof File) || file.size === 0) return { ok: false, error: "No file provided." };
 
   try {
-    await assertTicketAccess(session.tenantId, session.id, session.role, ticketId);
+    await assertTicketAccess(session.tenantId, session.subjectId, session.role, ticketId);
   } catch {
     return { ok: false, error: "Ticket not found." };
   }
@@ -65,14 +65,14 @@ export async function uploadTicketAttachment(
   if (!result.ok) return { ok: false, error: result.error };
 
   const attachment = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     (tx) =>
       tx.attachment.create({
         data: {
           tenantId: session.tenantId,
           ticketId,
-          uploadedById: session.id,
-          ...uploaderCols(dualFkForUser(session.id, session.role)),
+          uploadedById: session.subjectId,
+          ...uploaderCols(dualFkForUser(session.subjectId, session.role)),
           fileUrl: path,
           fileName: file.name,
           mimeType: file.type,
@@ -93,10 +93,10 @@ export type TicketAttachment = StagedAttachment & { uploadedAt: string; uploaded
 /** All attachments for a ticket (any messageId, including unlinked/staged ones), newest first — backs the Files & Links panel. */
 export async function listTicketAttachments(ticketId: string): Promise<TicketAttachment[]> {
   const session = await requireSession();
-  await assertTicketAccess(session.tenantId, session.id, session.role, ticketId);
+  await assertTicketAccess(session.tenantId, session.subjectId, session.role, ticketId);
 
   const rows = await withRls(
-    { tenantId: session.tenantId, userId: session.id, role: session.role },
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     (tx) =>
       tx.attachment.findMany({
         where: { ticketId, tenantId: session.tenantId },
