@@ -6,11 +6,26 @@ import { z } from "zod";
 // wraps a schema so "" is treated the same as "not provided".
 const emptyToUndefined = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((val) => (val === "" ? undefined : val), schema);
 
+// Z2.3: custom-field values submitted alongside a portal ticket. Kept
+// separate from the ticket columns and applied post-insert via
+// upsertValue so end users can't smuggle arbitrary columns.
+const customFieldValueInputSchema = z.object({
+  fieldDefinitionId: z.string().min(1),
+  valueText: z.string().nullable().optional(),
+  valueNumber: z.number().nullable().optional(),
+  valueDate: z.union([z.string(), z.date()]).nullable().optional(),
+  valueBoolean: z.boolean().nullable().optional(),
+  valueOptionId: z.string().nullable().optional(),
+  valueOptionIds: z.array(z.string()).nullable().optional(),
+});
+
 export const createTicketSchema = z.object({
   title: z.string().min(3).max(200),
   description: z.string().min(1).max(20000),
   categoryId: z.string().cuid().optional(),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  ticketFormId: z.string().cuid().optional(),
+  customFieldValues: z.array(customFieldValueInputSchema).optional(),
 });
 
 export const replySchema = z.object({

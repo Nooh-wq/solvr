@@ -16,6 +16,7 @@ import {
   BookIcon,
   ClipboardIcon,
   ShieldIcon,
+  SlidersIcon,
   ChartBarIcon,
   ChevronLeftIcon,
   MenuIcon,
@@ -27,6 +28,8 @@ export type NavIconKey =
   | "newTicket"
   | "team"
   | "categories"
+  | "fields"
+  | "forms"
   | "branding"
   | "kb"
   | "audit"
@@ -39,6 +42,8 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   newTicket: PlusIcon,
   team: UsersIcon,
   categories: TagIcon,
+  fields: SlidersIcon,
+  forms: ClipboardIcon,
   branding: PaletteIcon,
   kb: BookIcon,
   audit: ClipboardIcon,

@@ -108,6 +108,17 @@ export function ClipboardIcon(props: IconProps) {
   );
 }
 
+export function SlidersIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 5h9M4 10h5M4 15h11" />
+      <circle cx="14.5" cy="5" r="1.75" />
+      <circle cx="10.5" cy="10" r="1.75" />
+      <circle cx="6.5" cy="15" r="1.75" />
+    </svg>
+  );
+}
+
 export function ShieldIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

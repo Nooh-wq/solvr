@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
+import { listValuesForTarget } from "@/actions/customFields";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
+import { CustomFieldsEditor } from "@/components/custom-fields-editor";
 import { ClientProfileCard } from "./client-profile-card";
 import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
@@ -15,6 +17,20 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const [ticket, agents, guests] = await Promise.all([getTicket(id), listAgents(), listTicketGuests(id)]);
   if (!ticket) notFound();
+
+  // Z2.1: three independent custom-field lookups — ticket + its requester
+  // (if a real EndUser) + its organization. Run in parallel; each is one
+  // definitions + values query pair. Requester/org lookups are skipped
+  // when the ticket doesn't have that side (guest requester, no org).
+  const [ticketFields, userFields, orgFields] = await Promise.all([
+    listValuesForTarget("TICKET", ticket.id),
+    ticket.clientEndUserId
+      ? listValuesForTarget("USER", ticket.clientEndUserId)
+      : Promise.resolve([]),
+    ticket.organizationId
+      ? listValuesForTarget("ORG", ticket.organizationId)
+      : Promise.resolve([]),
+  ]);
 
   // Z1.4b: ticket.client is now UserLike | null (wrapper-resolved).
   // "Unknown" fallback covers dual-FK rows whose target row is missing
@@ -91,6 +107,22 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             category: ticket.category?.name ?? null,
           }}
         />
+
+        <CustomFieldsEditor title="Ticket fields" rows={ticketFields} targetId={ticket.id} />
+        {ticket.clientEndUserId ? (
+          <CustomFieldsEditor
+            title="Requester fields"
+            rows={userFields}
+            targetId={ticket.clientEndUserId}
+          />
+        ) : null}
+        {ticket.organizationId ? (
+          <CustomFieldsEditor
+            title="Organization fields"
+            rows={orgFields}
+            targetId={ticket.organizationId}
+          />
+        ) : null}
 
         <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
 

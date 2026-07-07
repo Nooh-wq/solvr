@@ -14,6 +14,7 @@ import {
 } from "@/lib/validation/ticket";
 import type { z } from "zod";
 import type { TicketStatus } from "@/generated/prisma";
+import { Prisma } from "@/generated/prisma";
 import {
   sendTicketCreatedEmail,
   sendAgentReplyEmail,
@@ -85,6 +86,19 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
         session.role === "CLIENT" ? await getEndUser(wrapperCtx, session.subjectId) : null;
       const clientDual = dualFkForUser(session.subjectId, session.role);
 
+      // Z2.3: if a ticket form is claimed, verify it exists and is active
+      // for THIS tenant. Prevents a client from submitting some other
+      // tenant's formId — RLS covers the SELECT, but we surface a friendly
+      // error instead of silently ignoring.
+      let resolvedFormId: string | null = null;
+      if (data.ticketFormId) {
+        const form = await tx.ticketForm.findFirst({
+          where: { id: data.ticketFormId, tenantId: session.tenantId, isActive: true },
+          select: { id: true },
+        });
+        if (form) resolvedFormId = form.id;
+      }
+
       const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
         tx.ticket.create({
           data: {
@@ -101,9 +115,61 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
             source: "portal",
             clientIp: clientIp !== "unknown" ? clientIp : null,
             clientCountry,
+            ticketFormId: resolvedFormId,
           },
         })
       );
+
+      // Z2.3: apply custom-field values submitted alongside the ticket.
+      // Only accept values whose definition IS on the resolved form —
+      // this is the server-side gate that keeps end users from setting
+      // arbitrary USER/ORG fields (Z2 spec §3: end users must not see or
+      // edit those). If no form was resolved, all submitted values are
+      // silently dropped (nothing to reference against).
+      if (resolvedFormId && data.customFieldValues && data.customFieldValues.length > 0) {
+        const formFields = await tx.ticketFormField.findMany({
+          where: { ticketFormId: resolvedFormId, tenantId: session.tenantId },
+          include: {
+            fieldDefinition: { select: { id: true, type: true, scope: true, isActive: true } },
+          },
+        });
+        const defsById = new Map(
+          formFields
+            .filter((ff) => ff.fieldDefinition.scope === "TICKET" && ff.fieldDefinition.isActive)
+            .map((ff) => [ff.fieldDefinition.id, ff.fieldDefinition])
+        );
+
+        for (const v of data.customFieldValues) {
+          const def = defsById.get(v.fieldDefinitionId);
+          if (!def) continue; // Silent drop — not on the form.
+
+          const dateVal =
+            v.valueDate == null
+              ? null
+              : typeof v.valueDate === "string"
+                ? new Date(v.valueDate)
+                : v.valueDate;
+
+          await tx.customFieldValue.create({
+            data: {
+              tenantId: session.tenantId,
+              fieldDefinitionId: def.id,
+              targetType: "TICKET",
+              targetId: ticket.id,
+              valueText: def.type === "TEXT" ? (v.valueText ?? null) : null,
+              valueNumber:
+                def.type === "NUMBER" && v.valueNumber != null
+                  ? new Prisma.Decimal(v.valueNumber)
+                  : null,
+              valueDate: def.type === "DATE" ? dateVal : null,
+              valueBoolean: def.type === "CHECKBOX" ? (v.valueBoolean ?? null) : null,
+              valueOptionId: def.type === "DROPDOWN" ? (v.valueOptionId ?? null) : null,
+              valueOptionIds:
+                def.type === "MULTISELECT" && v.valueOptionIds ? v.valueOptionIds : [],
+            },
+          });
+        }
+      }
 
       await tx.auditLog.create({
         data: {
