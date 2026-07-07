@@ -22,7 +22,10 @@ export default async function TeamPage() {
       <TeamDirectory
         users={visibleTeam.map((u) => ({
           id: u.id,
-          name: u.name,
+          // Wrapper EndUser/TeamMember.name is nullable — fall back to
+          // email so the directory row always renders a stable label.
+          // Z1.5b: was legacy users.name (NOT NULL).
+          name: u.name ?? u.email,
           email: u.email,
           role: u.role,
           status: u.status,
