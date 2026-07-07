@@ -3,6 +3,7 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { withRls } from "@/lib/db";
 import {
   createSessionCookie,
@@ -16,8 +17,6 @@ import {
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import { passwordSchema } from "@/lib/validation/password";
-import { roleToSubjectKind } from "@/lib/z1-dual-fk";
-import type { LegacyRole } from "@/generated/prisma";
 import {
   sendRegistrationPendingEmail,
   sendRegistrationApprovedEmail,
@@ -28,9 +27,23 @@ import {
 import { notify } from "@/lib/notifications";
 import { REDIRECT_BY_ROLE } from "@/lib/redirect-by-role";
 import { matchCompanyByEmail } from "@/lib/company-match";
+import {
+  systemContext,
+  createEndUser,
+  getEndUser,
+  getTeamMemberWithRoleName,
+  listTeamMembers,
+} from "@/lib/shared-platform";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+}
+
+function wrapperRoleNameToUserRole(name: string): "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN" {
+  if (name === "Super Admin") return "SUPER_ADMIN";
+  if (name === "Admin") return "ADMIN";
+  if (name === "Agent") return "AGENT";
+  return "AGENT";
 }
 
 const registerSchema = z.object({
@@ -45,15 +58,11 @@ type RegisterResult = { error: string } | { ok: true; otpToken: string };
 /**
  * Step 1 of registration: creates an UNVERIFIED account and emails a 6-digit
  * code to confirm the address is real, before it ever reaches an admin's
- * approval queue or the domain-auto-approval check (verifyRegistrationOtp
- * does both of those, step 2). Mirrors the invite flow's two-step shape
- * (acceptInvite -> verifyLoginOtp) and reuses the same LoginOtp/OTP-session-
- * token infrastructure.
+ * approval queue or the domain-auto-approval check.
+ *
+ * Z1.5b: wrapper EndUser is created for the new registrant. No legacy user.
  */
 export async function registerClient(input: z.infer<typeof registerSchema>): Promise<RegisterResult> {
-  // safeParse (not .parse) so a password-complexity failure surfaces its
-  // specific message — a thrown error from a Server Action gets redacted by
-  // Next.js in production (see inviteUser()'s comment in actions/admin.ts).
   const parsed = registerSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
@@ -64,98 +73,77 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
   if (!rateLimit.allowed) return { error: "Too many registration attempts. Try again shortly." };
 
   const passwordHash = await bcrypt.hash(data.password, 10);
+  const ctx = systemContext(tenant.id);
 
-  type TxResult = { failed: true; message: string } | { failed: false; userId: string; email: string; code: string; branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"] };
+  // Check if EndUser or TeamMember with this email already exists in tenant.
+  const existing = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
+    const eu = await tx.endUser.findFirst({ where: { tenantId: tenant.id, email: data.email } });
+    if (eu) return true;
+    const tm = await tx.teamMember.findFirst({ where: { tenantId: tenant.id, email: data.email } });
+    return !!tm;
+  });
+  if (existing) return { error: "An account with this email already exists." };
 
-  // No session yet — establish RLS scope from the resolved host tenant alone
-  // (same pattern as getSessionUser(); see src/lib/auth.ts).
-  const result: TxResult = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
-    const existing = await tx.user.findUnique({
-      where: { tenantId_email: { tenantId: tenant.id, email: data.email } },
-    });
-    if (existing) return { failed: true, message: "An account with this email already exists." };
+  const organizationId = await matchCompanyByEmail(tenant.id, data.email);
+  const subjectId = randomUUID();
 
-    // Auto-match Company by email domain (spec §5.1). Personal-email
-    // domains (gmail.com, etc.) never match — see matchCompanyByEmail.
-    // Z1.6 signature change: no longer takes a tx; wrapper opens its
-    // own tenant-scoped RLS internally. This call site is Z1.8 scope
-    // (auth model rework) — the signature update here is a mechanical
-    // fix to keep the build clean, not a Z1.6 auth migration.
-    const companyId = await matchCompanyByEmail(tenant.id, data.email);
+  // Create wrapper EndUser first (post-tx pattern would race with the OTP
+  // insert below). Since createEndUser opens its own tx internally, run
+  // it up front then do credentials + lifecycle + OTP in a single tx.
+  await createEndUser(ctx, {
+    id: subjectId,
+    email: data.email,
+    name: data.name,
+    organizationId,
+  });
 
-    const user = await tx.user.create({
-      data: {
-        tenantId: tenant.id,
-        passwordHash,
-        name: data.name,
-        email: data.email,
-        company: data.company,
-        companyId,
-        role: "CLIENT",
-        status: "UNVERIFIED",
-      },
-    });
-    // Z1.8b dual-write: credentials + lifecycle for the new CLIENT registrant.
+  const result = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
     await tx.authCredential.create({
       data: {
         tenantId: tenant.id,
-        subjectEndUserId: user.id,
+        subjectEndUserId: subjectId,
         passwordHash,
       },
     });
     await tx.endUserLifecycle.create({
-      data: {
-        tenantId: tenant.id,
-        subjectId: user.id,
-        status: "UNVERIFIED",
-      },
+      data: { tenantId: tenant.id, subjectId, status: "UNVERIFIED" },
     });
 
-    // login_otp_insert's RLS policy requires app.user_id to match the row's
-    // userId — this transaction started with userId: null (no session exists
-    // yet, unlike acceptInvite() which already has a real invited userId from
-    // the token), so it has to be updated to the just-created user's id
-    // before inserting their OTP row, the same way withRls() itself sets it
-    // at the start of a transaction.
-    await tx.$executeRaw`SELECT set_config('app.user_id', ${user.id}, true)`;
-
-    // The plaintext code only ever exists transiently in this closure — never
-    // stored, only its bcrypt hash is (verifyRegistrationOtp compares against that).
+    // OTP row: RLS policy on login_otps requires app.user_id to match the
+    // row's userId. Set it before insert since this tx started with userId: null.
+    await tx.$executeRaw`SELECT set_config('app.user_id', ${subjectId}, true)`;
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 10);
     await tx.loginOtp.create({
       data: {
         tenantId: tenant.id,
-        userId: user.id,
-        // Z1.4a: OTPs at registration are always CLIENT-role.
-        endUserId: user.id,
+        userId: subjectId,
+        endUserId: subjectId,
         codeHash,
         expiresAt: new Date(Date.now() + OTP_DURATION_MS),
       },
     });
 
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });
-    return { failed: false, userId: user.id, email: user.email, code, branding };
+    return { userId: subjectId, email: data.email, code, branding };
   });
 
-  if (result.failed) return { error: result.message };
-
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-
   const otpToken = await signOtpSessionToken({ userId: result.userId, tenantId: tenant.id });
   return { ok: true, otpToken };
 }
 
 type VerifyRegistrationOtpResult = { error: string } | { ok: true; redirectTo: string } | { ok: true; pending: true };
 
+const verifyOtpSchema = z.object({
+  otpToken: z.string().min(1),
+  code: z.string().min(6).max(6),
+});
+
 /**
- * Step 2 of registration: verifies the emailed code, then applies the same
- * approval-gate logic registerClient() used to apply immediately (email
- * flow design §"Registration Approval Gate") — auto-approve if the email's
- * domain already has an ACTIVE user in this tenant (same company, already
- * trusted once), otherwise PENDING until an admin of *this* tenant approves
- * (never Stralis on a client tenant's behalf). Auto-approved users are logged
- * straight in, same as verifyLoginOtp() does for an accepted invite.
+ * Step 2 of registration: verifies the emailed code, then applies the
+ * approval-gate logic — auto-approve if the email's domain already has an
+ * ACTIVE user in this tenant, otherwise PENDING.
  */
 export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchema>): Promise<VerifyRegistrationOtpResult> {
   const parsed = verifyOtpSchema.safeParse(input);
@@ -176,9 +164,7 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
         failed: false;
         autoApproved: boolean;
         email: string;
-        role: string;
         name: string;
-        company: string | null;
         admins: { id: string; email: string }[];
         branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"];
       };
@@ -193,45 +179,51 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
     const valid = await bcrypt.compare(data.code, otp.codeHash);
     if (!valid) return { failed: true, message: "Incorrect code. Please try again." };
 
-    const user = await tx.user.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId, status: "UNVERIFIED" } });
-    if (!user) return { failed: true, message: "This registration is no longer valid — please register again." };
+    // Read EndUser identity + lifecycle status.
+    const endUser = await tx.endUser.findFirst({
+      where: { id: payload.userId, tenantId: payload.tenantId },
+    });
+    const lifecycle = await tx.endUserLifecycle.findUnique({ where: { subjectId: payload.userId } });
+    if (!endUser || lifecycle?.status !== "UNVERIFIED") {
+      return { failed: true, message: "This registration is no longer valid — please register again." };
+    }
 
     await tx.loginOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
 
-    const domain = user.email.split("@")[1]?.toLowerCase();
-    const domainApproved = domain
-      ? await tx.user.findFirst({
-          where: { tenantId: payload.tenantId, status: "ACTIVE", email: { endsWith: `@${domain}`, mode: "insensitive" } },
-        })
-      : null;
+    // Domain-auto-approval: any other ACTIVE EndUser or TeamMember in this
+    // tenant with a matching email domain triggers auto-approve.
+    const domain = endUser.email.split("@")[1]?.toLowerCase();
+    let domainApproved = false;
+    if (domain) {
+      const [euMatch, tmMatch] = await Promise.all([
+        tx.endUser.findFirst({
+          where: { tenantId: payload.tenantId, email: { endsWith: `@${domain}`, mode: "insensitive" } },
+        }),
+        tx.teamMember.findFirst({
+          where: { tenantId: payload.tenantId, email: { endsWith: `@${domain}`, mode: "insensitive" } },
+        }),
+      ]);
+      domainApproved = !!(euMatch || tmMatch);
+    }
 
-    // Domain-auto-approval path sets approvedAt but no approvedById — the
-    // "approver" is the system/policy, not any specific admin. Callers
-    // reading this field should tolerate a null approvedById on rows where
-    // approvedAt is set (approved by rule, not by an individual). PENDING
-    // rows leave both fields null until approveUser() sets them.
     const nextStatus = domainApproved ? "ACTIVE" as const : "PENDING" as const;
     const approvedAt = domainApproved ? new Date() : null;
-    const updated = await tx.user.update({
-      where: { id: user.id },
-      data: { status: nextStatus, approvedAt },
-    });
-    // Z1.8b dual-write: mirror status transition (UNVERIFIED → ACTIVE|PENDING)
-    // to lifecycle table. All registrants are CLIENT, so always end_user_lifecycle.
     await tx.endUserLifecycle.upsert({
-      where: { subjectId: user.id },
-      create: {
-        subjectId: user.id,
-        tenantId: payload.tenantId,
-        status: nextStatus,
-        approvedAt,
-      },
+      where: { subjectId: endUser.id },
+      create: { subjectId: endUser.id, tenantId: payload.tenantId, status: nextStatus, approvedAt },
       update: { status: nextStatus, approvedAt },
     });
 
+    // Admin recipients for the "new registration awaiting approval" notice.
     const admins = domainApproved
       ? []
-      : await tx.user.findMany({ where: { tenantId: payload.tenantId, role: { in: ["ADMIN", "SUPER_ADMIN"] }, status: "ACTIVE" } });
+      : await tx.teamMember.findMany({
+          where: {
+            tenantId: payload.tenantId,
+            role: { name: { in: ["Admin", "Super Admin"] } },
+          },
+          select: { id: true, email: true },
+        });
 
     if (admins.length > 0) {
       await notify(
@@ -240,8 +232,8 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
           tenantId: payload.tenantId,
           userId: a.id,
           type: "REGISTRATION_PENDING" as const,
-          title: `New registration awaiting approval: ${updated.name}`,
-          body: updated.email,
+          title: `New registration awaiting approval: ${endUser.name ?? endUser.email}`,
+          body: endUser.email,
         }))
       );
     }
@@ -249,11 +241,9 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: payload.tenantId } });
     return {
       failed: false,
-      autoApproved: Boolean(domainApproved),
-      email: updated.email,
-      role: updated.role,
-      name: updated.name,
-      company: updated.company,
+      autoApproved: domainApproved,
+      email: endUser.email,
+      name: endUser.name ?? endUser.email,
       admins,
       branding,
     };
@@ -265,15 +255,15 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
     await sendRegistrationApprovedEmail(result.email, result.branding);
     await createSessionCookie({
       subjectId: payload.userId,
-      subjectKind: roleToSubjectKind(result.role as LegacyRole),
+      subjectKind: "END_USER",
       tenantId: payload.tenantId,
     });
-    return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
+    return { ok: true, redirectTo: REDIRECT_BY_ROLE.CLIENT };
   }
 
   await sendRegistrationPendingEmail(result.email, result.branding);
   await Promise.all(
-    result.admins.map((a) => sendNewRegistrationAdminNotice(a.email, { name: result.name, email: result.email, company: result.company }, result.branding))
+    result.admins.map((a) => sendNewRegistrationAdminNotice(a.email, { name: result.name, email: result.email, company: null }, result.branding))
   );
   return { ok: true, pending: true };
 }
@@ -283,11 +273,6 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-// A real bcrypt hash to compare against when the email doesn't exist, so the
-// "no such user" path spends the same ~time as the "wrong password" path.
-// Without this, an attacker can measure response time to enumerate which
-// emails have accounts (the missing-user path would return instantly, skipping
-// the expensive hash). Computed once at module load.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync("timing-attack-equalizer", 10);
 
 export async function login(input: z.infer<typeof loginSchema>) {
@@ -295,72 +280,65 @@ export async function login(input: z.infer<typeof loginSchema>) {
   const tenant = await getCurrentTenant();
   if (tenant.status === "SUSPENDED") return { error: "This workspace is currently suspended." };
 
-  // Per tenant+email AND per IP — stops both "one attacker hammering one
-  // account" and "one attacker spraying many accounts from one IP".
   const rateLimitKey = `login:${tenant.id}:${data.email.toLowerCase()}`;
   const rateLimit = await checkRateLimitWithIp(rateLimitKey, 5, 20, 60_000);
   if (!rateLimit.allowed) {
     return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
   }
 
-  // Z1.8b: identity from legacy users (until Z1.5 drops it), passwordHash
-  // from auth_credentials (Set B — Support owns auth surface), status from
-  // the appropriate lifecycle table. All three reads share one RLS tx to
-  // avoid duplicate context setup and to keep the timing profile stable
-  // regardless of which store has drift.
+  // Z1.5b: identity from wrapper (EndUser + TeamMember), password from
+  // auth_credentials, status from lifecycle. All reads share one RLS tx.
   const lookup = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { tenantId_email: { tenantId: tenant.id, email: data.email } },
+    const endUser = await tx.endUser.findFirst({
+      where: { tenantId: tenant.id, email: data.email },
     });
-    if (!user) return null;
-    const isStaff = user.role !== "CLIENT";
+    const teamMember = endUser
+      ? null
+      : await tx.teamMember.findFirst({
+          where: { tenantId: tenant.id, email: data.email },
+          include: { role: { select: { name: true } } },
+        });
+    if (!endUser && !teamMember) return null;
+
+    const isStaff = !!teamMember;
+    const subjectId = endUser?.id ?? teamMember!.id;
     const creds = await tx.authCredential.findFirst({
       where: isStaff
-        ? { tenantId: tenant.id, subjectTeamMemberId: user.id }
-        : { tenantId: tenant.id, subjectEndUserId: user.id },
+        ? { tenantId: tenant.id, subjectTeamMemberId: subjectId }
+        : { tenantId: tenant.id, subjectEndUserId: subjectId },
     });
     const lifecycle = isStaff
-      ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId: user.id } })
-      : await tx.endUserLifecycle.findUnique({ where: { subjectId: user.id } });
-    return { user, creds, lifecycle };
+      ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId } })
+      : await tx.endUserLifecycle.findUnique({ where: { subjectId } });
+    return {
+      subjectId,
+      email: endUser?.email ?? teamMember!.email,
+      isStaff,
+      roleName: teamMember?.role.name ?? null,
+      creds,
+      lifecycle,
+    };
   });
 
-  // Always run a bcrypt compare — against the real hash if the user exists, or
-  // a dummy hash if not — so response timing doesn't reveal whether the email
-  // is registered (user-enumeration defense). The generic error message is the
-  // same for "no such user" and "wrong password".
   const valid = await bcrypt.compare(data.password, lookup?.creds?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!lookup || !lookup.creds || !valid) return { error: "Invalid email or password." };
 
-  const dbUser = lookup.user;
-  // Status read from lifecycle table (Z1.8b flip). If lifecycle row is
-  // missing (drift or race), refuse login rather than falling through to
-  // legacy — the drift-check script exists to catch and fix these.
   const status = lookup.lifecycle?.status;
   if (!status) return { error: "This account is not yet ready — please contact support." };
 
-  // Password is correct, so it's safe to be specific about *why* login is
-  // blocked (this isn't an enumeration risk once the password has already
-  // been proven correct).
   if (status === "UNVERIFIED") return { error: "Please verify your email first — check your inbox for the code, or register again to get a new one." };
   if (status === "PENDING") return { error: "Your account is still awaiting admin approval." };
   if (status === "REJECTED") return { error: "Your registration request was not approved." };
   if (status === "SUSPENDED") return { error: "This account has been deactivated." };
-  // Practically unreachable (an INVITED account's passwordHash is a random
-  // placeholder nobody could ever type — see inviteUser()), kept for
-  // defense-in-depth rather than checked before the password comparison
-  // above: front-loading it would let an attacker learn "this email has a
-  // live invite" from a wrong-password guess alone, which is exactly the
-  // enumeration risk this whole "reveal the reason only once the password's
-  // already proven correct" ordering exists to avoid.
   if (status === "INVITED") return { error: "Please accept your invite email first to set up your account." };
 
+  const role = lookup.isStaff ? wrapperRoleNameToUserRole(lookup.roleName!) : "CLIENT";
   await createSessionCookie({
-    subjectId: dbUser.id,
-    subjectKind: roleToSubjectKind(dbUser.role),
-    tenantId: dbUser.tenantId,
+    subjectId: lookup.subjectId,
+    subjectKind: lookup.isStaff ? "TEAM_MEMBER" : "END_USER",
+    tenantId: tenant.id,
   });
-  return { ok: true, redirectTo: REDIRECT_BY_ROLE[dbUser.role] };
+  return { ok: true, redirectTo: REDIRECT_BY_ROLE[role] };
 }
 
 export async function logout() {
@@ -369,28 +347,44 @@ export async function logout() {
 
 const resetSchema = z.object({ email: z.string().email() });
 
-/** Always returns { ok: true } regardless of whether the email exists, is pending/rejected/suspended, etc. — the response must not let a caller distinguish "no such account" from "email sent" (user enumeration). */
-export async function requestPasswordReset(input: z.infer<typeof resetSchema>) {
+/**
+ * Password-reset request. Always returns { ok: true } regardless of whether
+ * the email exists — this is standard defense against user enumeration.
+ */
+export async function requestPasswordReset(input: z.infer<typeof resetSchema>): Promise<{ ok: true }> {
   const data = resetSchema.parse(input);
   const tenant = await getCurrentTenant();
 
   const rateLimit = await checkRateLimitWithIp(`reset:${tenant.id}:${data.email.toLowerCase()}`, 3, 10, 60_000);
-  if (!rateLimit.allowed) return { ok: true }; // don't reveal rate-limiting to a potential enumerator either
+  if (!rateLimit.allowed) return { ok: true };
 
-  const { user, branding } = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { tenantId_email: { tenantId: tenant.id, email: data.email } },
+  const { subject, isActive, branding } = await withRls({ tenantId: tenant.id, userId: null }, async (tx) => {
+    const endUser = await tx.endUser.findFirst({
+      where: { tenantId: tenant.id, email: data.email },
     });
+    const teamMember = endUser
+      ? null
+      : await tx.teamMember.findFirst({
+          where: { tenantId: tenant.id, email: data.email },
+        });
+    const subject = endUser
+      ? { id: endUser.id, email: endUser.email, isStaff: false }
+      : teamMember
+        ? { id: teamMember.id, email: teamMember.email, isStaff: true }
+        : null;
+    const lifecycle = subject
+      ? subject.isStaff
+        ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId: subject.id } })
+        : await tx.endUserLifecycle.findUnique({ where: { subjectId: subject.id } })
+      : null;
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: tenant.id } });
-    return { user, branding };
+    return { subject, isActive: lifecycle?.status === "ACTIVE", branding };
   });
 
-  // Only ACTIVE accounts get a link — PENDING/REJECTED/SUSPENDED silently get
-  // nothing (still returns { ok: true } either way, so this isn't observable).
-  if (user && user.status === "ACTIVE") {
-    const token = await signPasswordResetToken({ userId: user.id, tenantId: tenant.id });
+  if (subject && isActive) {
+    const token = await signPasswordResetToken({ userId: subject.id, tenantId: tenant.id });
     const resetUrl = `${siteUrl()}/auth/reset/confirm?token=${encodeURIComponent(token)}`;
-    await sendPasswordResetEmail(user.email, resetUrl, branding);
+    await sendPasswordResetEmail(subject.email, resetUrl, branding);
   }
 
   return { ok: true };
@@ -403,7 +397,7 @@ const confirmResetSchema = z.object({
 
 type ConfirmPasswordResetResult = { error: string } | { ok: true; redirectTo: string };
 
-/** Consumes a password-reset link token: validates it, sets the new password, and logs the user in. Single-use via passwordChangedAt (see session.ts's comment on signPasswordResetToken). */
+/** Consumes a password-reset link token: validates it, sets the new password, and logs the user in. */
 export async function confirmPasswordReset(
   input: z.infer<typeof confirmResetSchema>
 ): Promise<ConfirmPasswordResetResult> {
@@ -417,50 +411,62 @@ export async function confirmPasswordReset(
   const payload = await verifyPasswordResetToken(data.token);
   if (!payload) return { error: "This reset link is invalid or has expired." };
 
-  type TxResult = { failed: true; message: string } | { failed: false; role: string };
+  type TxResult = { failed: true; message: string } | { failed: false; role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN"; isStaff: boolean };
 
   const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
-    const user = await tx.user.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId } });
-    if (!user || user.status !== "ACTIVE") return { failed: true, message: "This reset link is invalid or has expired." };
+    // Try TeamMember first, fall back to EndUser (same subject id in either).
+    const teamMember = await tx.teamMember.findFirst({
+      where: { id: payload.userId, tenantId: payload.tenantId },
+      include: { role: { select: { name: true } } },
+    });
+    const endUser = teamMember
+      ? null
+      : await tx.endUser.findFirst({
+          where: { id: payload.userId, tenantId: payload.tenantId },
+        });
+    if (!teamMember && !endUser) return { failed: true, message: "This reset link is invalid or has expired." };
 
-    // Single-use enforcement: reject if this token predates a password change
-    // that already happened (either from this same link being used once
-    // already, or from an unrelated password change since the link was sent).
-    if (user.passwordChangedAt && (payload.iat ?? 0) < Math.floor(user.passwordChangedAt.getTime() / 1000)) {
+    const isStaff = !!teamMember;
+    const subjectField = isStaff ? "subjectTeamMemberId" : "subjectEndUserId";
+    const lifecycle = isStaff
+      ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId: payload.userId } })
+      : await tx.endUserLifecycle.findUnique({ where: { subjectId: payload.userId } });
+    if (lifecycle?.status !== "ACTIVE") return { failed: true, message: "This reset link is invalid or has expired." };
+
+    const cred = await tx.authCredential.findFirst({
+      where: { tenantId: payload.tenantId, [subjectField]: payload.userId },
+    });
+    if (cred?.passwordChangedAt && (payload.iat ?? 0) < Math.floor(cred.passwordChangedAt.getTime() / 1000)) {
       return { failed: true, message: "This reset link has already been used." };
     }
 
     const passwordHash = await bcrypt.hash(data.newPassword, 10);
     const now = new Date();
-    await tx.user.update({ where: { id: user.id }, data: { passwordHash, passwordChangedAt: now } });
-    // Z1.8b dual-write: mirror password to auth_credentials. Same-tx safe
-    // because both are Support-owned tables.
-    const subjectField = user.role === "CLIENT" ? "subjectEndUserId" : "subjectTeamMemberId";
     await tx.authCredential.updateMany({
-      where: { tenantId: user.tenantId, [subjectField]: user.id },
+      where: { tenantId: payload.tenantId, [subjectField]: payload.userId },
       data: { passwordHash, passwordChangedAt: now },
     });
-    return { failed: false, role: user.role };
+    const role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN" = isStaff
+      ? wrapperRoleNameToUserRole(teamMember!.role.name)
+      : "CLIENT";
+    return { failed: false, role, isStaff };
   });
 
   if (result.failed) return { error: result.message };
 
   await createSessionCookie({
     subjectId: payload.userId,
-    subjectKind: roleToSubjectKind(result.role as LegacyRole),
+    subjectKind: result.isStaff ? "TEAM_MEMBER" : "END_USER",
     tenantId: payload.tenantId,
   });
   return { ok: true as const, redirectTo: REDIRECT_BY_ROLE[result.role] };
 }
 
 // ---------------------------------------------------------------------------
-// Invite accept + first-login OTP (Team > Invite — see actions/admin.ts's
-// inviteUser()). Two steps, chained by a short-lived JWT the client holds
-// between them (see lib/session.ts for why); no session cookie exists until
-// verifyLoginOtp() succeeds at the very end.
+// Invite accept + first-login OTP
 // ---------------------------------------------------------------------------
 
-const OTP_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_DURATION_MS = 10 * 60 * 1000;
 
 function generateOtpCode() {
   return crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
@@ -473,7 +479,6 @@ const acceptInviteSchema = z.object({
 
 type AcceptInviteResult = { error: string } | { ok: true; otpToken: string };
 
-/** Step 1: consumes the emailed invite link, sets the invitee's own password, and emails a one-time code for step 2 (verifyLoginOtp). */
 export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): Promise<AcceptInviteResult> {
   const parsed = acceptInviteSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
@@ -490,51 +495,52 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
     | { failed: false; email: string; code: string; branding: Awaited<ReturnType<typeof getCurrentTenant>>["branding"] };
 
   const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
-    const user = await tx.user.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId } });
-    if (!user || user.status !== "INVITED") {
+    // Identify subject kind + status via lifecycle.
+    const [teamMember, endUser] = await Promise.all([
+      tx.teamMember.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId } }),
+      tx.endUser.findFirst({ where: { id: payload.userId, tenantId: payload.tenantId } }),
+    ]);
+    if (!teamMember && !endUser) {
+      return { failed: true, message: "This invite has already been used or is no longer valid." };
+    }
+    const isStaff = !!teamMember;
+    const email = teamMember?.email ?? endUser!.email;
+    const lifecycle = isStaff
+      ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId: payload.userId } })
+      : await tx.endUserLifecycle.findUnique({ where: { subjectId: payload.userId } });
+    if (lifecycle?.status !== "INVITED") {
       return { failed: true, message: "This invite has already been used or is no longer valid." };
     }
 
     const passwordHash = await bcrypt.hash(data.password, 10);
     const now = new Date();
-    await tx.user.update({
-      where: { id: user.id },
-      data: { passwordHash, status: "ACTIVE", passwordChangedAt: now },
-    });
-    // Z1.8b dual-write: mirror password to auth_credentials + transition
-    // lifecycle status INVITED → ACTIVE.
-    const isStaff = user.role !== "CLIENT";
     const subjectField = isStaff ? "subjectTeamMemberId" : "subjectEndUserId";
     await tx.authCredential.updateMany({
-      where: { tenantId: user.tenantId, [subjectField]: user.id },
+      where: { tenantId: payload.tenantId, [subjectField]: payload.userId },
       data: { passwordHash, passwordChangedAt: now },
     });
-    const lifecycleData = { tenantId: user.tenantId, status: "ACTIVE" as const };
+    const lifecycleData = { tenantId: payload.tenantId, status: "ACTIVE" as const };
     if (isStaff) {
       await tx.teamMemberLifecycle.upsert({
-        where: { subjectId: user.id },
-        create: { subjectId: user.id, ...lifecycleData },
+        where: { subjectId: payload.userId },
+        create: { subjectId: payload.userId, ...lifecycleData },
         update: lifecycleData,
       });
     } else {
       await tx.endUserLifecycle.upsert({
-        where: { subjectId: user.id },
-        create: { subjectId: user.id, ...lifecycleData },
+        where: { subjectId: payload.userId },
+        create: { subjectId: payload.userId, ...lifecycleData },
         update: lifecycleData,
       });
     }
 
-    // The plaintext code only ever exists transiently in this closure — never
-    // stored, only its bcrypt hash is (verifyLoginOtp compares against that).
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 10);
-    // Z1.4a: acceptInvite covers both CLIENT and staff invitations; split by role.
-    const otpSubject =
-      user.role === "CLIENT" ? { endUserId: user.id } : { teamMemberId: user.id };
+    const otpSubject = isStaff ? { teamMemberId: payload.userId } : { endUserId: payload.userId };
     await tx.loginOtp.create({
       data: {
         tenantId: payload.tenantId,
-        userId: user.id,
+        userId: payload.userId,
         ...otpSubject,
         codeHash,
         expiresAt: new Date(Date.now() + OTP_DURATION_MS),
@@ -542,25 +548,18 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
     });
 
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: payload.tenantId } });
-    return { failed: false, email: user.email, code, branding };
+    return { failed: false, email, code, branding };
   });
 
   if (result.failed) return { error: result.message };
 
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-
   const otpToken = await signOtpSessionToken({ userId: payload.userId, tenantId: payload.tenantId });
   return { ok: true, otpToken };
 }
 
-const verifyOtpSchema = z.object({
-  otpToken: z.string().min(1),
-  code: z.string().min(6).max(6),
-});
-
 type VerifyOtpResult = { error: string } | { ok: true; redirectTo: string };
 
-/** Step 2: verifies the emailed code and, only now, actually creates the session. */
 export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Promise<VerifyOtpResult> {
   const data = verifyOtpSchema.parse(input);
 
@@ -572,7 +571,7 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
     return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
   }
 
-  type TxResult = { failed: true; message: string } | { failed: false; role: string };
+  type TxResult = { failed: true; message: string } | { failed: false; role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN"; isStaff: boolean };
 
   const result: TxResult = await withRls({ tenantId: payload.tenantId, userId: payload.userId }, async (tx) => {
     const otp = await tx.loginOtp.findFirst({
@@ -585,15 +584,25 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
     if (!valid) return { failed: true, message: "Incorrect code. Please try again." };
 
     await tx.loginOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
-    const user = await tx.user.findUniqueOrThrow({ where: { id: payload.userId } });
-    return { failed: false, role: user.role };
+
+    // Derive role by which subject column the OTP was scoped to.
+    const isStaff = !!otp.teamMemberId;
+    if (isStaff) {
+      const tm = await tx.teamMember.findFirst({
+        where: { id: payload.userId, tenantId: payload.tenantId },
+        include: { role: { select: { name: true } } },
+      });
+      if (!tm) return { failed: true, message: "This verification session is no longer valid." };
+      return { failed: false, role: wrapperRoleNameToUserRole(tm.role.name), isStaff: true };
+    }
+    return { failed: false, role: "CLIENT" as const, isStaff: false };
   });
 
   if (result.failed) return { error: result.message };
 
   await createSessionCookie({
     subjectId: payload.userId,
-    subjectKind: roleToSubjectKind(result.role as LegacyRole),
+    subjectKind: result.isStaff ? "TEAM_MEMBER" : "END_USER",
     tenantId: payload.tenantId,
   });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
