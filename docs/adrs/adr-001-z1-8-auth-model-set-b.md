@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-07-07)
 
-**Deciders:** [pending git-user identity]
+**Deciders:** Muhammad Nooh (2026-07-07)
 
 **Related:**
 - Design doc: [`docs/design/z1-8-auth-model.md`](../design/z1-8-auth-model.md) — neutral option matrix for Q1/Q2/Q3
