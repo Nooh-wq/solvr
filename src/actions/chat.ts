@@ -9,6 +9,7 @@ import { retrieveContext } from "@/lib/ai/rag";
 import { chatSendMessageSchema } from "@/lib/validation/kb";
 import { createWithReference } from "@/lib/ticket-number";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
+import { systemContext, getEndUser } from "@/lib/shared-platform";
 import {
   dualFkForUser,
   chatSubjectCols,
@@ -151,10 +152,12 @@ export async function escalateChatToTicket(conversationId: string) {
     const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: session.tenantId } });
 
     const clientDual = dualFkForUser(session.subjectId, session.role);
-    const clientUser = await tx.user.findUnique({
-      where: { id: session.subjectId },
-      select: { companyId: true },
-    });
+    // Z1.5b: read organizationId from wrapper EndUser (not legacy users.companyId).
+    // CLIENT users have EndUser rows post-Z1.3; staff have null organizationId.
+    const clientEndUser =
+      session.role === "CLIENT"
+        ? await getEndUser(systemContext(session.tenantId), session.subjectId)
+        : null;
 
     const ticket = await createWithReference(tenant.name, ({ reference, ticketNumber }) =>
       tx.ticket.create({
@@ -166,7 +169,7 @@ export async function escalateChatToTicket(conversationId: string) {
           description: `Escalated from chat.\n\n${transcript}`,
           clientId: session.subjectId,
           ...ticketClientCols(clientDual),
-          organizationId: clientUser?.companyId ?? null,
+          organizationId: clientEndUser?.organizationId ?? null,
           priority,
           status: "OPEN",
           source: "chatbot",
