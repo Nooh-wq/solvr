@@ -115,3 +115,33 @@ export function chatSubjectCols(x: DualFk) {
     teamMemberId: x.teamMemberId,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Z1.6: legacy role ↔ wrapper Role name mapping
+//
+// Wrapper's TeamMember carries a roleId pointing at a wrapper Role row.
+// The legacy User table stores a LegacyRole enum. During Z1.6 dual-write
+// admin.ts needs to translate from the enum to the wrapper Role's name
+// (which then goes through getRoleByName to fetch the row's id).
+//
+// CLIENT is deliberately absent — CLIENT users are EndUsers, not
+// TeamMembers, so no role mapping applies. Callers must branch on
+// role kind (CLIENT vs staff) before consulting this map.
+// ---------------------------------------------------------------------------
+
+export const LEGACY_STAFF_ROLES = ["AGENT", "ADMIN", "SUPER_ADMIN"] as const;
+export type LegacyStaffRole = (typeof LEGACY_STAFF_ROLES)[number];
+
+const LEGACY_TO_WRAPPER_ROLE_NAME: Record<LegacyStaffRole, string> = {
+  AGENT: "Agent",
+  ADMIN: "Admin",
+  SUPER_ADMIN: "Super Admin",
+};
+
+export function legacyRoleToWrapperRoleName(role: LegacyStaffRole): string {
+  return LEGACY_TO_WRAPPER_ROLE_NAME[role];
+}
+
+export function isLegacyStaffRole(role: string): role is LegacyStaffRole {
+  return (LEGACY_STAFF_ROLES as readonly string[]).includes(role);
+}
