@@ -44,6 +44,7 @@ import {
   WrapperNotFoundError,
 } from "@/lib/shared-platform";
 import { resolveAuditActor } from "@/lib/z1-view-models";
+import { getAvatarUrlsByIds } from "@/lib/avatars";
 import type { Priority, UserStatus } from "@/generated/prisma";
 import type { UserRole } from "@/lib/auth";
 
@@ -181,7 +182,7 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
   ]);
   if (!endUser && !teamMember) return null;
 
-  const [endUserLifecycle, teamMemberLifecycle, org] = await Promise.all([
+  const [endUserLifecycle, teamMemberLifecycle, org, avatarRow] = await Promise.all([
     endUser ? tx.endUserLifecycle.findUnique({ where: { subjectId } }) : Promise.resolve(null),
     teamMember ? tx.teamMemberLifecycle.findUnique({ where: { subjectId } }) : Promise.resolve(null),
     endUser?.organizationId
@@ -190,6 +191,7 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
           select: { id: true, name: true },
         })
       : Promise.resolve(null),
+    tx.subjectAvatar.findUnique({ where: { subjectId }, select: { avatarUrl: true } }),
   ]);
 
   if (endUser) {
@@ -209,7 +211,7 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
       approvedById: lc?.approvedById ?? null,
       rejectedAt: lc?.rejectedAt ?? null,
       rejectedById: lc?.rejectedById ?? null,
-      avatarUrl: null,
+      avatarUrl: avatarRow?.avatarUrl ?? null,
       createdAt: endUser.createdAt,
     };
   }
@@ -230,7 +232,7 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
     approvedById: lc?.approvedById ?? null,
     rejectedAt: lc?.rejectedAt ?? null,
     rejectedById: lc?.rejectedById ?? null,
-    avatarUrl: null,
+    avatarUrl: avatarRow?.avatarUrl ?? null,
     createdAt: tm.createdAt,
   };
 }
@@ -245,7 +247,7 @@ async function loadTeamRows(
   tenantId: string,
   opts: { statusIn?: UserStatus[] } = {}
 ): Promise<TeamRow[]> {
-  const [endUsers, teamMembers, endUserLcs, teamMemberLcs] = await Promise.all([
+  const [endUsers, teamMembers, endUserLcs, teamMemberLcs, avatarRows] = await Promise.all([
     tx.endUser.findMany({ where: { tenantId } }),
     tx.teamMember.findMany({
       where: { tenantId },
@@ -253,10 +255,12 @@ async function loadTeamRows(
     }),
     tx.endUserLifecycle.findMany({ where: { tenantId } }),
     tx.teamMemberLifecycle.findMany({ where: { tenantId } }),
+    tx.subjectAvatar.findMany({ where: { tenantId }, select: { subjectId: true, avatarUrl: true } }),
   ]);
 
   const endUserLcById = new Map(endUserLcs.map((l) => [l.subjectId, l]));
   const teamMemberLcById = new Map(teamMemberLcs.map((l) => [l.subjectId, l]));
+  const avatarBySubjectId = new Map(avatarRows.map((r) => [r.subjectId, r.avatarUrl]));
 
   const orgIds = Array.from(
     new Set(endUsers.map((eu) => eu.organizationId).filter((id): id is string => !!id))
@@ -292,7 +296,7 @@ async function loadTeamRows(
       approvedById: lc?.approvedById ?? null,
       rejectedAt: lc?.rejectedAt ?? null,
       rejectedById: lc?.rejectedById ?? null,
-      avatarUrl: null,
+      avatarUrl: avatarBySubjectId.get(eu.id) ?? null,
       createdAt: eu.createdAt,
     });
   }
@@ -316,7 +320,7 @@ async function loadTeamRows(
       approvedById: lc?.approvedById ?? null,
       rejectedAt: lc?.rejectedAt ?? null,
       rejectedById: lc?.rejectedById ?? null,
-      avatarUrl: null,
+      avatarUrl: avatarBySubjectId.get(tm.id) ?? null,
       createdAt: tm.createdAt,
     });
   }
@@ -1265,9 +1269,10 @@ export async function listAuditLog(filter: Partial<z.infer<typeof auditLogFilter
     if (r.actorEndUserId) endUserIds.add(r.actorEndUserId);
     if (r.actorTeamMemberId) teamMemberIds.add(r.actorTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(session.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   return rows.map((r) => ({
@@ -1276,6 +1281,7 @@ export async function listAuditLog(filter: Partial<z.infer<typeof auditLogFilter
       { actorEndUserId: r.actorEndUserId, actorTeamMemberId: r.actorTeamMemberId },
       endUsers,
       teamMembers,
+      avatars,
     ),
   }));
 }

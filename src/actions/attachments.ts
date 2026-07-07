@@ -11,6 +11,7 @@ import {
   getEndUsersByIds,
   getTeamMembersByIds,
 } from "@/lib/shared-platform";
+import { getAvatarUrlsByIds } from "@/lib/avatars";
 import { resolveUserLike } from "@/lib/z1-view-models";
 
 /** Every ticket-attachment action needs "does this session have any business touching this ticket" — same rule getTicket() already applies (staff: tenant match; client: must be the ticket's own client). */
@@ -111,9 +112,10 @@ export async function listTicketAttachments(ticketId: string): Promise<TicketAtt
     if (r.uploadedByEndUserId) endUserIds.add(r.uploadedByEndUserId);
     if (r.uploadedByTeamMemberId) teamMemberIds.add(r.uploadedByTeamMemberId);
   }
-  const [endUsers, teamMembers] = await Promise.all([
+  const [endUsers, teamMembers, avatars] = await Promise.all([
     getEndUsersByIds(wrapperCtx, [...endUserIds]),
     getTeamMembersByIds(wrapperCtx, [...teamMemberIds]),
+    getAvatarUrlsByIds(session.tenantId, [...endUserIds, ...teamMemberIds]),
   ]);
 
   return Promise.all(
@@ -122,6 +124,7 @@ export async function listTicketAttachments(ticketId: string): Promise<TicketAtt
         { endUserId: r.uploadedByEndUserId, teamMemberId: r.uploadedByTeamMemberId },
         endUsers,
         teamMembers,
+        avatars,
       );
       return {
         id: r.id,

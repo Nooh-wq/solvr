@@ -6,6 +6,7 @@ import {
   getEndUser,
   getTeamMemberWithRoleName,
 } from "@/lib/shared-platform";
+import { getAvatarUrl } from "@/lib/avatars";
 
 /**
  * Z1.5: canonical Support-side role type. Same string values as the legacy
@@ -35,9 +36,9 @@ export type SessionUser = {
   name: string;
   role: UserRole;
   /**
-   * Z1.5: legacy users.avatarUrl is dropped. Wrapper DTOs do not (yet) expose
-   * avatarUrl — Z1.7 will land that cross-repo migration. Until then this is
-   * always null and UI degrades to initials-only (per boundary doc §7.10).
+   * Z1.7: sourced from the Support-owned SubjectAvatar table (see
+   * boundary doc §7.10 + lib/avatars.ts). Null when the subject has
+   * never uploaded a picture; UI falls back to initials.
    */
   avatarUrl: string | null;
   /** Set when a SUPER_ADMIN is impersonating this tenant — see src/actions/super.ts. */
@@ -182,15 +183,15 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     ? wrapperRoleNameToUserRole(teamMember.roleName)
     : "CLIENT";
 
+  const avatarUrl = await getAvatarUrl(payload.tenantId, payload.subjectId);
+
   const baseSession: SessionUser = {
     subjectId: payload.subjectId,
     tenantId: payload.tenantId,
     email,
     name,
     role,
-    // Z1.7 will restore this via wrapper migration. Initials-only UI in the
-    // interim — deliberate per boundary doc §7.10.
-    avatarUrl: null,
+    avatarUrl,
   };
 
   const impersonation = await getImpersonationPayload();
