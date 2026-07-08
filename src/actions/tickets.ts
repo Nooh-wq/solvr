@@ -1004,12 +1004,23 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
   // M21.4: CSAT emails are never digested (time-sensitive single-use link) —
   // the DIGESTABLE map in notification-prefs.ts flags this, so digest mode
   // still gets a real-time send if the toggle is on.
+  // M5.1 — CSAT is now deferred. Instead of firing the email inline,
+  // enqueue a CsatQueue row; the send-csat-queue Inngest cron drains
+  // it when scheduledFor <= now, respecting the tenant's configured
+  // delay (default 1 hour per spec §3 "let the resolution notification
+  // land first"). The per-recipient email decision (send/digest/off)
+  // is still consulted at drain time via getEmailDecision.
   if (statusChanged && updated.status === "RESOLVED") {
-    const csatDecision = await getEmailDecision(session.tenantId, client.id, "csatRequest");
-    if (csatDecision === "send") {
-      const token = await signCsatToken({ ticketId: updated.id, tenantId: session.tenantId });
-      const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
-      await sendCsatRequestEmail(client.email, rateUrl, branding);
+    try {
+      const { enqueueCsatSurvey } = await import("@/lib/csat");
+      await enqueueCsatSurvey({
+        session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+        ticketId: updated.id,
+        resolvedAt: updated.resolvedAt,
+      });
+    } catch {
+      // Non-fatal: the survey is a soft signal, and the ticket resolve
+      // path shouldn't fail because of it.
     }
   }
 

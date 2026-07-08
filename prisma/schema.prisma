@@ -158,6 +158,8 @@ model Tenant {
   ticketSlas             TicketSla[]
   agentProfiles          AgentProfile[]
   autoAssignmentLogs     AutoAssignmentLog[]
+  csatQueue              CsatQueue[]
+  csatSettings           CsatSettings?
 
   @@map("tenants")
 }
@@ -272,6 +274,7 @@ model Ticket {
   notifications     Notification[]
   guests            TicketGuest[]
   surveyResponse    SurveyResponse?
+  csatQueue         CsatQueue[]
   ticketViews       TicketView[]
   slas              TicketSla[]
 
@@ -295,12 +298,96 @@ model SurveyResponse {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ticketId  String   @unique
   ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  // M5.4 — CSAT rows keep 1..5; NPS rows carry 0..10 in the same
+  // column. Averages downstream just take the mean and the type
+  // column distinguishes the scale. Splitting into two columns
+  // would fork every downstream avg query — not worth it.
   rating    Int
   comment   String?
+  // M5.4 — kind of survey this row represents. Determines the
+  // rating scale (1..5 for CSAT, 0..10 for NPS) and the label
+  // shown on analytics + moderation surfaces.
+  surveyType    SurveyType         @default(CSAT)
+  // M5.3 — moderation state so admins can hide abusive/erroneous
+  // comments without dropping the rating (the numeric score still
+  // counts). Rows default VISIBLE; a moderator flips to FLAGGED
+  // or HIDDEN via /admin/csat.
+  moderationStatus SurveyModerationStatus @default(VISIBLE)
+  moderatedByTeamMemberId String?
+  moderatedAt   DateTime?
   createdAt DateTime @default(now())
 
   @@index([tenantId])
+  @@index([tenantId, moderationStatus, createdAt])
   @@map("survey_responses")
+}
+
+// M5.4 — CSAT (1..5 stars) is the default; NPS (0..10) is the second
+// variant. Same table, different scale + email template.
+enum SurveyType {
+  CSAT
+  NPS
+}
+
+// M5.3 — moderation lifecycle for the free-text comment. A hidden
+// comment is not shown outside /admin/csat; the numeric rating still
+// contributes to averages.
+enum SurveyModerationStatus {
+  VISIBLE
+  FLAGGED
+  HIDDEN
+}
+
+// M5.1 — deferred CSAT send queue. Every enqueue schedules a
+// (tenantId, ticketId) pair for `scheduledFor`; an Inngest cron
+// drains rows whose scheduledFor <= now, mails them, and marks
+// `sentAt`. Deferral lets the client's resolution notification
+// land first (spec §3), and gives admins a configurable delay.
+model CsatQueue {
+  id            String    @id @default(cuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId      String
+  ticket        Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  surveyType    SurveyType @default(CSAT)
+  scheduledFor  DateTime  @db.Timestamptz(3)
+  sentAt        DateTime? @db.Timestamptz(3)
+  // Set when send fails and we give up — kept to explain the
+  // absence in the admin surface. Retry loop is out of scope; a
+  // failed row can be manually re-queued.
+  failedAt      DateTime? @db.Timestamptz(3)
+  failureReason String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  // A ticket can accumulate multiple queue rows (e.g. re-resolved
+  // after reopen). Uniqueness would drop the second one silently
+  // and hide the intent. Keep them all; the send path skips a
+  // ticket that already has a delivered row for the same type.
+  @@index([tenantId, scheduledFor, sentAt])
+  @@index([tenantId, ticketId])
+  @@map("csat_queue")
+}
+
+// M5.1 — per-tenant CSAT settings. Support-owned (Tenant already
+// lives here). Extending TenantBranding was tempting but branding
+// is presentation and this is workflow; keeping them separate keeps
+// each surface's schema honest.
+model CsatSettings {
+  tenantId       String    @id
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  enabled        Boolean   @default(true)
+  surveyType     SurveyType @default(CSAT)
+  // Minutes to wait between ticket RESOLVED and the CSAT email.
+  // Default 60 (1 hour) per spec §3 "let the resolution notification
+  // land first". 0 = send immediately (opt-in for tenants who don't
+  // want the delay).
+  delayMinutes   Int       @default(60)
+  emailSubject   String?
+  emailBody      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("csat_settings")
 }
 
 // Z6.1 — Views. A saved filter/sort configuration an agent applies to the

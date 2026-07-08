@@ -375,6 +375,19 @@ async function executeOne(
       await updateTicket({ ticketId, assignedToId: result.teamMemberId });
       return;
     }
+    case "send_csat_request": {
+      // M5.1 — rule-driven CSAT enqueue. Same dedup rules as the
+      // automatic post-RESOLVED enqueue: no double-queue, no re-send
+      // if the ticket was already rated. `delayMinutes` overrides
+      // the tenant default.
+      const { enqueueCsatSurvey } = await import("@/lib/csat");
+      await enqueueCsatSurvey({
+        session,
+        ticketId,
+        overrideDelayMinutes: a.delayMinutes,
+      });
+      return;
+    }
   }
 }
 

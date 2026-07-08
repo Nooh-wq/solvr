@@ -6,6 +6,7 @@ import { sendDailyDigests } from "@/lib/inngest/functions/send-daily-digests";
 import { buildDataExport } from "@/lib/inngest/functions/build-data-export";
 import { runScheduledAutomations } from "@/lib/inngest/functions/run-automations";
 import { emitSlaEvents } from "@/lib/inngest/functions/emit-sla-events";
+import { sendCsatQueue } from "@/lib/inngest/functions/send-csat-queue";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -16,5 +17,6 @@ export const { GET, POST, PUT } = serve({
     buildDataExport,
     runScheduledAutomations,
     emitSlaEvents,
+    sendCsatQueue,
   ],
 });

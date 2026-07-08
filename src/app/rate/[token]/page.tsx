@@ -36,7 +36,11 @@ export default async function RateTicketPage({ params }: { params: Promise<{ tok
           <div className="glass-panel rounded-2xl p-8">
             <p className="font-mono text-[12px] text-[var(--color-neutral-600)] text-center mb-1">{context.ticketReference}</p>
             <h1 className="text-[18px] font-semibold text-center mb-6">{context.ticketTitle}</h1>
-            <RatingForm token={token} existingRating={context.existingRating} />
+            <RatingForm
+              token={token}
+              existingRating={context.existingRating}
+              surveyType={context.surveyType}
+            />
           </div>
         )}
       </div>
