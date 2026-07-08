@@ -22,7 +22,11 @@ export function TicketPeoplePanel({
 }: {
   ticketId: string;
   initialGuests: TicketGuestSummary[];
-  variant?: "card" | "flat";
+  /** "card" — bordered box for the right rail. "flat" — no wrapper for
+   *  nesting inside another card. "chip" — collapses to a compact
+   *  trigger button + count that opens a Modal with the full list;
+   *  used from the conversation toolbar. */
+  variant?: "card" | "flat" | "chip";
 }) {
   const { toast } = useToast();
   const [guests, setGuests] = useState(initialGuests);
@@ -59,6 +63,44 @@ export function TicketPeoplePanel({
       toast({ title: "Access revoked", description: label, variant: "success" });
       setGuests((prev) => prev.map((g) => (g.id === guestId ? { ...g, revoked: true } : g)));
     });
+  }
+
+  // "chip" — compact trigger button + count, opens a Modal with the
+  // full list. Used in the conversation header so the right rail can
+  // drop the People card entirely.
+  if (variant === "chip") {
+    const activeCount = guests.filter((g) => !g.revoked).length;
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="h-8 px-2.5 text-[12px] font-medium rounded-lg border border-[var(--color-neutral-300)] text-[var(--color-neutral-700)] hover:bg-[var(--color-light-gray)] transition-colors duration-150 cursor-pointer flex items-center gap-1.5"
+          title="People on this ticket"
+        >
+          <UserPlusIcon className="h-3.5 w-3.5" />
+          People
+          {activeCount > 0 && (
+            <span className="text-[10px] font-semibold text-[var(--color-neutral-500)] tabular-nums">
+              {activeCount}
+            </span>
+          )}
+        </button>
+        <Modal open={open} onClose={() => setOpen(false)} title="People on this ticket">
+          <ChipContent
+            guests={guests}
+            pending={pending}
+            revoke={revoke}
+            email={email}
+            name={name}
+            error={error}
+            setEmail={setEmail}
+            setName={setName}
+            submit={submit}
+          />
+        </Modal>
+      </>
+    );
   }
 
   return (
@@ -127,6 +169,81 @@ export function TicketPeoplePanel({
           </Button>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+/** Full people-list + add-person body used inside the chip variant's Modal. */
+function ChipContent({
+  guests,
+  pending,
+  revoke,
+  email,
+  name,
+  error,
+  setEmail,
+  setName,
+  submit,
+}: {
+  guests: TicketGuestSummary[];
+  pending: boolean;
+  revoke: (id: string, label: string) => void;
+  email: string;
+  name: string;
+  error: string | null;
+  setEmail: (v: string) => void;
+  setName: (v: string) => void;
+  submit: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {guests.length === 0 ? (
+        <p className="text-[13px] text-[var(--color-neutral-500)]">
+          No one added yet. Invite someone below.
+        </p>
+      ) : (
+        <ul className="space-y-2 max-h-56 overflow-y-auto">
+          {guests.map((g) => (
+            <li key={g.id} className="flex items-center justify-between gap-2 text-[13px]">
+              <div className="min-w-0">
+                <p className={`font-medium truncate ${g.revoked ? "text-[var(--color-neutral-400)] line-through" : ""}`}>
+                  {g.name || g.email}
+                </p>
+                {g.name && <p className="text-[11px] text-[var(--color-neutral-500)] truncate">{g.email}</p>}
+              </div>
+              {g.revoked ? (
+                <span className="text-[11px] text-[var(--color-neutral-400)] shrink-0">Revoked</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => revoke(g.id, g.name || g.email)}
+                  disabled={pending}
+                  className="text-[11px] text-red-600 hover:underline shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  Revoke
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="border-t border-[var(--color-neutral-200)] dark:border-white/5 pt-4 space-y-3">
+        <p className="text-[12px] text-[var(--color-neutral-600)]">
+          Add someone new — they&apos;ll get an email link to view and reply to this ticket, no account needed.
+        </p>
+        <div className="space-y-1">
+          <Label htmlFor="chipGuestEmail">Email</Label>
+          <Input id="chipGuestEmail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="chipGuestName">Name (optional)</Label>
+          <Input id="chipGuestName" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        {error && <p className="text-[13px] text-red-600">{error}</p>}
+        <Button className="w-full" onClick={submit} disabled={pending || !email.trim()}>
+          {pending ? "Sending…" : "Send invite"}
+        </Button>
+      </div>
     </div>
   );
 }

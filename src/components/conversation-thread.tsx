@@ -226,6 +226,7 @@ export function ConversationThread({
   composer,
   mentionNames = [],
   onPoll,
+  headerActions,
 }: {
   description: string;
   clientName: string;
@@ -236,6 +237,11 @@ export function ConversationThread({
   mentionNames?: string[];
   /** Polled every few seconds so a reply from the other side shows up without a manual refresh — see getTicketMessages()/getGuestTicketMessages(). Omit to disable polling. */
   onPoll?: () => Promise<ConversationMessage[] | null>;
+  /** Trailing controls in the search toolbar — used by the ticket-detail
+   *  page to surface People + Files & links triggers so the right rail
+   *  can drop those cards entirely and the conversation grows into the
+   *  full column height. */
+  headerActions?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [showInternal, setShowInternal] = useState(true);
@@ -292,11 +298,12 @@ export function ConversationThread({
   }
 
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden flex flex-col">
-      {/* Toolbar: search + internal toggle (the toggle only ever renders when
-          there are internal notes to hide — never the case for a client
-          viewer, since getTicket() already filters those out server-side). */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-black/5 dark:border-white/10 bg-[var(--color-surface)]/60">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden flex flex-col h-full min-h-0">
+      {/* Toolbar: search + internal toggle + optional trailing actions
+          (People / Files & links triggers). The toggle only renders when
+          there are internal notes to hide — never for a client viewer,
+          since getTicket() already filters those out server-side. */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-black/5 dark:border-white/10 bg-[var(--color-surface)]/60 shrink-0">
         <div className="relative flex-1 max-w-xs">
           <SearchIcon className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-neutral-400)]" />
           <input
@@ -318,9 +325,12 @@ export function ConversationThread({
             {showInternal ? "Hide" : "Show"} internal ({internalCount})
           </button>
         )}
+        {headerActions && (
+          <div className="ml-auto flex items-center gap-1.5">{headerActions}</div>
+        )}
       </div>
 
-      <div className="p-4 space-y-4 max-h-[560px] overflow-y-auto">
+      <div className="flex-1 min-h-0 p-4 space-y-4 overflow-y-auto">
         {/* Original request as the opening client message */}
         {!query && (
           <Bubble side={isOurSide("CLIENT") ? "right" : "left"} name={clientName} initials={initials(clientName)}>

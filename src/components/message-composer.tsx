@@ -1,9 +1,18 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useStagedAttachments, StagedAttachmentChips, type UploadResult } from "@/components/staged-attachments";
 import { PaperclipIcon, AtIcon, SendIcon, BoldIcon, ItalicIcon, UnderlineIcon, ListBulletIcon, ListOrderedIcon } from "@/components/icons";
 import { ATTACHMENT_ALLOWED_MIME } from "@/lib/validation/ticket";
+
+// Split of the composer's single "attach" affordance into image-vs-document.
+// The whitelist itself hasn't changed — every doc mime here already sat in
+// ATTACHMENT_ALLOWED_MIME — but the OS file dialog previously showed
+// everything mixed, so a customer trying to attach a PDF had to scroll past
+// image types. Two entry points keep the picker's `accept` filter tight to
+// what the user actually meant to attach.
+const IMAGE_MIME = ATTACHMENT_ALLOWED_MIME.filter((m) => m.startsWith("image/"));
+const DOCUMENT_MIME = ATTACHMENT_ALLOWED_MIME.filter((m) => !m.startsWith("image/"));
 
 /** Matches "@partialname" ending at `pos` in `text`, so both live-typing and the toolbar's @ button can share one mention-detection rule. */
 function mentionMatchAt(text: string, pos: number): { atIndex: number; query: string } | null {
@@ -75,7 +84,29 @@ export function MessageComposer({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const attachRef = useRef<HTMLDivElement>(null);
+  // Close the attach popover on outside click / Escape so it feels like
+  // every other floating chooser in the app.
+  useEffect(() => {
+    if (!attachOpen) return;
+    function onDown(e: MouseEvent) {
+      if (attachRef.current && !attachRef.current.contains(e.target as Node)) {
+        setAttachOpen(false);
+      }
+    }
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") setAttachOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [attachOpen]);
   const { staged, uploading, addFiles, remove, reset, attachmentIds } = useStagedAttachments(upload);
 
   const filteredMentions = mentionQuery === null ? [] : mentionNames.filter((n) => n.toLowerCase().includes(mentionQuery.toLowerCase()));
@@ -260,22 +291,68 @@ export function MessageComposer({
         <div className="flex items-center justify-between px-1.5 pb-1.5">
           <div className="flex items-center gap-0.5">
             <input
-              ref={fileInputRef}
+              ref={imageInputRef}
               type="file"
               multiple
-              accept={ATTACHMENT_ALLOWED_MIME.join(",")}
+              accept={IMAGE_MIME.join(",")}
               className="hidden"
               onChange={(e) => {
                 if (e.target.files?.length) addFiles(e.target.files);
                 e.target.value = "";
+                setAttachOpen(false);
               }}
             />
-            <ToolbarButton
-              icon={<PaperclipIcon className="h-[18px] w-[18px]" />}
-              label="Attach a file"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+            <input
+              ref={documentInputRef}
+              type="file"
+              multiple
+              accept={DOCUMENT_MIME.join(",")}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) addFiles(e.target.files);
+                e.target.value = "";
+                setAttachOpen(false);
+              }}
             />
+            <div ref={attachRef} className="relative">
+              <ToolbarButton
+                icon={<PaperclipIcon className="h-[18px] w-[18px]" />}
+                label="Attach a file"
+                onClick={() => setAttachOpen((o) => !o)}
+                disabled={uploading}
+              />
+              {attachOpen && (
+                <div
+                  role="menu"
+                  className="absolute z-20 bottom-9 left-0 min-w-[168px] bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-xl shadow-lg py-1"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => imageInputRef.current?.click()}
+                    className="w-full text-left px-3 py-1.5 text-[13px] hover:bg-[var(--color-light-gray)] cursor-pointer flex items-center gap-2"
+                  >
+                    <span className="text-base leading-none">🖼</span>
+                    <span>Image</span>
+                    <span className="ml-auto text-[10px] text-[var(--color-neutral-500)]">
+                      PNG · JPG
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => documentInputRef.current?.click()}
+                    className="w-full text-left px-3 py-1.5 text-[13px] hover:bg-[var(--color-light-gray)] cursor-pointer flex items-center gap-2"
+                  >
+                    <span className="text-base leading-none">📄</span>
+                    <span>Document</span>
+                    <span className="ml-auto text-[10px] text-[var(--color-neutral-500)]">
+                      PDF · DOCX · CSV…
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
             {mentionNames.length > 0 && (
               <ToolbarButton icon={<AtIcon className="h-4 w-4" />} label="Mention someone" onClick={triggerMentionButton} />
             )}
