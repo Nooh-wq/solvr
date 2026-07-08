@@ -38,7 +38,11 @@ export function AccountSettingsShell({
     <div className="max-w-4xl">
       <h1 className="text-2xl font-bold mb-6">Account Settings</h1>
 
-      <div className="flex gap-1 mb-6 border-b border-[var(--color-neutral-300)] overflow-x-auto">
+      {/* No overflow-x-auto: five tabs comfortably fit the max-w-4xl shell
+          at every supported width, and the browser's scroll-affordance
+          arrows on that container were showing up as stray up/down spinners
+          on the account page. */}
+      <div className="flex flex-wrap gap-1 mb-6 border-b border-[var(--color-neutral-300)]">
         {TABS.map((t) => {
           const isActive = active === t.key;
           return (

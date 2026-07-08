@@ -148,13 +148,17 @@ function PrefSection({
                 aria-label={r.label}
                 disabled={pending}
                 onClick={() => onChange({ [r.key]: !on } as Partial<Prefs>)}
-                className={`shrink-0 h-6 w-10 rounded-full transition-colors duration-150 cursor-pointer relative ${
+                className={`shrink-0 h-6 w-11 rounded-full transition-colors duration-150 cursor-pointer relative ${
                   on ? "bg-[var(--color-primary)]" : "bg-[var(--color-neutral-300)]"
                 }`}
               >
+                {/* left/right positioning (not translate) so the circle always
+                    sits an even 2px from either edge regardless of container
+                    width — the earlier translate math bunched the knob against
+                    the right edge on ON. */}
                 <span
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-150 ${
-                    on ? "translate-x-4" : "translate-x-0.5"
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all duration-150 ${
+                    on ? "left-auto right-0.5" : "left-0.5 right-auto"
                   }`}
                 />
               </button>
