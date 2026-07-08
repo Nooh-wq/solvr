@@ -9,7 +9,10 @@ import { getSessionPayloadFromRequest } from "@/lib/session";
 // with no session at all, so neither must redirect to /auth/login the way
 // every other protected route does. The token itself (and its validity) is
 // checked inside the page/actions, not here.
-const PUBLIC_PREFIXES = ["/auth", "/guest", "/rate", "/api/webhooks", "/api/inngest", "/_next", "/favicon.ico", "/brand"];
+// /api/data-export/[token] is token-authenticated (see M21.6), same
+// rationale as /guest and /rate — the JWT signature IS the auth check,
+// so bouncing through the session-cookie gate would be wrong.
+const PUBLIC_PREFIXES = ["/auth", "/guest", "/rate", "/api/webhooks", "/api/inngest", "/api/data-export", "/_next", "/favicon.ico", "/brand"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

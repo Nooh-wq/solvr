@@ -148,6 +148,7 @@ export type CreateTeamMemberInput = {
   ticketAccessScope?: TicketAccessScope;
 };
 export type UpdateTeamMemberInput = {
+  email?: string;
   name?: string | null;
   roleId?: string;
   ticketAccessScope?: TicketAccessScope;

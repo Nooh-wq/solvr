@@ -245,6 +245,64 @@ export async function sendPasswordResetEmail(toEmail: string, resetUrl: string, 
   });
 }
 
+// M21.2 — password-gated email change. Three system notices:
+//   * confirmation link to the NEW address (the person clicking has to
+//     control it), 24h expiry, single-use via pendingEmail column;
+//   * fraud alert to the OLD address so the real owner can react if this
+//     wasn't them;
+//   * post-change confirmation to BOTH addresses so both sides know it's
+//     done.
+
+export async function sendEmailChangeConfirmation(
+  toNewEmail: string,
+  confirmUrl: string,
+  branding: TenantBranding | null
+) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toNewEmail,
+    branding,
+    subject: `Confirm your new ${productName} email`,
+    heading: "Confirm your new email",
+    body: `Someone (hopefully you) asked to change your ${productName} email to this address. Click below to confirm within 24 hours — after that, this link expires. All other signed-in devices will be signed out when you confirm.`,
+    ctaLabel: "Confirm email change",
+    ctaUrl: confirmUrl,
+  });
+}
+
+export async function sendEmailChangeAlert(
+  toOldEmail: string,
+  newEmail: string,
+  branding: TenantBranding | null
+) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toOldEmail,
+    branding,
+    subject: `Email change requested on your ${productName} account`,
+    heading: "Someone requested an email change",
+    body: `We received a request to change your ${productName} email to ${newEmail}. If this was you, no action is needed — just click the confirmation link we sent to the new address. If this wasn't you, change your password immediately.`,
+    ctaLabel: "Change your password",
+    ctaUrl: `${siteUrl()}/auth/reset`,
+  });
+}
+
+export async function sendEmailChangedNotice(
+  toEmail: string,
+  oldEmail: string,
+  newEmail: string,
+  branding: TenantBranding | null
+) {
+  const productName = branding?.productName ?? "Support";
+  return sendSystemNotice({
+    to: toEmail,
+    branding,
+    subject: `Your ${productName} email was changed`,
+    heading: "Email address changed",
+    body: `Your ${productName} email has been changed from ${oldEmail} to ${newEmail}. All other devices have been signed out. If you didn't make this change, contact support right away.`,
+  });
+}
+
 /** Sent when an admin rejects a PENDING registration. */
 export async function sendRegistrationRejectedEmail(toEmail: string, branding: TenantBranding | null) {
   const productName = branding?.productName ?? "Support";

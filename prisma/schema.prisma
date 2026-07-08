@@ -133,6 +133,13 @@ model Tenant {
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
   subjectAvatars       SubjectAvatar[]
+  subjectPreferences   SubjectPreference[]
+  userSessions         UserSession[]
+  loginActivity        LoginActivity[]
+  notificationPreferences NotificationPreference[]
+  digestQueue          DigestQueue[]
+  dataExportRequests   DataExportRequest[]
+  accountDeletionRequests AccountDeletionRequest[]
   customFieldDefinitions CustomFieldDefinition[]
   customFieldValues      CustomFieldValue[]
   customFieldOptions     CustomFieldOption[]
@@ -479,6 +486,12 @@ model AuthCredential {
   subjectTeamMemberId String?
   passwordHash        String
   passwordChangedAt   DateTime?
+  // M21.2 — email-change flow. `pendingEmail` is the address the confirmation
+  // link resolves to; cleared on confirm (or by a fresh request superseding it).
+  // Held Support-side because the wrapper email column stays authoritative
+  // for identity; nothing outside this flow reads pendingEmail.
+  pendingEmail            String?
+  pendingEmailRequestedAt DateTime?
   mfaSecret           String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -523,6 +536,154 @@ model SubjectAvatar {
 
   @@index([tenantId])
   @@map("subject_avatars")
+}
+
+// M21.1 — Support-owned user preferences (timezone, language). Same Set
+// B pattern as SubjectAvatar: wrapper stays identity-only, Support owns
+// UI concerns. Keyed by subjectId (unique across end_users / team_members
+// thanks to Z1.3 preserved-ids). Density / theme / defaultLanding are
+// reserved for M21.5 (Appearance tab) but the columns land here so a
+// second migration isn't needed.
+model SubjectPreference {
+  subjectId      String   @id
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  timezone       String?
+  language       String?
+  theme          String?
+  density        String?
+  defaultLanding String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("subject_preferences")
+}
+
+// M21.3 — per-device session tracking. Every issued session cookie
+// carries a `sessionId` claim; getSessionUser rejects any cookie whose
+// row is missing or expired. Revoking a session = deleting its row.
+// `subjectKind` mirrors the SessionPayload TS union — kept as a plain
+// string column (not a Prisma enum) so this table works with either
+// end_users or team_members without a wrapper-owned enum.
+model UserSession {
+  id           String   @id
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId    String
+  subjectKind  String
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([tenantId, subjectId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+// M21.3 — append-only login history. Populated in actions/auth.ts's
+// login() on every successful sign-in. Displayed in the Security tab.
+// Kept separate from UserSession so revoking a session doesn't erase the
+// audit trail.
+model LoginActivity {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId   String
+  subjectKind String
+  userAgent   String?
+  ipAddress   String?
+  country     String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, subjectId, createdAt])
+  @@map("login_activity")
+}
+
+// M21.4 — per-subject notification preferences. Each column gates one
+// specific event; the `digestMode` column swaps real-time email delivery
+// for a queued daily summary drained by an Inngest job. Every column
+// defaults to `true` so a user who has never touched the tab keeps
+// getting the same emails they got pre-M21.4.
+model NotificationPreference {
+  subjectId          String   @id
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  emailTicketCreated Boolean  @default(true)
+  emailTicketReply   Boolean  @default(true)
+  emailStatusChange  Boolean  @default(true)
+  emailAssigned      Boolean  @default(true)
+  emailCsatRequest   Boolean  @default(true)
+  inAppTicketReply   Boolean  @default(true)
+  inAppStatusChange  Boolean  @default(true)
+  inAppAssigned      Boolean  @default(true)
+  digestMode         String   @default("INSTANT")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("notification_preferences")
+}
+
+// M21.4 — queued email events for subjects whose digestMode is DAILY.
+// Drained by the daily-digest Inngest job (src/lib/inngest/functions/
+// send-daily-digests.ts); rows are deleted once bundled into an email.
+model DigestQueue {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId String
+  eventKey  String
+  subject   String
+  body      String
+  ticketRef String?
+  ticketUrl String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, subjectId, createdAt])
+  @@map("digest_queue")
+}
+
+// M21.6 — data export requests. Kicked off from the Danger Zone; the
+// build-data-export Inngest job collects the subject's records into
+// `payload` (Jsonb), then a signed token gives the download route
+// (`/api/data-export/[token]`) permission to serve them. `expiresAt`
+// is enforced at read time — the row lingers past that for
+// audit/history but the download won't work.
+model DataExportRequest {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId String
+  status    String   @default("PENDING")
+  payload   Json?
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, subjectId])
+  @@map("data_export_requests")
+}
+
+// M21.6 — account deletion requests. The user submits (last-Super-Admin
+// guard applied at submit time so a doomed request never lands in the
+// queue). Rows in PENDING appear on the admin's approval page; on
+// APPROVED the user is actually deleted, on REJECTED they stay active.
+model AccountDeletionRequest {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId    String
+  reason       String?
+  status       String    @default("PENDING")
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, status, createdAt])
+  @@map("account_deletion_requests")
 }
 
 model EndUserLifecycle {

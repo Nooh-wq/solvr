@@ -21,7 +21,7 @@ export default async function PortalLayout({ children }: { children: React.React
       ]}
       userName={user.name}
       avatarUrl={user.avatarUrl}
-      profileHref="/portal/profile"
+      profileHref="/portal/account"
     >
       <main className="mx-auto max-w-screen-2xl px-6 py-8">{children}</main>
       <ChatWidget />

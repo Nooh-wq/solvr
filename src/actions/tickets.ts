@@ -24,6 +24,12 @@ import {
 } from "@/lib/email/events";
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
+import {
+  getEmailDecision,
+  queueDigestEmail,
+  shouldWriteInAppInTx,
+  type EmailEventKey,
+} from "@/lib/notification-prefs";
 import { getAttachmentSignedUrl } from "@/lib/storage";
 import { signCsatToken } from "@/lib/session";
 import {
@@ -187,7 +193,21 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
   );
 
   // Sent after the transaction commits — email delivery never blocks/rolls back the mutation.
-  await sendTicketCreatedEmail(ticket, session.email, branding);
+  // M21.4: gated by the requester's own notification preferences.
+  const decision = await getEmailDecision(session.tenantId, session.subjectId, "ticketCreated");
+  if (decision === "send") {
+    await sendTicketCreatedEmail(ticket, session.email, branding);
+  } else if (decision === "digest") {
+    await queueDigestEmail({
+      tenantId: session.tenantId,
+      subjectId: session.subjectId,
+      eventKey: "ticketCreated",
+      subject: `[#${ticket.ticketNumber}] We received your request`,
+      body: `Your ticket ${ticket.reference} was created.`,
+      ticketRef: ticket.reference,
+      ticketUrl: `/portal/tickets/${ticket.id}`,
+    });
+  }
 
   revalidatePath("/portal");
   return { ok: true, ticket };
@@ -538,7 +558,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
       const assignedAgent = ticket.assignedTeamMemberId
         ? await getTeamMember(systemContext(session.tenantId), ticket.assignedTeamMemberId)
         : null;
-      if (assignedAgent) {
+      if (assignedAgent && await shouldWriteInAppInTx(tx, assignedAgent.id, "ticketReply")) {
         await notify(tx, {
           tenantId: session.tenantId,
           userId: assignedAgent.id,
@@ -553,7 +573,22 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
     }
   );
 
-  if (assignedAgent) await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+  if (assignedAgent) {
+    const decision = await getEmailDecision(session.tenantId, assignedAgent.id, "ticketReply");
+    if (decision === "send") {
+      await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+    } else if (decision === "digest") {
+      await queueDigestEmail({
+        tenantId: session.tenantId,
+        subjectId: assignedAgent.id,
+        eventKey: "ticketReply",
+        subject: `[#${ticket.ticketNumber}] Client replied`,
+        body: `Client replied on ${ticket.reference}: ${data.body.slice(0, 200)}`,
+        ticketRef: ticket.reference,
+        ticketUrl: `/agent/tickets/${ticket.id}`,
+      });
+    }
+  }
 
   revalidatePath(`/portal/tickets/${ticket.id}`);
   return { ok: true };
@@ -610,7 +645,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
           ? await getTeamMember(wrapperCtx, ticket.clientTeamMemberId)
           : null;
       if (!client) throw new Error("CLIENT_MISSING");
-      if (!data.isInternal) {
+      if (!data.isInternal && await shouldWriteInAppInTx(tx, client.id, "ticketReply")) {
         await notify(tx, {
           tenantId: session.tenantId,
           userId: client.id,
@@ -625,7 +660,22 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
     }
   );
 
-  if (!data.isInternal) await sendAgentReplyEmail(ticket, client.email, branding);
+  if (!data.isInternal) {
+    const decision = await getEmailDecision(session.tenantId, client.id, "ticketReply");
+    if (decision === "send") {
+      await sendAgentReplyEmail(ticket, client.email, branding);
+    } else if (decision === "digest") {
+      await queueDigestEmail({
+        tenantId: session.tenantId,
+        subjectId: client.id,
+        eventKey: "ticketReply",
+        subject: `[#${ticket.ticketNumber}] New reply on your ticket`,
+        body: `New reply on ${ticket.reference}: ${data.body.slice(0, 200)}`,
+        ticketRef: ticket.reference,
+        ticketUrl: `/portal/tickets/${ticket.id}`,
+      });
+    }
+  }
 
   revalidatePath(`/agent/tickets/${ticket.id}`);
   return { ok: true };
@@ -722,7 +772,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
             toValue: toAgent?.name ?? "Unassigned",
           },
         });
-        if (data.assignedToId) {
+        if (data.assignedToId && await shouldWriteInAppInTx(tx, data.assignedToId, "assigned")) {
           await notify(tx, {
             tenantId: session.tenantId,
             userId: data.assignedToId,
@@ -741,7 +791,7 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
           ? await getTeamMember(systemContext(session.tenantId), ticket.clientTeamMemberId)
           : null;
       if (!client) throw new Error("CLIENT_MISSING");
-      if (statusChanged) {
+      if (statusChanged && await shouldWriteInAppInTx(tx, client.id, "statusChange")) {
         await notify(tx, {
           tenantId: session.tenantId,
           userId: client.id,
@@ -758,16 +808,38 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
   // Auto-close (Resolved -> Closed after +7d) runs as an hourly Inngest cron —
   // see src/lib/inngest/functions/auto-close.ts. Requires `npx inngest-cli dev`
   // running locally to actually fire (see README "Background jobs").
-  if (statusChanged) await sendStatusChangeEmail(updated, client.email, branding);
+  if (statusChanged) {
+    const decision = await getEmailDecision(session.tenantId, client.id, "statusChange");
+    if (decision === "send") {
+      await sendStatusChangeEmail(updated, client.email, branding);
+    } else if (decision === "digest") {
+      await queueDigestEmail({
+        tenantId: session.tenantId,
+        subjectId: client.id,
+        eventKey: "statusChange",
+        subject: `[#${updated.ticketNumber}] Status changed`,
+        body: `${updated.reference} is now ${updated.status.replace("_", " ").toLowerCase()}.`,
+        ticketRef: updated.reference,
+        ticketUrl: `/portal/tickets/${updated.id}`,
+      });
+    }
+  }
 
   // CSAT request fires only the moment a ticket newly becomes Resolved (not
   // on every subsequent status touch, e.g. a later Resolved -> Closed
   // confirmation) — see analytics' CSAT KPI (actions/admin.ts) and the
   // rating page (app/rate/[token]).
+  //
+  // M21.4: CSAT emails are never digested (time-sensitive single-use link) —
+  // the DIGESTABLE map in notification-prefs.ts flags this, so digest mode
+  // still gets a real-time send if the toggle is on.
   if (statusChanged && updated.status === "RESOLVED") {
-    const token = await signCsatToken({ ticketId: updated.id, tenantId: session.tenantId });
-    const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
-    await sendCsatRequestEmail(client.email, rateUrl, branding);
+    const csatDecision = await getEmailDecision(session.tenantId, client.id, "csatRequest");
+    if (csatDecision === "send") {
+      const token = await signCsatToken({ ticketId: updated.id, tenantId: session.tenantId });
+      const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
+      await sendCsatRequestEmail(client.email, rateUrl, branding);
+    }
   }
 
   revalidatePath(`/agent/tickets/${updated.id}`);

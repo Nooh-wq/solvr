@@ -6,6 +6,11 @@ import { sendTicketCreatedEmail, sendClientReplyNotification, sendEmailAutoAccou
 import { createWithReference } from "@/lib/ticket-number";
 import { notify } from "@/lib/notifications";
 import {
+  getEmailDecision,
+  queueDigestEmail,
+  shouldWriteInAppInTx,
+} from "@/lib/notification-prefs";
+import {
   extractTicketNumberFromSubject,
   extractReferencedMessageIds,
   stripQuotedReply,
@@ -203,7 +208,7 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
         const assignedAgent = ticket.assignedTeamMemberId
           ? await getTeamMember(systemContext(existingTicket.tenantId), ticket.assignedTeamMemberId)
           : null;
-        if (assignedAgent) {
+        if (assignedAgent && await shouldWriteInAppInTx(tx, assignedAgent.id, "ticketReply")) {
           await notify(tx, {
             tenantId: existingTicket.tenantId,
             userId: assignedAgent.id,
@@ -218,7 +223,22 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
       }
     );
 
-    if (assignedAgent) await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+    if (assignedAgent) {
+      const decision = await getEmailDecision(existingTicket.tenantId, assignedAgent.id, "ticketReply");
+      if (decision === "send") {
+        await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+      } else if (decision === "digest") {
+        await queueDigestEmail({
+          tenantId: existingTicket.tenantId,
+          subjectId: assignedAgent.id,
+          eventKey: "ticketReply",
+          subject: `[#${ticket.ticketNumber}] Client replied (via email)`,
+          body: `${sender.name} replied on ${ticket.reference}.`,
+          ticketRef: ticket.reference,
+          ticketUrl: `/agent/tickets/${ticket.id}`,
+        });
+      }
+    }
     if (tempPassword) await sendEmailAutoAccountNotice(sender.email, tempPassword, branding);
     return `appended reply to ticket ${ticket.ticketNumber}`;
   }
@@ -262,7 +282,20 @@ export async function handleInboundEmail(eventData: ReceivedEmailEventData): Pro
     return { ticket, branding };
   });
 
-  await sendTicketCreatedEmail(ticket, sender.email, branding);
+  const decision = await getEmailDecision(tenant.id, sender.id, "ticketCreated");
+  if (decision === "send") {
+    await sendTicketCreatedEmail(ticket, sender.email, branding);
+  } else if (decision === "digest") {
+    await queueDigestEmail({
+      tenantId: tenant.id,
+      subjectId: sender.id,
+      eventKey: "ticketCreated",
+      subject: `[#${ticket.ticketNumber}] We received your request`,
+      body: `Your ticket ${ticket.reference} was created from your email.`,
+      ticketRef: ticket.reference,
+      ticketUrl: `/portal/tickets/${ticket.id}`,
+    });
+  }
   if (tempPassword) await sendEmailAutoAccountNotice(sender.email, tempPassword, branding);
   return `created ticket ${ticket.ticketNumber} in tenant ${tenant.slug}`;
 }

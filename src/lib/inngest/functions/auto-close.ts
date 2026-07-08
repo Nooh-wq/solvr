@@ -3,6 +3,7 @@ import { prisma, withRls } from "@/lib/db";
 import { sendStatusChangeEmail } from "@/lib/email/events";
 import { systemContext, getEndUsersByIds, getTeamMembersByIds } from "@/lib/shared-platform";
 import { resolveUserLike } from "@/lib/z1-view-models";
+import { getEmailDecision, queueDigestEmail } from "@/lib/notification-prefs";
 
 const AUTO_CLOSE_AFTER_DAYS = 7;
 
@@ -69,7 +70,20 @@ export const autoCloseResolvedTickets = inngest.createFunction(
                 teamMembers,
               );
               if (!clientView) continue; // dropped notification if client resolution fails
-              await sendStatusChangeEmail({ ...ticket, status: "CLOSED" }, clientView.email, branding);
+              const decision = await getEmailDecision(tenant.id, clientView.id, "statusChange");
+              if (decision === "send") {
+                await sendStatusChangeEmail({ ...ticket, status: "CLOSED" }, clientView.email, branding);
+              } else if (decision === "digest") {
+                await queueDigestEmail({
+                  tenantId: tenant.id,
+                  subjectId: clientView.id,
+                  eventKey: "statusChange",
+                  subject: `[#${ticket.ticketNumber}] Ticket closed`,
+                  body: `${ticket.reference} was auto-closed after 7 days without activity.`,
+                  ticketRef: ticket.reference,
+                  ticketUrl: `/portal/tickets/${ticket.id}`,
+                });
+              }
             }
           }
 
