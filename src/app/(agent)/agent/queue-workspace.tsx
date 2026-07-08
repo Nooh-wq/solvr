@@ -238,16 +238,16 @@ export function QueueWorkspace({
         {views.map((v) => {
           const isActive = v.id === activeViewId;
           return (
-            <div key={v.id} className="group flex items-center gap-1">
+            <div key={v.id} className="group relative">
               <button
                 onClick={() => selectView(v.id)}
-                className={`flex-1 text-left px-3 py-2 rounded-lg text-[13px] transition-colors cursor-pointer flex items-center gap-2 ${
+                className={`w-full text-left pl-3 pr-16 py-2 rounded-lg text-[13px] transition-colors cursor-pointer flex items-center gap-2 group-hover:pr-20 ${
                   isActive
                     ? "bg-[var(--color-primary)] text-white"
                     : "text-[var(--foreground)] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
                 }`}
               >
-                <span className="truncate flex-1">{v.name}</span>
+                <span className="truncate flex-1 min-w-0">{v.name}</span>
                 <span
                   className={`text-[11px] font-mono shrink-0 ${
                     isActive ? "text-white/80" : "text-[var(--color-neutral-500)]"
@@ -269,7 +269,7 @@ export function QueueWorkspace({
                 )}
                 {v.isDefault && (
                   <span
-                    className={`text-[10px] shrink-0 ${
+                    className={`text-[11px] shrink-0 ${
                       isActive ? "text-white/80" : "text-[var(--color-neutral-500)]"
                     }`}
                     title="Default view"
@@ -278,22 +278,35 @@ export function QueueWorkspace({
                   </span>
                 )}
               </button>
-              <button
-                onClick={() => onPin(v.id)}
-                disabled={v.isDefault || pending}
-                title={v.isDefault ? "Already default" : "Set as default"}
-                className="h-8 w-6 shrink-0 opacity-0 group-hover:opacity-100 disabled:opacity-30 text-[11px] text-[var(--color-neutral-500)] hover:text-[var(--foreground)] cursor-pointer disabled:cursor-not-allowed"
-              >
-                ★
-              </button>
-              <button
-                onClick={() => onDelete(v.id, v.name)}
-                disabled={pending}
-                title="Delete view"
-                className="h-8 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-[11px] text-[var(--color-neutral-500)] hover:text-red-600 cursor-pointer"
-              >
-                ×
-              </button>
+              {/* Row actions overlay — absolutely positioned so they never
+                  add width, and revealed on group hover. Solid bg keeps
+                  them readable when they cover a truncated name. */}
+              <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPin(v.id); }}
+                  disabled={v.isDefault || pending}
+                  title={v.isDefault ? "Already default" : "Set as default"}
+                  className={`h-7 w-7 flex items-center justify-center rounded-md text-[15px] leading-none disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer ${
+                    isActive
+                      ? "text-white/80 hover:bg-white/15"
+                      : "text-[var(--color-neutral-500)] hover:text-[var(--foreground)] hover:bg-black/[0.06] dark:hover:bg-white/[0.08]"
+                  }`}
+                >
+                  ★
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(v.id, v.name); }}
+                  disabled={pending}
+                  title="Delete view"
+                  className={`h-7 w-7 flex items-center justify-center rounded-md text-[16px] leading-none cursor-pointer ${
+                    isActive
+                      ? "text-white/80 hover:bg-white/15"
+                      : "text-[var(--color-neutral-500)] hover:text-red-600 hover:bg-red-500/10"
+                  }`}
+                >
+                  ×
+                </button>
+              </div>
             </div>
           );
         })}
