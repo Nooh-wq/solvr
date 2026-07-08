@@ -134,6 +134,14 @@ export const actionSchema = z.discriminatedUnion("type", [
     groupId: z.string().min(1),
     requiredSkills: z.array(z.string().max(60)).max(10).optional(),
   }),
+  // M5.1 — enqueue a CSAT/NPS survey for this ticket. Rule-driven
+  // sends coexist with the automatic post-RESOLVED enqueue; the
+  // enqueue path dedupes on (tenantId, ticketId, surveyType).
+  // Optional delayMinutes overrides the tenant default.
+  z.object({
+    type: z.literal("send_csat_request"),
+    delayMinutes: z.number().int().min(0).max(60 * 24 * 30).optional(),
+  }),
 ]);
 
 export const actionListSchema = z.array(actionSchema).min(1).max(20);
@@ -241,6 +249,7 @@ export const ACTION_LABELS: Record<RuleAction["type"], string> = {
   run_webhook: "Call webhook",
   trigger_escalation: "Trigger escalation",
   auto_route: "Auto-route to agent",
+  send_csat_request: "Send CSAT survey",
 };
 
 export function describeAction(a: RuleAction): string {
@@ -271,5 +280,9 @@ export function describeAction(a: RuleAction): string {
       return `Trigger escalation ${a.escalationPathId}`;
     case "auto_route":
       return `Auto-route (${a.strategy.toLowerCase().replace("_", " ")}) within group ${a.groupId}`;
+    case "send_csat_request":
+      return a.delayMinutes !== undefined
+        ? `Send CSAT survey (after ${a.delayMinutes} min)`
+        : `Send CSAT survey`;
   }
 }

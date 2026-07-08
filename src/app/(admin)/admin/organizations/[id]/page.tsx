@@ -8,6 +8,8 @@ import { OrgActionsMenu } from "./actions-menu";
 import { SlaBusinessHoursStub } from "./sla-stub";
 import { listSlaPolicies, listBusinessCalendars } from "@/actions/sla";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
+import { requireSession } from "@/lib/auth";
+import { withRls } from "@/lib/db";
 
 // Z4.2 — Organization detail. Users + tickets + tags + custom fields
 // + notes, plus disabled SLA/BH stubs (Z4.5).
@@ -28,6 +30,35 @@ export default async function OrganizationDetailPage({
     listSlaPolicies().catch(() => []),
     listBusinessCalendars().catch(() => []),
   ]);
+
+  // M5.2 — CSAT rollup for this org. Aggregates over VISIBLE + FLAGGED
+  // rows (HIDDEN comments still count toward avg; hidden = comment
+  // moderation, not rating exclusion). NPS and CSAT scores stay in the
+  // same avg because the surveyType label makes the scale explicit.
+  const session = await requireSession({ minRole: "ADMIN" });
+  const csat = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      const rows = await tx.surveyResponse.findMany({
+        where: {
+          tenantId: session.tenantId,
+          ticket: { organizationId: org.id },
+        },
+        select: { rating: true, surveyType: true },
+      });
+      if (rows.length === 0) return null;
+      const byType = { CSAT: { sum: 0, n: 0 }, NPS: { sum: 0, n: 0 } };
+      for (const r of rows) {
+        byType[r.surveyType].sum += r.rating;
+        byType[r.surveyType].n += 1;
+      }
+      return {
+        total: rows.length,
+        csat: byType.CSAT.n ? byType.CSAT.sum / byType.CSAT.n : null,
+        nps: byType.NPS.n ? byType.NPS.sum / byType.NPS.n : null,
+      };
+    }
+  );
 
   return (
     <div>
@@ -156,6 +187,35 @@ export default async function OrganizationDetailPage({
 
           {customFields.length > 0 && (
             <CustomFieldsEditor title="Custom fields" rows={customFields} targetId={org.id} />
+          )}
+
+          {csat && (
+            <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
+              <h3 className="text-sm font-semibold mb-1">Satisfaction</h3>
+              <p className="text-[11px] text-[var(--color-neutral-500)] mb-3">
+                Based on {csat.total} response{csat.total === 1 ? "" : "s"} from this organization.
+              </p>
+              <div className="flex gap-4">
+                {csat.csat !== null && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[var(--color-neutral-500)]">CSAT</div>
+                    <div className="text-2xl font-semibold">
+                      {csat.csat.toFixed(2)}
+                      <span className="text-[13px] text-[var(--color-neutral-500)] font-normal"> / 5</span>
+                    </div>
+                  </div>
+                )}
+                {csat.nps !== null && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-[var(--color-neutral-500)]">NPS</div>
+                    <div className="text-2xl font-semibold">
+                      {csat.nps.toFixed(1)}
+                      <span className="text-[13px] text-[var(--color-neutral-500)] font-normal"> / 10</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           <SlaBusinessHoursStub
