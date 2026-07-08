@@ -513,6 +513,10 @@ model TeamMemberLifecycle {
   rejectedAt   DateTime?
   rejectedById String?
   lastActiveAt DateTime?
+  // Z3.3 — free-form agent notes about this person, persisted across
+  // every ticket they touch. Distinct from Message.isInternal (per-ticket
+  // internal notes). Support-owned because we can't extend wrapper DTOs.
+  notes        String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -698,6 +702,8 @@ model EndUserLifecycle {
   rejectedAt   DateTime?
   rejectedById String?
   lastActiveAt DateTime?
+  // Z3.3 — see TeamMemberLifecycle.notes.
+  notes        String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
