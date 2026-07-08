@@ -37,17 +37,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const links: NavLink[] = [
     { href: "/admin", label: "Overview", icon: "overview" },
     { href: "/admin/analytics", label: "Analytics", icon: "analytics" },
-    { href: "/admin/customers", label: "Customers", icon: "team" },
-    { href: "/admin/organizations", label: "Organizations", icon: "team" },
-    { href: "/admin/team-members", label: "Team members", icon: "team", badge: pendingCount },
-    { href: "/admin/groups", label: "Groups", icon: "team" },
+    { href: "/admin/customers", label: "Customers", icon: "customers" },
+    { href: "/admin/organizations", label: "Organizations", icon: "organizations" },
+    { href: "/admin/team-members", label: "Team members", icon: "teamMembers", badge: pendingCount },
+    { href: "/admin/groups", label: "Groups", icon: "groups" },
     { href: "/admin/categories", label: "Categories", icon: "categories" },
     { href: "/admin/fields", label: "Fields", icon: "fields" },
     { href: "/admin/forms", label: "Forms", icon: "forms" },
     { href: "/admin/branding", label: "Branding", icon: "branding" },
     { href: "/admin/kb", label: "Knowledge base", icon: "kb" },
     { href: "/admin/audit-log", label: "Audit log", icon: "audit" },
-    { href: "/admin/account-deletions", label: "Deletion requests", icon: "audit", badge: deletionCount },
+    { href: "/admin/account-deletions", label: "Deletion requests", icon: "deletions", badge: deletionCount },
     { href: "/agent", label: "Queue", icon: "tickets" },
     ...(user.role === "SUPER_ADMIN" && tenant.type === "INTERNAL"
       ? [{ href: "/admin/super", label: "Super admin", icon: "super" as const }]
