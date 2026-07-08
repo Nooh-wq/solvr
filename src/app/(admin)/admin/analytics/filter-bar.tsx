@@ -18,6 +18,8 @@ type Filter = {
   priority?: string;
   assignedToId?: string;
   organizationId?: string;
+  groupId?: string;
+  tag?: string;
 };
 
 /** Drives the analytics page's filters entirely via the URL — every change
@@ -29,11 +31,15 @@ export function FilterBar({
   categories,
   agents,
   organizations,
+  groups,
+  tags,
 }: {
   current: Filter;
   categories: { id: string; name: string }[];
   agents: { id: string; name: string }[];
   organizations: { id: string; name: string }[];
+  groups: { id: string; name: string }[];
+  tags: { name: string }[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -125,6 +131,34 @@ export function FilterBar({
         {organizations.map((o) => (
           <option key={o.id} value={o.id}>
             {o.name}
+          </option>
+        ))}
+      </Select>
+
+      <Select
+        value={current.groupId ?? "ALL"}
+        onChange={(e) => setParam("groupId", e.target.value)}
+        className={SELECT_WIDTH}
+        aria-label="Group"
+      >
+        <option value="ALL">All groups</option>
+        {groups.map((g) => (
+          <option key={g.id} value={g.id}>
+            {g.name}
+          </option>
+        ))}
+      </Select>
+
+      <Select
+        value={current.tag ?? "ALL"}
+        onChange={(e) => setParam("tag", e.target.value)}
+        className={SELECT_WIDTH}
+        aria-label="Tag"
+      >
+        <option value="ALL">All tags</option>
+        {tags.map((t) => (
+          <option key={t.name} value={t.name}>
+            {t.name}
           </option>
         ))}
       </Select>

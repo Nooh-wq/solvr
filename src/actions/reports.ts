@@ -5,17 +5,23 @@ import { z } from "zod";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { analyticsFilterSchema, type AnalyticsFilter } from "@/lib/validation/admin";
+import { computeNextRunAt } from "@/lib/report-schedule";
+import { rebuildRollupFor } from "@/lib/inngest/functions/build-ticket-rollup";
+import type { SavedReportFrequency } from "@/generated/prisma";
 
 // M13.7 — saved reports CRUD. The filter blob is validated against the
 // same AnalyticsFilter schema the /admin/analytics page uses, so a
 // saved report never carries a shape the widgets can't render.
+
+const frequencySchema = z.enum(["NONE", "DAILY", "WEEKLY", "MONTHLY"]);
 
 const createSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
   filters: analyticsFilterSchema,
   recipientEmails: z.array(z.string().email()).max(20).default([]),
-  scheduleCron: z.string().max(64).optional().nullable(),
+  scheduleFrequency: frequencySchema.default("NONE"),
+  scheduleHour: z.number().int().min(0).max(23).default(9),
 });
 
 const updateSchema = z.object({
@@ -24,7 +30,8 @@ const updateSchema = z.object({
   description: z.string().max(500).nullable().optional(),
   filters: analyticsFilterSchema.optional(),
   recipientEmails: z.array(z.string().email()).max(20).optional(),
-  scheduleCron: z.string().max(64).nullable().optional(),
+  scheduleFrequency: frequencySchema.optional(),
+  scheduleHour: z.number().int().min(0).max(23).optional(),
 });
 
 export type SavedReportRow = {
@@ -33,7 +40,9 @@ export type SavedReportRow = {
   description: string | null;
   filters: AnalyticsFilter;
   recipientEmails: string[];
-  scheduleCron: string | null;
+  scheduleFrequency: SavedReportFrequency;
+  scheduleHour: number;
+  nextRunAt: Date | null;
   lastRunAt: Date | null;
   createdAt: Date;
 };
@@ -55,7 +64,9 @@ export async function listSavedReports(): Promise<SavedReportRow[]> {
           description: r.description,
           filters: filters.success ? filters.data : ({ range: "30d" } as AnalyticsFilter),
           recipientEmails: r.recipientEmails,
-          scheduleCron: r.scheduleCron,
+          scheduleFrequency: r.scheduleFrequency,
+          scheduleHour: r.scheduleHour,
+          nextRunAt: r.nextRunAt,
           lastRunAt: r.lastRunAt,
           createdAt: r.createdAt,
         };
@@ -67,6 +78,7 @@ export async function listSavedReports(): Promise<SavedReportRow[]> {
 export async function createSavedReport(input: z.infer<typeof createSchema>) {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = createSchema.parse(input);
+  const nextRunAt = computeNextRunAt(data.scheduleFrequency, data.scheduleHour, null);
   const created = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     (tx) =>
@@ -77,7 +89,9 @@ export async function createSavedReport(input: z.infer<typeof createSchema>) {
           description: data.description ?? null,
           filters: data.filters,
           recipientEmails: data.recipientEmails,
-          scheduleCron: data.scheduleCron ?? null,
+          scheduleFrequency: data.scheduleFrequency,
+          scheduleHour: data.scheduleHour,
+          nextRunAt,
           createdByTeamMemberId: session.subjectId,
         },
       })
@@ -91,17 +105,34 @@ export async function updateSavedReport(input: z.infer<typeof updateSchema>) {
   const data = updateSchema.parse(input);
   await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-    (tx) =>
-      tx.savedReport.update({
+    async (tx) => {
+      const existing = await tx.savedReport.findFirst({
+        where: { id: data.id, tenantId: session.tenantId },
+      });
+      if (!existing) throw new Error("Report not found.");
+      const frequency = data.scheduleFrequency ?? existing.scheduleFrequency;
+      const hour = data.scheduleHour ?? existing.scheduleHour;
+      // Only recompute nextRunAt if the schedule actually changed —
+      // this preserves an in-flight cadence when an admin renames the
+      // report or edits its filter.
+      const scheduleChanged =
+        data.scheduleFrequency !== undefined || data.scheduleHour !== undefined;
+      const nextRunAt = scheduleChanged
+        ? computeNextRunAt(frequency, hour, null)
+        : existing.nextRunAt;
+      await tx.savedReport.update({
         where: { id: data.id },
         data: {
           ...(data.name !== undefined && { name: data.name }),
           ...(data.description !== undefined && { description: data.description }),
           ...(data.filters !== undefined && { filters: data.filters }),
           ...(data.recipientEmails !== undefined && { recipientEmails: data.recipientEmails }),
-          ...(data.scheduleCron !== undefined && { scheduleCron: data.scheduleCron }),
+          ...(data.scheduleFrequency !== undefined && { scheduleFrequency: data.scheduleFrequency }),
+          ...(data.scheduleHour !== undefined && { scheduleHour: data.scheduleHour }),
+          nextRunAt,
         },
-      })
+      });
+    }
   );
   revalidatePath("/admin/reports");
   return { ok: true };
@@ -129,6 +160,23 @@ export async function exportSavedReportCsv(input: { id: string }): Promise<strin
   );
   if (!report) throw new Error("Report not found.");
   const filters = analyticsFilterSchema.parse(report.filters);
+  const csv = await renderReportCsv(session.tenantId, filters);
+
+  // Mark the run — an admin can see when they last exported this report.
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) =>
+      tx.savedReport.update({
+        where: { id: report.id },
+        data: { lastRunAt: new Date() },
+      })
+  );
+  return csv;
+}
+
+// Extracted so the scheduled dispatcher (Inngest cron) can reuse the
+// exact CSV shape without re-implementing the filter → rows path.
+export async function renderReportCsv(tenantId: string, filters: AnalyticsFilter): Promise<string> {
   const end = filters.range === "custom" && filters.to ? new Date(filters.to) : new Date();
   end.setHours(23, 59, 59, 999);
   const days = filters.range === "7d" ? 7 : filters.range === "90d" ? 90 : 30;
@@ -139,11 +187,11 @@ export async function exportSavedReportCsv(input: { id: string }): Promise<strin
   start.setHours(0, 0, 0, 0);
 
   const rows = await withRls(
-    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    { tenantId, userId: null, role: "SUPER_ADMIN" },
     (tx) =>
       tx.ticket.findMany({
         where: {
-          tenantId: session.tenantId,
+          tenantId,
           createdAt: { gte: start, lte: end },
           ...(filters.channel && { source: filters.channel }),
           ...(filters.categoryId && { categoryId: filters.categoryId }),
@@ -172,16 +220,6 @@ export async function exportSavedReportCsv(input: { id: string }): Promise<strin
       })
   );
 
-  // Mark the run — an admin can see when they last exported this report.
-  await withRls(
-    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-    (tx) =>
-      tx.savedReport.update({
-        where: { id: report.id },
-        data: { lastRunAt: new Date() },
-      })
-  );
-
   const header = ["reference", "title", "status", "priority", "createdAt", "firstReplyAt", "resolvedAt", "source"];
   const lines = [header.join(",")];
   for (const r of rows) {
@@ -204,4 +242,27 @@ export async function exportSavedReportCsv(input: { id: string }): Promise<strin
 function csvEscape(s: string): string {
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+// M13 gap 3 — admin-triggered backfill for the daily rollup table.
+// Runs on-demand from /admin/reports. Walks backwards from yesterday
+// for `daysBack` days, upserting one row per (tenantId, date). Cheap:
+// even 90 days is 90 groupBy-like scans, and the smoke-test suite
+// covers correctness.
+export async function backfillTicketRollup(input: { daysBack?: number } = {}): Promise<{ days: number }> {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const daysBack = Math.max(1, Math.min(365, input.daysBack ?? 90));
+  const cursor = new Date();
+  cursor.setUTCHours(0, 0, 0, 0);
+  cursor.setUTCDate(cursor.getUTCDate() - 1);
+  for (let i = 0; i < daysBack; i++) {
+    const start = new Date(cursor);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    await rebuildRollupFor(session.tenantId, start, end);
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  revalidatePath("/admin/analytics");
+  revalidatePath("/admin/reports");
+  return { days: daysBack };
 }

@@ -161,6 +161,7 @@ model Tenant {
   csatQueue              CsatQueue[]
   csatSettings           CsatSettings?
   savedReports           SavedReport[]
+  ticketDailyRollups     TicketDailyRollup[]
 
   @@map("tenants")
 }
@@ -1688,26 +1689,72 @@ model AutoAssignmentLog {
 
 
 // M13.7 — saved analytics reports. filters mirrors the AnalyticsFilter
-// shape; runNow renders a CSV export, and the (optional) scheduleCron drives
-// a periodic email (deferred: M13 ships schema + CRUD + on-demand export;
-// scheduled email dispatch stays a follow-up until a real per-tenant
-// outbound-email log lands).
+// shape; runNow renders a CSV export, and the (optional) schedule drives
+// a periodic email sent by the send-report-schedules Inngest cron.
+//
+// Schedule modelling — typed frequency + hour-of-day (0..23, tenant server
+// tz, matches the walker) is deliberately narrow. A raw cron string
+// looked flexible but every field admins actually configure sits inside
+// this enum, and computing nextRunAt from an enum is a two-line function
+// vs shipping a cron parser dependency.
 model SavedReport {
-  id            String   @id @default(cuid())
-  tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name          String
-  description   String?
-  filters       Json     @default("{}")
+  id                     String                  @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                   String
+  description            String?
+  filters                Json                    @default("{}")
   // Recipients for a scheduled send. Empty array = on-demand only.
-  recipientEmails String[] @default([])
-  // Cron string for the scheduled export cadence, or null for none.
-  scheduleCron  String?
-  lastRunAt     DateTime?
-  createdByTeamMemberId String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  recipientEmails        String[]                @default([])
+  scheduleFrequency      SavedReportFrequency    @default(NONE)
+  // 0..23 hour-of-day the cron dispatches at. Ignored when frequency=NONE.
+  scheduleHour           Int                     @default(9)
+  // Absolute instant of the next scheduled dispatch. Recomputed on save
+  // and on every successful send. Cron reads this to pick due rows.
+  nextRunAt              DateTime?
+  lastRunAt              DateTime?
+  createdByTeamMemberId  String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
   @@index([tenantId, createdAt])
+  @@index([nextRunAt])
   @@map("saved_reports")
+}
+
+enum SavedReportFrequency {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+// M13 gap 3 — per-day per-tenant aggregate. Populated by the nightly
+// build-ticket-rollup Inngest cron; read by the analytics trend chart
+// for any day older than "today". Today still comes off the live
+// tickets table so the chart reflects in-progress activity.
+//
+// One row per (tenantId, date). date is the day boundary in UTC (kept
+// as a Date column but the cron writes it truncated to midnight so
+// equality checks are exact). Filter-scoped rollups (by category, by
+// priority, by org) would fan the row count by |categories|*|priorities|
+// which isn't worth it — the trend chart only ever shows the plain
+// daily totals; every other widget already has fast enough live paths.
+model TicketDailyRollup {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date                DateTime @db.Date
+  createdCount        Int      @default(0)
+  resolvedCount       Int      @default(0)
+  // Sum of (firstReplyAt - createdAt) in milliseconds for all tickets
+  // created on this day that received a first reply — divided by
+  // firstReplyCount at read time gives the daily avg first response.
+  firstReplyCount     Int      @default(0)
+  firstReplySumMs     BigInt   @default(0)
+  updatedAt           DateTime @updatedAt
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+  @@map("ticket_daily_rollups")
 }

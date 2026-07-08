@@ -111,6 +111,10 @@ export default async function AdminAnalyticsPage({
     priority,
     assignedToId: sp.assignedToId as "unassigned" | undefined,
     organizationId: sp.organizationId,
+    groupId: sp.groupId,
+    tag: sp.tag,
+    customFieldDefinitionId: sp.customFieldDefinitionId,
+    customFieldValue: sp.customFieldValue,
   });
 
   const categorySegments = data.categoryBreakdown.map((c, i) => ({
@@ -142,6 +146,8 @@ export default async function AdminAnalyticsPage({
           categories={data.filterOptions.categories}
           agents={data.filterOptions.agents}
           organizations={data.filterOptions.organizations}
+          groups={data.filterOptions.groups}
+          tags={data.filterOptions.tags}
         />
       </Suspense>
 

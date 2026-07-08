@@ -12,7 +12,7 @@ import { getSessionPayloadFromRequest } from "@/lib/session";
 // /api/data-export/[token] is token-authenticated (see M21.6), same
 // rationale as /guest and /rate — the JWT signature IS the auth check,
 // so bouncing through the session-cookie gate would be wrong.
-const PUBLIC_PREFIXES = ["/auth", "/guest", "/rate", "/api/webhooks", "/api/inngest", "/api/data-export", "/_next", "/favicon.ico", "/brand"];
+const PUBLIC_PREFIXES = ["/auth", "/guest", "/rate", "/reports/shared", "/api/webhooks", "/api/inngest", "/api/data-export", "/_next", "/favicon.ico", "/brand"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

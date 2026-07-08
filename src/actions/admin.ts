@@ -1417,7 +1417,25 @@ function resolveRange(f: AnalyticsFilter): { start: Date; end: Date } {
   return { start, end };
 }
 
-function buildTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "createdAt" | "resolvedAt" = "createdAt") {
+/**
+ * Extra shape used when the caller has pre-resolved a subset of tickets
+ * or team-members that satisfy relation-crossing filters (tag, custom
+ * field, group). null entries mean "no filter on this axis." An empty
+ * array means "no matches" and the caller should short-circuit — this
+ * function doesn't itself emit `id: { in: [] }` because Prisma treats
+ * that as an always-false filter that still walks the whole planner.
+ */
+type PrefilteredIds = {
+  ticketIdIn?: string[] | null;
+  assignedTeamMemberIdIn?: string[] | null;
+};
+
+function buildTicketWhere(
+  tenantId: string,
+  f: AnalyticsFilter,
+  dateField: "createdAt" | "resolvedAt" = "createdAt",
+  prefilter: PrefilteredIds = {}
+) {
   const { start, end } = resolveRange(f);
   return {
     tenantId,
@@ -1426,19 +1444,98 @@ function buildTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "crea
     ...(f.categoryId ? { categoryId: f.categoryId } : {}),
     ...(f.priority ? { priority: f.priority } : {}),
     ...(f.organizationId ? { organizationId: f.organizationId } : {}),
-    ...(f.assignedToId
-      ? f.assignedToId === "unassigned"
-        ? { assignedTeamMemberId: null }
-        : { assignedTeamMemberId: f.assignedToId }
+    // M13.9 — group slice: filter tickets whose assignee is in the
+    // group's member list. Pre-resolved into a scalar id list by the
+    // caller because the shared-platform boundary forbids a Prisma
+    // relation across the wrapper's TeamMemberGroup table.
+    ...(prefilter.assignedTeamMemberIdIn !== undefined && prefilter.assignedTeamMemberIdIn !== null
+      ? { assignedTeamMemberId: { in: prefilter.assignedTeamMemberIdIn } }
+      : f.assignedToId
+        ? f.assignedToId === "unassigned"
+          ? { assignedTeamMemberId: null }
+          : { assignedTeamMemberId: f.assignedToId }
+        : {}),
+    // Tag + custom-field filters get pre-resolved into a ticketId list.
+    ...(prefilter.ticketIdIn !== undefined && prefilter.ticketIdIn !== null
+      ? { id: { in: prefilter.ticketIdIn } }
       : {}),
   };
+}
+
+async function resolveRelationFilters(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  f: AnalyticsFilter
+): Promise<PrefilteredIds> {
+  const out: PrefilteredIds = {};
+
+  // Group filter: pull team-member ids in the group. If the caller also
+  // set assignedToId, we intersect: an ADMIN filtering "group=Support &
+  // assignee=Sam" should only see tickets where both hold. If Sam isn't
+  // in Support the result is an empty set (still emit as an explicit
+  // empty array so buildTicketWhere renders no matches).
+  if (f.groupId) {
+    const memberships = await tx.teamMemberGroup.findMany({
+      where: { groupId: f.groupId, tenantId },
+      select: { teamMemberId: true },
+    });
+    let ids = memberships.map((m) => m.teamMemberId);
+    if (f.assignedToId && f.assignedToId !== "unassigned") {
+      ids = ids.includes(f.assignedToId) ? [f.assignedToId] : [];
+    }
+    out.assignedTeamMemberIdIn = ids;
+  }
+
+  // Tag filter: resolve tag name → tag id → ticket-target assignments.
+  if (f.tag) {
+    const tag = await tx.tag.findFirst({
+      where: { tenantId, name: f.tag },
+      select: { id: true },
+    });
+    const assignments = tag
+      ? await tx.tagAssignment.findMany({
+          where: { tenantId, tagId: tag.id, targetType: "TICKET" },
+          select: { targetId: true },
+        })
+      : [];
+    out.ticketIdIn = assignments.map((a) => a.targetId);
+  }
+
+  // Custom-field slice: match on either valueText or valueOptionId
+  // (dropdown / multiselect). Number / date / boolean can be added on
+  // as needed; text + option covers the common admin case.
+  if (f.customFieldDefinitionId && f.customFieldValue) {
+    const values = await tx.customFieldValue.findMany({
+      where: {
+        tenantId,
+        fieldDefinitionId: f.customFieldDefinitionId,
+        targetType: "TICKET",
+        OR: [
+          { valueText: f.customFieldValue },
+          { valueOptionId: f.customFieldValue },
+        ],
+      },
+      select: { targetId: true },
+    });
+    const cfvIds = values.map((v) => v.targetId);
+    // Intersect with any tag-resolved set — same reason as the group +
+    // assignee intersection above.
+    out.ticketIdIn = out.ticketIdIn ? out.ticketIdIn.filter((id) => cfvIds.includes(id)) : cfvIds;
+  }
+
+  return out;
 }
 
 // M13.2 — the prior equivalent-length window, ending the moment the
 // current window began. Used for period-over-period deltas on KPI
 // cards. Returns a `where` clause shaped the same way as the main
 // range so callers can reuse it with tx.ticket.count etc.
-function buildPriorTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "createdAt" | "resolvedAt" = "createdAt") {
+function buildPriorTicketWhere(
+  tenantId: string,
+  f: AnalyticsFilter,
+  dateField: "createdAt" | "resolvedAt" = "createdAt",
+  prefilter: PrefilteredIds = {}
+) {
   const { start, end } = resolveRange(f);
   const spanMs = end.getTime() - start.getTime();
   const priorEnd = new Date(start.getTime() - 1);
@@ -1450,10 +1547,15 @@ function buildPriorTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: 
     ...(f.categoryId ? { categoryId: f.categoryId } : {}),
     ...(f.priority ? { priority: f.priority } : {}),
     ...(f.organizationId ? { organizationId: f.organizationId } : {}),
-    ...(f.assignedToId
-      ? f.assignedToId === "unassigned"
-        ? { assignedTeamMemberId: null }
-        : { assignedTeamMemberId: f.assignedToId }
+    ...(prefilter.assignedTeamMemberIdIn !== undefined && prefilter.assignedTeamMemberIdIn !== null
+      ? { assignedTeamMemberId: { in: prefilter.assignedTeamMemberIdIn } }
+      : f.assignedToId
+        ? f.assignedToId === "unassigned"
+          ? { assignedTeamMemberId: null }
+          : { assignedTeamMemberId: f.assignedToId }
+        : {}),
+    ...(prefilter.ticketIdIn !== undefined && prefilter.ticketIdIn !== null
+      ? { id: { in: prefilter.ticketIdIn } }
       : {}),
   };
 }
@@ -1494,15 +1596,42 @@ function buildHeatmap(dates: Date[]): number[][] {
 
 export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> = {}) {
   const session = await requireSession({ minRole: "ADMIN" });
-  const parsed = analyticsFilterSchema.safeParse(rawFilter);
+  return getAnalyticsOverviewByTenant({
+    tenantId: session.tenantId,
+    subjectId: session.subjectId,
+    role: session.role,
+    rawFilter,
+  });
+}
+
+// M13 gap 2 — session-free variant used by the token-authenticated
+// public /reports/shared/[token] renderer. Every read still runs
+// under withRls scoped to the token's tenantId, so RLS tenant
+// isolation stays in force even without a session cookie. Callers
+// that DO have a session (getAnalyticsOverview above) get the same
+// shape; the split just lets the public path skip the requireSession
+// gate that assumes a cookie exists.
+export async function getAnalyticsOverviewByTenant(params: {
+  tenantId: string;
+  subjectId: string | null;
+  role: UserRole;
+  rawFilter?: Partial<AnalyticsFilter>;
+}) {
+  const parsed = analyticsFilterSchema.safeParse(params.rawFilter ?? {});
   // Never throw on a bad/stale filter (e.g. a hand-edited or old bookmarked
   // URL) — fall back to the schema's own defaults instead.
   const f = parsed.success ? parsed.data : analyticsFilterSchema.parse({});
 
-  return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {
-    const tenantId = session.tenantId;
+  return withRls({ tenantId: params.tenantId, userId: params.subjectId, role: params.role }, async (tx) => {
+    const tenantId = params.tenantId;
     const { start, end } = resolveRange(f);
-    const createdWhere = buildTicketWhere(tenantId, f, "createdAt");
+    // M13.9 — resolve tag / custom-field / group filters into
+    // scalar id lists BEFORE building any `where`. Done once here so
+    // every subsequent buildTicketWhere/buildPriorTicketWhere call
+    // sees the same set — otherwise the KPIs and the trend chart
+    // could disagree on which tickets are in scope.
+    const prefilter = await resolveRelationFilters(tx, tenantId, f);
+    const createdWhere = buildTicketWhere(tenantId, f, "createdAt", prefilter);
 
     // Sequential, not Promise.all — same reason as getReportStats() above:
     // these all run on this one interactive-tx connection.
@@ -1571,18 +1700,77 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     const aiDeflectionRate = totalConversations > 0 ? (totalConversations - escalatedConversations) / totalConversations : null;
 
     // --- Tickets-over-time (created / resolved / net) ---
-    const createdRows = await tx.ticket.findMany({ where: createdWhere, select: { createdAt: true } });
-    const resolvedWhere = buildTicketWhere(tenantId, f, "resolvedAt");
-    const resolvedRows = await tx.ticket.findMany({
-      where: { ...resolvedWhere, resolvedAt: { not: null } },
-      select: { resolvedAt: true },
-    });
-    const dailySeries = bucketByDay(
-      start,
-      end,
-      createdRows.map((r) => r.createdAt),
-      resolvedRows.map((r) => r.resolvedAt!)
-    );
+    // M13 gap 3 — rollup-first read path. For any day older than
+    // today, prefer TicketDailyRollup (populated by the nightly
+    // build-ticket-rollup cron); fall back to a live tickets scan
+    // for days the rollup hasn't touched yet + always for "today"
+    // (which is still in progress). Only kicks in when no filters
+    // other than the date range are active — the rollup doesn't
+    // materialize the by-category/channel/priority breakdowns, so
+    // any of those filters forces the live path (correct result;
+    // slightly slower under load).
+    const hasNonDateFilters =
+      !!f.channel ||
+      !!f.categoryId ||
+      !!f.priority ||
+      !!f.organizationId ||
+      !!f.assignedToId ||
+      !!f.groupId ||
+      !!f.tag ||
+      !!(f.customFieldDefinitionId && f.customFieldValue);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let dailySeries: ReturnType<typeof bucketByDay>;
+    if (hasNonDateFilters) {
+      const createdRows = await tx.ticket.findMany({ where: createdWhere, select: { createdAt: true } });
+      const resolvedWhere = buildTicketWhere(tenantId, f, "resolvedAt", prefilter);
+      const resolvedRows = await tx.ticket.findMany({
+        where: { ...resolvedWhere, resolvedAt: { not: null } },
+        select: { resolvedAt: true },
+      });
+      dailySeries = bucketByDay(
+        start,
+        end,
+        createdRows.map((r) => r.createdAt),
+        resolvedRows.map((r) => r.resolvedAt!)
+      );
+    } else {
+      const rollups = await tx.ticketDailyRollup.findMany({
+        where: {
+          tenantId,
+          date: { gte: start, lte: end },
+        },
+      });
+      const rollupByKey = new Map(
+        rollups.map((r) => [r.date.toISOString().slice(0, 10), r])
+      );
+      // Live top-up for today's in-flight activity, since the rollup
+      // is only guaranteed complete for days in the past.
+      const [liveCreatedRows, liveResolvedRows] = await Promise.all([
+        tx.ticket.findMany({
+          where: { tenantId, createdAt: { gte: today } },
+          select: { createdAt: true },
+        }),
+        tx.ticket.findMany({
+          where: { tenantId, resolvedAt: { gte: today } },
+          select: { resolvedAt: true },
+        }),
+      ]);
+      const liveCreatedToday = liveCreatedRows.length;
+      const liveResolvedToday = liveResolvedRows.length;
+      const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1);
+      dailySeries = Array.from({ length: days }, (_, i) => {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        const isToday = key === today.toISOString().slice(0, 10);
+        const rollup = rollupByKey.get(key);
+        const created = isToday ? liveCreatedToday : rollup?.createdCount ?? 0;
+        const resolved = isToday ? liveResolvedToday : rollup?.resolvedCount ?? 0;
+        return { date: key, created, resolved, net: created - resolved };
+      });
+    }
 
     // --- Category breakdown ---
     const byCategory = await tx.ticket.groupBy({ by: ["categoryId"], where: createdWhere, _count: true });
@@ -1742,13 +1930,41 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       select: { id: true, name: true },
     });
 
+    // M13.9 — group + tag option lists for the filter bar. Groups
+    // come from the wrapper (tenant-scoped); tags come from
+    // support's tag table filtered to those actually assigned to
+    // tickets in this range, so the dropdown doesn't offer names
+    // that would match zero rows.
+    const [allGroups, ticketTagAssignments] = await Promise.all([
+      tx.group.findMany({
+        where: { tenantId },
+        orderBy: { name: "asc" },
+        take: 200,
+        select: { id: true, name: true },
+      }),
+      tx.tagAssignment.findMany({
+        where: { tenantId, targetType: "TICKET" },
+        select: { tagId: true },
+        distinct: ["tagId"],
+      }),
+    ]);
+    const assignedTagIds = ticketTagAssignments.map((t) => t.tagId);
+    const allTags =
+      assignedTagIds.length > 0
+        ? await tx.tag.findMany({
+            where: { tenantId, id: { in: assignedTagIds } },
+            orderBy: { name: "asc" },
+            select: { name: true },
+          })
+        : [];
+
     // M13.2 — prior-window KPI values for delta chips. Same filters,
     // shifted back by the current window's length. Only computed for
     // the KPIs that benefit from a delta view — pure counts and time
     // averages. SLA/CSAT/deflection carry too much noise on small
     // samples and their nulls dominate; showing a delta there would
     // be a lie more often than a signal.
-    const priorWhere = buildPriorTicketWhere(tenantId, f, "createdAt");
+    const priorWhere = buildPriorTicketWhere(tenantId, f, "createdAt", prefilter);
     const [priorTotal, priorResolved, priorFirstReply] = await Promise.all([
       tx.ticket.count({ where: priorWhere }),
       tx.ticket.count({ where: { ...priorWhere, resolvedAt: { not: null } } }),
@@ -1800,6 +2016,8 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
         categories: allCategories,
         agents: allAgents,
         organizations: allOrganizations,
+        groups: allGroups,
+        tags: allTags,
       },
     };
   });

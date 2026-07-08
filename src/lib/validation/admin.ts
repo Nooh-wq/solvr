@@ -73,5 +73,17 @@ export const analyticsFilterSchema = z.object({
   assignedToId: z.union([z.string().cuid(), z.literal("unassigned")]).optional(),
   // M13.1 — scope every widget to a single organization.
   organizationId: z.string().cuid().optional(),
+  // M13.9 — group slicing. Filters tickets whose assignee belongs to
+  // the given group (via TeamMemberGroup).
+  groupId: z.string().cuid().optional(),
+  // Tag by name (case-sensitive, tenant-scoped). Matches tickets that
+  // have a tag_assignments row with targetType=TICKET pointing at a
+  // Tag with this name.
+  tag: z.string().min(1).max(60).optional(),
+  // Custom-field slice: pair of (definitionId, value). Value is
+  // matched as string equality against CustomFieldValue.valueText /
+  // valueNumber (stringified) / dropdown-option label.
+  customFieldDefinitionId: z.string().cuid().optional(),
+  customFieldValue: z.string().min(1).max(200).optional(),
 });
 export type AnalyticsFilter = z.infer<typeof analyticsFilterSchema>;

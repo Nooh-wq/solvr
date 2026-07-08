@@ -4,12 +4,14 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  backfillTicketRollup,
   createSavedReport,
   deleteSavedReport,
   exportSavedReportCsv,
   updateSavedReport,
   type SavedReportRow,
 } from "@/actions/reports";
+import { createShareLink } from "@/actions/analyticsShare";
 import { Input, Textarea, Select } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
@@ -43,6 +45,8 @@ export function ReportsEditor({
   const [description, setDescription] = useState("");
   const [filters, setFilters] = useState<FilterEditable>({ range: "30d" });
   const [recipients, setRecipients] = useState("");
+  const [scheduleFrequency, setScheduleFrequency] = useState<"NONE" | "DAILY" | "WEEKLY" | "MONTHLY">("NONE");
+  const [scheduleHour, setScheduleHour] = useState<number>(9);
   const [pending, startTransition] = useTransition();
 
   function submit() {
@@ -64,12 +68,16 @@ export function ReportsEditor({
             ...(filters.organizationId && { organizationId: filters.organizationId }),
           },
           recipientEmails,
+          scheduleFrequency,
+          scheduleHour,
         });
         toast({ title: "Report saved", variant: "success" });
         setName("");
         setDescription("");
         setFilters({ range: "30d" });
         setRecipients("");
+        setScheduleFrequency("NONE");
+        setScheduleHour(9);
         router.refresh();
       } catch (e) {
         toast({
@@ -195,7 +203,7 @@ export function ReportsEditor({
           <label className="block text-[12px] font-medium mb-1.5">
             Email recipients{" "}
             <span className="text-[var(--color-neutral-500)] font-normal">
-              (scheduled delivery deferred; kept for future dispatch)
+              (used when a schedule is set)
             </span>
           </label>
           <Input
@@ -203,6 +211,32 @@ export function ReportsEditor({
             onChange={(e) => setRecipients(e.target.value)}
             placeholder="ops@company.com, lead@company.com"
           />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[12px] font-medium mb-1.5">Schedule</label>
+            <Select
+              value={scheduleFrequency}
+              onChange={(e) => setScheduleFrequency(e.target.value as any)}
+            >
+              <option value="NONE">Off (on-demand only)</option>
+              <option value="DAILY">Daily</option>
+              <option value="WEEKLY">Weekly</option>
+              <option value="MONTHLY">Monthly</option>
+            </Select>
+          </div>
+          <div>
+            <label className="block text-[12px] font-medium mb-1.5">Delivery hour (0–23)</label>
+            <Input
+              type="number"
+              min={0}
+              max={23}
+              value={scheduleHour}
+              onChange={(e) => setScheduleHour(parseInt(e.target.value || "9", 10))}
+              disabled={scheduleFrequency === "NONE"}
+            />
+          </div>
         </div>
 
         <Button variant="primary" onClick={submit} disabled={!name.trim() || pending}>
@@ -259,6 +293,22 @@ function ReportRow({ report }: { report: SavedReportRow }) {
     });
   }
 
+  function shareLink() {
+    startTransition(async () => {
+      try {
+        const { url } = await createShareLink({ filters: report.filters });
+        await navigator.clipboard.writeText(url);
+        toast({ title: "Share link copied", description: "Valid for 30 days.", variant: "success" });
+      } catch (e) {
+        toast({
+          title: "Couldn't create share link",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "error",
+        });
+      }
+    });
+  }
+
   const filterQs = new URLSearchParams();
   filterQs.set("range", report.filters.range);
   if (report.filters.channel) filterQs.set("channel", report.filters.channel);
@@ -271,11 +321,16 @@ function ReportRow({ report }: { report: SavedReportRow }) {
     <li className="px-5 py-3">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="text-[13px] font-medium truncate">{report.name}</div>
             {report.recipientEmails.length > 0 && (
               <span className="text-[10px] uppercase tracking-wide rounded-full border border-[var(--color-neutral-300)] text-[var(--color-neutral-600)] px-1.5 py-0.5">
                 {report.recipientEmails.length} recipient{report.recipientEmails.length === 1 ? "" : "s"}
+              </span>
+            )}
+            {report.scheduleFrequency !== "NONE" && (
+              <span className="text-[10px] uppercase tracking-wide rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5">
+                {report.scheduleFrequency.toLowerCase()} @ {String(report.scheduleHour).padStart(2, "0")}:00
               </span>
             )}
           </div>
@@ -288,7 +343,8 @@ function ReportRow({ report }: { report: SavedReportRow }) {
             {report.filters.priority && <span>priority: {report.filters.priority}</span>}
             {report.filters.categoryId && <span>category: {report.filters.categoryId}</span>}
             {report.filters.organizationId && <span>org: {report.filters.organizationId}</span>}
-            {report.lastRunAt && <span>last export: {new Date(report.lastRunAt).toLocaleString()}</span>}
+            {report.nextRunAt && <span>next email: {new Date(report.nextRunAt).toLocaleString()}</span>}
+            {report.lastRunAt && <span>last: {new Date(report.lastRunAt).toLocaleString()}</span>}
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -305,6 +361,14 @@ function ReportRow({ report }: { report: SavedReportRow }) {
             className="text-[12px] px-2.5 py-1"
           >
             {pending ? "…" : "Export CSV"}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={shareLink}
+            disabled={pending}
+            className="text-[12px] px-2.5 py-1"
+          >
+            Share
           </Button>
           <Button
             variant="ghost"
