@@ -45,6 +45,8 @@ type ViewRow = {
   id: string;
   name: string;
   isDefault: boolean;
+  isShared: boolean;
+  count: number;
   filters: ViewFilters;
   sort: ViewSort;
 };
@@ -78,12 +80,15 @@ export function QueueWorkspace({
   tickets,
   openCount,
   unassignedCount,
+  canShareViews,
 }: {
   views: ViewRow[];
   activeViewId: string | null;
   tickets: QueueTicket[];
   openCount: number;
   unassignedCount: number;
+  /** Z6.5 — only admins can create shared views (permission catalog wiring to follow). */
+  canShareViews: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -105,6 +110,7 @@ export function QueueWorkspace({
 
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [saveShared, setSaveShared] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -144,9 +150,11 @@ export function QueueWorkspace({
           name,
           filters: currentFilters(),
           sort: { key: "updatedAt", dir: "desc" },
+          shared: saveShared,
         });
         setSaveOpen(false);
         setSaveName("");
+        setSaveShared(false);
         toast({ title: `Saved view "${name}"`, variant: "success" });
         router.push(`/agent?view=${res.id}`);
       } catch (e) {
@@ -230,19 +238,38 @@ export function QueueWorkspace({
         {views.map((v) => {
           const isActive = v.id === activeViewId;
           return (
-            <div key={v.id} className="group flex items-center gap-1">
+            <div key={v.id} className="group relative">
               <button
                 onClick={() => selectView(v.id)}
-                className={`flex-1 text-left px-3 py-2 rounded-lg text-[13px] transition-colors cursor-pointer flex items-center gap-2 ${
+                className={`w-full text-left pl-3 pr-16 py-2 rounded-lg text-[13px] transition-colors cursor-pointer flex items-center gap-2 group-hover:pr-20 ${
                   isActive
                     ? "bg-[var(--color-primary)] text-white"
                     : "text-[var(--foreground)] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
                 }`}
               >
-                <span className="truncate flex-1">{v.name}</span>
+                <span className="truncate flex-1 min-w-0">{v.name}</span>
+                <span
+                  className={`text-[11px] font-mono shrink-0 ${
+                    isActive ? "text-white/80" : "text-[var(--color-neutral-500)]"
+                  }`}
+                >
+                  {v.count}
+                </span>
+                {v.isShared && (
+                  <span
+                    className={`text-[9px] uppercase tracking-wide font-semibold shrink-0 px-1 py-px rounded ${
+                      isActive
+                        ? "bg-white/25 text-white"
+                        : "bg-[var(--color-neutral-100)] dark:bg-white/[0.08] text-[var(--color-neutral-500)]"
+                    }`}
+                    title="Shared view"
+                  >
+                    Shared
+                  </span>
+                )}
                 {v.isDefault && (
                   <span
-                    className={`text-[10px] shrink-0 ${
+                    className={`text-[11px] shrink-0 ${
                       isActive ? "text-white/80" : "text-[var(--color-neutral-500)]"
                     }`}
                     title="Default view"
@@ -251,22 +278,35 @@ export function QueueWorkspace({
                   </span>
                 )}
               </button>
-              <button
-                onClick={() => onPin(v.id)}
-                disabled={v.isDefault || pending}
-                title={v.isDefault ? "Already default" : "Set as default"}
-                className="h-8 w-6 shrink-0 opacity-0 group-hover:opacity-100 disabled:opacity-30 text-[11px] text-[var(--color-neutral-500)] hover:text-[var(--foreground)] cursor-pointer disabled:cursor-not-allowed"
-              >
-                ★
-              </button>
-              <button
-                onClick={() => onDelete(v.id, v.name)}
-                disabled={pending}
-                title="Delete view"
-                className="h-8 w-6 shrink-0 opacity-0 group-hover:opacity-100 text-[11px] text-[var(--color-neutral-500)] hover:text-red-600 cursor-pointer"
-              >
-                ×
-              </button>
+              {/* Row actions overlay — absolutely positioned so they never
+                  add width, and revealed on group hover. Solid bg keeps
+                  them readable when they cover a truncated name. */}
+              <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPin(v.id); }}
+                  disabled={v.isDefault || pending}
+                  title={v.isDefault ? "Already default" : "Set as default"}
+                  className={`h-7 w-7 flex items-center justify-center rounded-md text-[15px] leading-none disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer ${
+                    isActive
+                      ? "text-white/80 hover:bg-white/15"
+                      : "text-[var(--color-neutral-500)] hover:text-[var(--foreground)] hover:bg-black/[0.06] dark:hover:bg-white/[0.08]"
+                  }`}
+                >
+                  ★
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDelete(v.id, v.name); }}
+                  disabled={pending}
+                  title="Delete view"
+                  className={`h-7 w-7 flex items-center justify-center rounded-md text-[16px] leading-none cursor-pointer ${
+                    isActive
+                      ? "text-white/80 hover:bg-white/15"
+                      : "text-[var(--color-neutral-500)] hover:text-red-600 hover:bg-red-500/10"
+                  }`}
+                >
+                  ×
+                </button>
+              </div>
             </div>
           );
         })}
@@ -426,16 +466,33 @@ export function QueueWorkspace({
         onClose={() => setSaveOpen(false)}
         title="Save as view"
       >
-        <p className="text-[12px] text-[var(--color-neutral-600)] mb-3">
-          Personal views are visible only to you. Sharing views with your
-          group is coming soon.
-        </p>
         <Input
           value={saveName}
           onChange={(e) => setSaveName(e.target.value)}
           placeholder="e.g. My open tickets"
           autoFocus
         />
+        {canShareViews && (
+          <label className="mt-3 flex items-start gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={saveShared}
+              onChange={(e) => setSaveShared(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-[var(--color-primary)] cursor-pointer"
+            />
+            <span>
+              <span className="block font-medium">Share with team</span>
+              <span className="block text-[var(--color-neutral-500)]">
+                All agents on this tenant can select it; only admins can edit or delete.
+              </span>
+            </span>
+          </label>
+        )}
+        {!canShareViews && (
+          <p className="text-[11px] text-[var(--color-neutral-500)] mt-3">
+            Personal views are visible only to you.
+          </p>
+        )}
         <div className="flex justify-end gap-2 mt-3">
           <Button variant="secondary" onClick={() => setSaveOpen(false)}>
             Cancel

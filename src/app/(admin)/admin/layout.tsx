@@ -31,7 +31,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     // Non-fatal.
   }
 
-  const links = buildAdminNav({
+  const nav = buildAdminNav({
     role: user.role,
     tenantType: tenant.type,
     pendingCount,
@@ -42,7 +42,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <Sidebar
       productName={`${tenant.branding?.productName ?? "solvr"} · Admin`}
       logoUrl={tenant.branding?.logoUrl ?? null}
-      links={links}
+      links={nav.top}
+      sections={nav.sections}
+      footer={nav.footer}
+      showAdminSearch
       userName={user.name}
       avatarUrl={user.avatarUrl}
       profileHref="/admin/account"

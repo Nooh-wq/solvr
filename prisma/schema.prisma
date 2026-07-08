@@ -130,6 +130,9 @@ model Tenant {
   ticketGuests         TicketGuest[]
   surveyResponses      SurveyResponse[]
   savedViews           SavedView[]
+  cannedResponses      CannedResponse[]
+  macros               Macro[]
+  ticketViews          TicketView[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -260,6 +263,7 @@ model Ticket {
   notifications     Notification[]
   guests            TicketGuest[]
   surveyResponse    SurveyResponse?
+  ticketViews       TicketView[]
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -319,6 +323,69 @@ model SavedView {
 
   @@index([tenantId, ownerTeamMemberId])
   @@map("saved_views")
+}
+
+// Z6.3 — Canned responses. Support-owned. Personal to a team member
+// when ownerTeamMemberId is set; tenant-shared (Z6.5 shape) when null.
+// `shortcut` is the /trigger the composer expands — unique per (tenant,
+// owner) so agents don't collide with each other but shared responses
+// live in a global namespace. Body may contain placeholders resolved
+// via src/lib/placeholders.ts at expansion time.
+model CannedResponse {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerTeamMemberId String?
+  name              String
+  shortcut          String
+  body              String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, ownerTeamMemberId, shortcut])
+  @@index([tenantId, ownerTeamMemberId])
+  @@map("canned_responses")
+}
+
+// Z6.4 — Macros. Structured JSON actions (not raw SQL — spec §3),
+// applied against a specific ticket from the ticket-detail composer.
+// Personal or tenant-shared (same nullable-owner pattern as SavedView).
+// Every action's schema is validated by the macro engine before apply;
+// unknown action types are rejected server-side.
+model Macro {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerTeamMemberId String?
+  name              String
+  description       String?
+  // Actions JSON. Shape: [{ type: "add_internal_note", body: string }
+  //   | { type: "change_status", status: TicketStatus }
+  //   | { type: "insert_reply_template", body: string }].
+  actions           Json     @default("[]")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantId, ownerTeamMemberId])
+  @@map("macros")
+}
+
+// Z6 DoD closure — per-agent ticket-view tracking. Powers real
+// "unread" counts on views (a view's unread count = tickets in the
+// view whose `updatedAt` is newer than the agent's `lastViewedAt`, or
+// tickets the agent has never opened at all). Support-owned; no
+// wrapper relation on `subjectId` (raw scalar per boundary rule 3).
+model TicketView {
+  subjectId    String
+  ticketId     String
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  lastViewedAt DateTime @default(now())
+
+  @@id([subjectId, ticketId])
+  @@index([tenantId, subjectId])
+  @@map("ticket_views")
 }
 
 model Message {

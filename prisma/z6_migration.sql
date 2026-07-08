@@ -17,6 +17,12 @@ create table if not exists saved_views (
 create index if not exists saved_views_tenant_owner_idx
   on saved_views ("tenantId", "ownerTeamMemberId");
 
+-- Z6.5 — prevent duplicate shared-view seeding on races. Personal views
+-- (ownerTeamMemberId is not null) can freely have duplicate names.
+create unique index if not exists saved_views_tenant_shared_name_uq
+  on saved_views ("tenantId", name)
+  where "ownerTeamMemberId" is null;
+
 alter table saved_views enable row level security;
 alter table saved_views force row level security;
 

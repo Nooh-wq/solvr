@@ -224,6 +224,18 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
   });
   await assignTeamMemberToGroup(ctx, adminTeamMember.id, defaultGroup.id);
 
+  // Z6 DoD — seed the four default shared views for this brand-new
+  // tenant so agents landing on /agent for the first time see the
+  // expected surface. Non-fatal: the lazy backstop in
+  // ensureDefaultSharedViews() will still fire on first /agent load if
+  // this ever no-ops.
+  try {
+    const { seedDefaultSharedViewsForTenant } = await import("@/actions/views");
+    await seedDefaultSharedViewsForTenant(created.tenantId);
+  } catch {
+    // Non-fatal.
+  }
+
   // Tenant signup creates the initial SUPER_ADMIN — always a TEAM_MEMBER.
   const sessionId = await createUserSession({
     subjectId: created.userId,
