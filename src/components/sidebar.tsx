@@ -190,38 +190,64 @@ export function Sidebar({
               <img src={logoUrl} alt="" className="h-6 w-6 shrink-0 object-contain rounded" />
             ) : (
               <>
-                <Image
-                  src="/brand/solvr-wordmark-black.svg"
-                  alt={productName}
-                  width={72}
-                  height={26}
-                  className={`shrink-0 dark:hidden ${collapsed ? "md:hidden" : ""}`}
-                />
-                <Image
-                  src="/brand/solvr-wordmark-white.svg"
-                  alt={productName}
-                  width={72}
-                  height={26}
-                  className={`shrink-0 hidden dark:block ${collapsed ? "md:hidden" : ""}`}
-                />
-                {collapsed && (
-                  <>
-                    <Image
-                      src="/brand/s-mark-black.svg"
-                      alt={productName}
-                      width={22}
-                      height={30}
-                      className="hidden md:block dark:md:hidden shrink-0"
-                    />
-                    <Image
-                      src="/brand/s-mark-white.svg"
-                      alt={productName}
-                      width={22}
-                      height={30}
-                      className="hidden dark:md:block shrink-0"
-                    />
-                  </>
-                )}
+                {/* Mobile drawer always shows the full wordmark — collapse
+                    is a desktop-only affordance, so mobile ignores it. */}
+                <span className="md:hidden">
+                  <Image
+                    src="/brand/solvr-wordmark-black.svg"
+                    alt={productName}
+                    width={72}
+                    height={26}
+                    className="shrink-0 dark:hidden"
+                  />
+                  <Image
+                    src="/brand/solvr-wordmark-white.svg"
+                    alt={productName}
+                    width={72}
+                    height={26}
+                    className="shrink-0 hidden dark:block"
+                  />
+                </span>
+                {/* Desktop (md+): render either the full wordmark or the
+                    S mark depending on collapse state — mutually exclusive
+                    so both can never appear at the same time. */}
+                <span className="hidden md:inline-flex items-center">
+                  {collapsed ? (
+                    <>
+                      <Image
+                        src="/brand/s-mark-black.svg"
+                        alt={productName}
+                        width={22}
+                        height={30}
+                        className="shrink-0 dark:hidden"
+                      />
+                      <Image
+                        src="/brand/s-mark-white.svg"
+                        alt={productName}
+                        width={22}
+                        height={30}
+                        className="shrink-0 hidden dark:block"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Image
+                        src="/brand/solvr-wordmark-black.svg"
+                        alt={productName}
+                        width={72}
+                        height={26}
+                        className="shrink-0 dark:hidden"
+                      />
+                      <Image
+                        src="/brand/solvr-wordmark-white.svg"
+                        alt={productName}
+                        width={72}
+                        height={26}
+                        className="shrink-0 hidden dark:block"
+                      />
+                    </>
+                  )}
+                </span>
               </>
             )}
             {logoUrl && <span className={`text-[13px] font-semibold truncate ${collapsed ? "md:hidden" : ""}`}>{productName}</span>}
