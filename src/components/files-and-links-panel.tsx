@@ -32,9 +32,11 @@ function formatBytes(n: number) {
 export function FilesAndLinksPanel({
   files,
   messages,
+  variant = "card",
 }: {
   files: PanelFile[];
   messages: { body: string; createdAt: string }[];
+  variant?: "card" | "flat";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -61,7 +63,11 @@ export function FilesAndLinksPanel({
   const total = files.length + links.length;
 
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl mt-6 overflow-hidden">
+    <div className={
+      variant === "flat"
+        ? "overflow-hidden"
+        : "bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl mt-6 overflow-hidden"
+    }>
       <button
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 cursor-pointer"

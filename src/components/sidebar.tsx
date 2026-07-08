@@ -11,6 +11,12 @@ import {
   TicketIcon,
   PlusIcon,
   UsersIcon,
+  UserIcon,
+  BuildingIcon,
+  HeadsetIcon,
+  GroupsIcon,
+  UserMinusIcon,
+  DocumentIcon,
   TagIcon,
   PaletteIcon,
   BookIcon,
@@ -22,10 +28,18 @@ import {
   MenuIcon,
 } from "@/components/icons";
 
+// Every nav row needs a visually distinct glyph so collapsed-mode users
+// can still recognize each surface. Previously customers / organizations
+// / team-members / groups all shared UsersIcon — indistinguishable when
+// only the icon is visible.
 export type NavIconKey =
   | "overview"
   | "tickets"
   | "newTicket"
+  | "customers"
+  | "organizations"
+  | "teamMembers"
+  | "groups"
   | "team"
   | "categories"
   | "fields"
@@ -33,6 +47,7 @@ export type NavIconKey =
   | "branding"
   | "kb"
   | "audit"
+  | "deletions"
   | "analytics"
   | "super";
 
@@ -40,13 +55,20 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   overview: HomeIcon,
   tickets: TicketIcon,
   newTicket: PlusIcon,
+  customers: UserIcon,
+  organizations: BuildingIcon,
+  teamMembers: HeadsetIcon,
+  groups: GroupsIcon,
+  // Legacy alias — anywhere still passing "team" gets the multi-user
+  // glyph. New nav rows should pick a specific icon above.
   team: UsersIcon,
   categories: TagIcon,
   fields: SlidersIcon,
   forms: ClipboardIcon,
   branding: PaletteIcon,
   kb: BookIcon,
-  audit: ClipboardIcon,
+  audit: DocumentIcon,
+  deletions: UserMinusIcon,
   analytics: ChartBarIcon,
   super: ShieldIcon,
 };

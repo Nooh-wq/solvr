@@ -3,14 +3,13 @@ import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
 import { getPriorActivityForClient, getOrgActivity } from "@/actions/priorActivity";
-import { OrganizationCard } from "./organization-card";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
 import { FilesAndLinksPanel } from "@/components/files-and-links-panel";
 import { TicketPeoplePanel } from "@/components/ticket-people-panel";
 import { CustomFieldsEditor } from "@/components/custom-fields-editor";
-import { ClientProfileCard } from "./client-profile-card";
+import { ContactCard } from "./contact-card";
 import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
 import { CopilotPanel } from "./copilot-panel";
@@ -88,74 +87,112 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
         />
       </div>
 
-      <div className="lg:col-span-1">
-        <AgentControls
-          ticketId={ticket.id}
-          status={ticket.status}
-          priority={ticket.priority}
-          assignedToId={ticket.assignedTeamMemberId}
-          agents={agents.map((a) => ({ id: a.id, name: a.name ?? a.email }))}
-        />
+      {/*
+        Right rail — flattened from the previous 8-box stack. The rule
+        is: everything is a labeled section inside a shared card when
+        the section shows structured content, and a flat block when
+        it's just a properties list. Copilot keeps its own card because
+        it's the highest-affordance surface in this rail.
+      */}
+      <div className="lg:col-span-1 space-y-4">
+        {/* Properties: three inline rows, no card. */}
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl px-4 py-2">
+          <AgentControls
+            ticketId={ticket.id}
+            status={ticket.status}
+            priority={ticket.priority}
+            assignedToId={ticket.assignedTeamMemberId}
+            agents={agents.map((a) => ({ id: a.id, name: a.name ?? a.email }))}
+          />
+        </div>
 
-        <ClientProfileCard
+        {/* Contact = client identity + org line + prior activity + ticket meta. */}
+        <ContactCard
           client={{
             name: clientName,
             email: ticket.client?.email ?? "",
-            company: ticket.organization?.name ?? null,
             avatarUrl: null,
-            // Z3.5 — link into the deep profile page when the requester is
-            // a real EndUser. Guest / legacy / TM-requester tickets don't
-            // have a profile URL and just get the classic card.
             profileHref: ticket.clientEndUserId
               ? `/admin/users/${ticket.clientEndUserId}`
               : null,
           }}
+          organization={
+            ticket.organization && ticket.organizationId
+              ? {
+                  id: ticket.organizationId,
+                  name: ticket.organization.name,
+                  openTicketCount: orgActivity?.openTicketCount ?? 0,
+                }
+              : null
+          }
+          priorActivity={priorActivity}
           ticketMeta={{
             createdAt: ticket.createdAt.toISOString(),
             source: ticket.source,
             category: ticket.category?.name ?? null,
           }}
-          priorActivity={priorActivity}
         />
 
-        {ticket.organization && ticket.organizationId && (
-          <OrganizationCard
-            organizationId={ticket.organizationId}
-            name={ticket.organization.name}
-            openTicketCount={orgActivity?.openTicketCount ?? 0}
-          />
+        {/* All custom fields under one shared card with subsection headings. */}
+        {(ticketFields.length > 0 ||
+          (ticket.clientEndUserId && userFields.length > 0) ||
+          (ticket.organizationId && orgFields.length > 0)) && (
+          <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 space-y-4">
+            <CustomFieldsEditor
+              title="Ticket fields"
+              rows={ticketFields}
+              targetId={ticket.id}
+              variant="flat"
+            />
+            {ticket.clientEndUserId && userFields.length > 0 && (
+              <div className="border-t border-[var(--color-neutral-200)] dark:border-white/5 pt-4">
+                <CustomFieldsEditor
+                  title="Requester fields"
+                  rows={userFields}
+                  targetId={ticket.clientEndUserId}
+                  variant="flat"
+                />
+              </div>
+            )}
+            {ticket.organizationId && orgFields.length > 0 && (
+              <div className="border-t border-[var(--color-neutral-200)] dark:border-white/5 pt-4">
+                <CustomFieldsEditor
+                  title="Organization fields"
+                  rows={orgFields}
+                  targetId={ticket.organizationId}
+                  variant="flat"
+                />
+              </div>
+            )}
+          </div>
         )}
 
-        <CustomFieldsEditor title="Ticket fields" rows={ticketFields} targetId={ticket.id} />
-        {ticket.clientEndUserId ? (
-          <CustomFieldsEditor
-            title="Requester fields"
-            rows={userFields}
-            targetId={ticket.clientEndUserId}
+        {/* People + Files under one shared card with hairline divider. */}
+        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4">
+          <TicketPeoplePanel
+            ticketId={ticket.id}
+            initialGuests={guests}
+            variant="flat"
           />
-        ) : null}
-        {ticket.organizationId ? (
-          <CustomFieldsEditor
-            title="Organization fields"
-            rows={orgFields}
-            targetId={ticket.organizationId}
-          />
-        ) : null}
-
-        <TicketPeoplePanel ticketId={ticket.id} initialGuests={guests} />
-
-        <FilesAndLinksPanel
-          files={ticket.attachments.map((a) => ({
-            id: a.id,
-            fileName: a.fileName,
-            mimeType: a.mimeType,
-            sizeBytes: a.sizeBytes,
-            url: a.fileUrl,
-            uploadedAt: a.uploadedAt.toISOString(),
-            uploadedByName: a.uploadedBy?.name ?? null,
-          }))}
-          messages={ticket.messages.map((m) => ({ body: m.body, createdAt: m.createdAt.toISOString() }))}
-        />
+          <div className="border-t border-[var(--color-neutral-200)] dark:border-white/5 mt-4 pt-3 -mx-4 px-4">
+            <FilesAndLinksPanel
+              files={ticket.attachments.map((a) => ({
+                id: a.id,
+                fileName: a.fileName,
+                mimeType: a.mimeType,
+                sizeBytes: a.sizeBytes,
+                url: a.fileUrl,
+                uploadedAt: a.uploadedAt.toISOString(),
+                uploadedByName: a.uploadedBy?.name ?? null,
+              }))}
+              messages={ticket.messages.map((m) => ({
+                body: m.body,
+                createdAt: m.createdAt.toISOString(),
+              }))}
+              variant="flat"
+            />
+          </div>
+        </div>
 
         <CopilotPanel ticketId={ticket.id} />
       </div>

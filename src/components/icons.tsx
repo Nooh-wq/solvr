@@ -69,6 +69,76 @@ export function UsersIcon(props: IconProps) {
   );
 }
 
+// Single-user silhouette — Customers surface (one end-user per row).
+export function UserIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="7" r="3" />
+      <path d="M4 17c0-3 2.7-5 6-5s6 2 6 5" />
+    </svg>
+  );
+}
+
+// Building — Organizations surface. Distinct silhouette from UsersIcon so
+// collapsed-sidebar users can tell customers/orgs/team-members apart at
+// a glance.
+export function BuildingIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 17V4h9v13" />
+      <path d="M13 8h3v9" />
+      <path d="M2.5 17h15" />
+      <path d="M6.5 7h1.5M6.5 10h1.5M6.5 13h1.5M10 7h1.5M10 10h1.5M10 13h1.5" />
+    </svg>
+  );
+}
+
+// Headset — Team Members surface (support staff).
+export function HeadsetIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 12v-2a6 6 0 0 1 12 0v2" />
+      <path d="M3.5 12h2.5v4H4a.5.5 0 0 1-.5-.5V12Z" />
+      <path d="M16.5 12H14v4h2a.5.5 0 0 0 .5-.5V12Z" />
+      <path d="M14 16v.5a2 2 0 0 1-2 2h-1.5" />
+    </svg>
+  );
+}
+
+// 2x2 grid — Groups surface (cluster of team members forming a set).
+export function GroupsIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="3" width="6" height="6" rx="1.2" />
+      <rect x="11" y="3" width="6" height="6" rx="1.2" />
+      <rect x="3" y="11" width="6" height="6" rx="1.2" />
+      <rect x="11" y="11" width="6" height="6" rx="1.2" />
+    </svg>
+  );
+}
+
+// User with a minus sign — Account deletion requests queue.
+export function UserMinusIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="8" cy="7" r="2.8" />
+      <path d="M3 17c0-2.7 2.2-4.5 5-4.5s5 1.8 5 4.5" />
+      <path d="M13 8h5" />
+    </svg>
+  );
+}
+
+// Document/list — Audit log surface. Distinct from ClipboardIcon (Forms).
+export function DocumentIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 3h7l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+      <path d="M12 3v3h3" />
+      <path d="M7 10h6M7 13h6M7 16h4" />
+    </svg>
+  );
+}
+
 export function TagIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

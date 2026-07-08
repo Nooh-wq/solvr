@@ -47,12 +47,30 @@ export function CustomFieldsEditor({
   title,
   rows,
   targetId,
+  variant = "card",
 }: {
   title: string;
   rows: EditableRow[];
   targetId: string;
+  /** "flat" drops the card chrome — used by the ticket-detail rail
+   *  where several sections share one outer card. */
+  variant?: "card" | "flat";
 }) {
   if (rows.length === 0) return null;
+  if (variant === "flat") {
+    return (
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-neutral-500)] mb-2">
+          {title}
+        </div>
+        <div className="space-y-3">
+          {rows.map((r) => (
+            <EditableField key={r.definition.id} row={r} targetId={targetId} />
+          ))}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 mb-4">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-neutral-500)] mb-3">

@@ -15,7 +15,15 @@ import { UserPlusIcon } from "@/components/icons";
  * workspace and the client portal: an agent might add a developer for
  * assistance, a client might add a colleague, same mechanism either way.
  */
-export function TicketPeoplePanel({ ticketId, initialGuests }: { ticketId: string; initialGuests: TicketGuestSummary[] }) {
+export function TicketPeoplePanel({
+  ticketId,
+  initialGuests,
+  variant = "card",
+}: {
+  ticketId: string;
+  initialGuests: TicketGuestSummary[];
+  variant?: "card" | "flat";
+}) {
   const { toast } = useToast();
   const [guests, setGuests] = useState(initialGuests);
   const [open, setOpen] = useState(false);
@@ -54,7 +62,11 @@ export function TicketPeoplePanel({ ticketId, initialGuests }: { ticketId: strin
   }
 
   return (
-    <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 mt-6">
+    <div className={
+      variant === "flat"
+        ? ""
+        : "bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 mt-6"
+    }>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-[13px] font-semibold">People</h3>
         <button
