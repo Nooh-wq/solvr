@@ -73,6 +73,18 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
           "disabled:opacity-60 disabled:cursor-not-allowed",
           // Zero the space Safari reserves for its native caret.
           "[&::-ms-expand]:hidden",
+          // Tell the browser which color scheme to render its native
+          // option list in — otherwise Chromium/Firefox show pale grey
+          // text on a light popup, which is unreadable inside our dark
+          // shell. `light dark` follows the current CSS color-scheme
+          // (which our theme provider sets on <html>), so options
+          // become white-on-dark in dark mode and black-on-white in
+          // light mode automatically.
+          "[color-scheme:light_dark]",
+          // Explicit option colors as a fallback for browsers that
+          // don't honor color-scheme on <select> yet — options render
+          // as a proper solid surface with foreground text.
+          "[&>option]:bg-[var(--color-surface)] [&>option]:text-[var(--foreground)]",
           className
         )}
         {...props}
