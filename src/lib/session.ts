@@ -520,3 +520,43 @@ export async function verifyCsatToken(token: string): Promise<CsatTokenPayload |
     return null;
   }
 }
+
+// M13 gap 2 — read-only analytics share tokens. Same HMAC pattern as
+// the CSAT link; carries the tenantId + the encoded filter blob so the
+// public /reports/shared/[token] renderer can hydrate the widgets
+// without ever hitting the session cookie. 30-day expiry (matches the
+// CSAT default: low-stakes analytics snapshot, never a mutation surface).
+
+const ANALYTICS_SHARE_DURATION_SECONDS = 60 * 60 * 24 * 30;
+
+export type AnalyticsShareTokenPayload = {
+  tenantId: string;
+  filters: Record<string, unknown>;
+};
+
+export async function signAnalyticsShareToken(
+  payload: AnalyticsShareTokenPayload
+): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "analytics_share" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${ANALYTICS_SHARE_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyAnalyticsShareToken(
+  token: string
+): Promise<AnalyticsShareTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "analytics_share") return null;
+    if (typeof payload.tenantId !== "string") return null;
+    if (typeof payload.filters !== "object" || payload.filters === null) return null;
+    return {
+      tenantId: payload.tenantId,
+      filters: payload.filters as Record<string, unknown>,
+    };
+  } catch {
+    return null;
+  }
+}

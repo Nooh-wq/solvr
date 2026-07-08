@@ -55,6 +55,7 @@ export function buildAdminNav({
   const top: NavLink[] = [
     { href: "/admin", label: "Overview", icon: "overview" },
     { href: "/admin/analytics", label: "Analytics", icon: "analytics" },
+    { href: "/admin/reports", label: "Reports", icon: "analytics" },
     { href: "/agent", label: "Queue", icon: "tickets" },
   ];
 

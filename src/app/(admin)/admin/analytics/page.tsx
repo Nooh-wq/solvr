@@ -5,11 +5,49 @@ import { InteractiveRegionMap } from "@/components/region-map";
 import { FilterBar } from "./filter-bar";
 import { AgentLeaderboard } from "./agent-leaderboard";
 
-function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+// M13.2 — KPI card renders only when it has a value AND (optionally)
+// a prior value to compare to. Nulls are omitted, not shown as "—" —
+// spec §3 "Do NOT show KPI cards for data you don't have."
+function StatCard({
+  label,
+  value,
+  sub,
+  delta,
+  isBetter,
+}: {
+  label: string;
+  value: string | number | null;
+  sub?: string;
+  delta?: number | null;
+  /** For directional colour: for "Avg first response" a smaller number is better. Defaults to "up is better". */
+  isBetter?: (delta: number) => boolean;
+}) {
+  if (value === null || value === "—") return null;
+  const arrow = delta === null || delta === undefined
+    ? null
+    : delta === 0
+      ? { symbol: "→", tone: "neutral" as const }
+      : (isBetter ?? ((d) => d > 0))(delta)
+        ? { symbol: delta > 0 ? "▲" : "▼", tone: "good" as const }
+        : { symbol: delta > 0 ? "▲" : "▼", tone: "bad" as const };
+  const toneClass =
+    arrow?.tone === "good"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : arrow?.tone === "bad"
+        ? "text-red-600 dark:text-red-400"
+        : "text-[var(--color-neutral-500)]";
   return (
     <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <p className="uppercase-label text-[11px] text-[var(--color-neutral-600)] mb-2">{label}</p>
-      <p className="text-2xl font-bold font-mono">{value}</p>
+      <div className="flex items-baseline gap-2">
+        <p className="text-2xl font-bold font-mono">{value}</p>
+        {arrow && delta !== 0 && (
+          <span className={`text-[11px] font-medium ${toneClass}`}>
+            {arrow.symbol} {Math.abs(delta ?? 0).toFixed(delta && Math.abs(delta) < 10 ? 1 : 0)}
+            {typeof value === "string" && value.endsWith("%") ? "pp" : ""}
+          </span>
+        )}
+      </div>
       {sub && <p className="text-[11px] text-[var(--color-neutral-500)] mt-1">{sub}</p>}
     </div>
   );
@@ -28,11 +66,24 @@ const CHANNEL_VALUES = ["portal", "chatbot", "email"] as const;
 const PRIORITY_VALUES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
 function pct(v: number | null) {
-  return v !== null ? `${Math.round(v * 100)}%` : "—";
+  return v !== null ? `${Math.round(v * 100)}%` : null;
 }
 
 function hours(v: number | null) {
-  return v !== null ? `${v.toFixed(1)}h` : "—";
+  return v !== null ? `${v.toFixed(1)}h` : null;
+}
+
+// M13.2 — pct-point delta between two 0..1 rates, or null if either
+// side is null. Returns integer percent points; the arrow renderer
+// tags "pp" onto values that are already percentages.
+function pctDelta(now: number | null, prev: number | null): number | null {
+  if (now === null || prev === null) return null;
+  return Math.round((now - prev) * 100);
+}
+
+function hoursDelta(now: number | null, prev: number | null): number | null {
+  if (now === null || prev === null) return null;
+  return now - prev;
 }
 
 export default async function AdminAnalyticsPage({
@@ -59,6 +110,11 @@ export default async function AdminAnalyticsPage({
     categoryId: sp.categoryId,
     priority,
     assignedToId: sp.assignedToId as "unassigned" | undefined,
+    organizationId: sp.organizationId,
+    groupId: sp.groupId,
+    tag: sp.tag,
+    customFieldDefinitionId: sp.customFieldDefinitionId,
+    customFieldValue: sp.customFieldValue,
   });
 
   const categorySegments = data.categoryBreakdown.map((c, i) => ({
@@ -72,30 +128,76 @@ export default async function AdminAnalyticsPage({
     color: CHANNEL_COLORS[c.label] ?? "var(--color-neutral-400)",
   }));
 
+  // M13.2 — assemble delta values once so JSX stays readable.
+  const totalDelta = data.kpis.totalInRange - data.priorKpis.totalInRange;
+  const resolvedDelta = data.kpis.resolvedInRange - data.priorKpis.resolvedInRange;
+  const firstResponseDelta = hoursDelta(
+    data.kpis.avgFirstResponseHours,
+    data.priorKpis.avgFirstResponseHours
+  );
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Analytics</h1>
 
       <Suspense fallback={null}>
-        <FilterBar current={data.filter} categories={data.filterOptions.categories} agents={data.filterOptions.agents} />
+        <FilterBar
+          current={data.filter}
+          categories={data.filterOptions.categories}
+          agents={data.filterOptions.agents}
+          organizations={data.filterOptions.organizations}
+          groups={data.filterOptions.groups}
+          tags={data.filterOptions.tags}
+        />
       </Suspense>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total tickets" value={data.kpis.totalInRange} />
-        <StatCard label="Open" value={data.kpis.openInRange} sub={`${data.kpis.unassignedOpenInRange} unassigned`} />
-        <StatCard label="Avg first response" value={hours(data.kpis.avgFirstResponseHours)} />
-        <StatCard label="Avg resolution time" value={hours(data.kpis.avgResolutionHours)} />
+        <StatCard
+          label="Total tickets"
+          value={data.kpis.totalInRange}
+          delta={data.priorKpis.totalInRange > 0 ? totalDelta : null}
+        />
+        <StatCard
+          label="Open"
+          value={data.kpis.openInRange}
+          sub={`${data.kpis.unassignedOpenInRange} unassigned`}
+        />
+        <StatCard
+          label="Resolved"
+          value={data.kpis.resolvedInRange}
+          delta={data.priorKpis.resolvedInRange > 0 ? resolvedDelta : null}
+        />
+        <StatCard
+          label="Avg first response"
+          value={hours(data.kpis.avgFirstResponseHours)}
+          delta={firstResponseDelta}
+          // Lower first-response is better — invert the "up is better" default.
+          isBetter={(d) => d < 0}
+        />
+        <StatCard
+          label="Avg resolution time"
+          value={hours(data.kpis.avgResolutionHours)}
+        />
         <StatCard
           label="SLA compliance"
           value={pct(data.kpis.slaComplianceRate)}
-          sub={`${data.kpis.slaAtRiskCount} at risk`}
+          sub={
+            data.kpis.slaComplianceRate !== null
+              ? `${data.kpis.slaAtRiskCount} at risk`
+              : undefined
+          }
         />
-        <StatCard label="CSAT" value={data.kpis.avgCsatRating !== null ? `${data.kpis.avgCsatRating.toFixed(1)}/5` : "—"} />
-        <StatCard label="AI deflection" value={pct(data.kpis.aiDeflectionRate)} sub="Based on date range only" />
+        <StatCard label="CSAT" value={data.kpis.avgCsatRating !== null ? `${data.kpis.avgCsatRating.toFixed(1)}/5` : null} />
+        <StatCard label="AI deflection" value={pct(data.kpis.aiDeflectionRate)} />
         <StatCard
           label="Reopen rate"
           value={pct(data.kpis.reopenRate)}
-          sub={`of ${data.kpis.resolvedInRange} resolved`}
+          sub={
+            data.kpis.reopenRate !== null
+              ? `of ${data.kpis.resolvedInRange} resolved`
+              : undefined
+          }
+          isBetter={(d) => d < 0}
         />
       </div>
 

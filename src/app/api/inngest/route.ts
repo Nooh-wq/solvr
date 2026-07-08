@@ -7,6 +7,8 @@ import { buildDataExport } from "@/lib/inngest/functions/build-data-export";
 import { runScheduledAutomations } from "@/lib/inngest/functions/run-automations";
 import { emitSlaEvents } from "@/lib/inngest/functions/emit-sla-events";
 import { sendCsatQueue } from "@/lib/inngest/functions/send-csat-queue";
+import { buildTicketRollup } from "@/lib/inngest/functions/build-ticket-rollup";
+import { sendReportSchedules } from "@/lib/inngest/functions/send-report-schedules";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -18,5 +20,7 @@ export const { GET, POST, PUT } = serve({
     runScheduledAutomations,
     emitSlaEvents,
     sendCsatQueue,
+    buildTicketRollup,
+    sendReportSchedules,
   ],
 });
