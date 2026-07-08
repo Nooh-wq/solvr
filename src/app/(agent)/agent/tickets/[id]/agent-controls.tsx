@@ -104,12 +104,16 @@ export function AgentControls({
 }
 
 function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
+  // Fixed-width label column so each row's value starts at the same
+  // x-position — the previous justify-between layout let labels of
+  // different lengths (STATUS vs ASSIGNEE) push the values to
+  // slightly different columns, which looked ragged.
   return (
-    <div className="flex items-center justify-between gap-3 py-2">
-      <Label className="text-[12px] text-[var(--color-neutral-500)] font-medium">
+    <div className="flex items-center gap-3 py-2">
+      <Label className="w-20 shrink-0 text-[12px] text-[var(--color-neutral-500)] font-medium">
         {label}
       </Label>
-      <div className="min-w-0 flex-1 text-right">{children}</div>
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
