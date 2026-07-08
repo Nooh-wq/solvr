@@ -4,7 +4,7 @@
 // downloadable filename.
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { withRls } from "@/lib/db";
 import { verifyDataExportToken } from "@/lib/session";
 
 export async function GET(
@@ -17,16 +17,22 @@ export async function GET(
     return NextResponse.json({ error: "This link is invalid or has expired." }, { status: 404 });
   }
 
-  // Not RLS-scoped — the token itself is the auth here. Tenant + subject
-  // pinning on the row means a token forged for another subject can't
-  // pull this row.
-  const row = await prisma.dataExportRequest.findFirst({
-    where: {
-      id: payload.requestId,
-      tenantId: payload.tenantId,
-      subjectId: payload.subjectId,
-    },
-  });
+  // Runs through withRls so the tenant_isolation policy on
+  // data_export_requests passes — the token authenticated the tenant
+  // and subject already, so this scope is a formality, not the security
+  // check. Row-level tenant+subject filters are still applied as
+  // defense in depth.
+  const row = await withRls(
+    { tenantId: payload.tenantId, userId: payload.subjectId, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.dataExportRequest.findFirst({
+        where: {
+          id: payload.requestId,
+          tenantId: payload.tenantId,
+          subjectId: payload.subjectId,
+        },
+      })
+  );
   if (!row || row.status !== "READY" || !row.payload) {
     return NextResponse.json({ error: "This export isn't ready yet." }, { status: 404 });
   }

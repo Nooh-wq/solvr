@@ -7,27 +7,49 @@ import { inngest } from "../client";
 import { prisma, withRls } from "@/lib/db";
 import { sendSystemNotice } from "@/lib/email/send";
 import { systemContext, getEndUsersByIds, getTeamMembersByIds } from "@/lib/shared-platform";
-import { readAllPendingDigestSubjects } from "@/lib/notification-prefs";
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 }
 
 export const sendDailyDigests = inngest.createFunction(
-  { id: "send-daily-digests", triggers: { cron: "0 9 * * *" } },
+  {
+    id: "send-daily-digests",
+    // Both triggers: the daily 09:00 UTC cron drains for real users, and
+    // the ad-hoc event lets ops/tests re-drain on demand without waiting
+    // for the next cron tick.
+    triggers: [
+      { cron: "0 9 * * *" },
+      { event: "notifications/daily-digest.run-now" },
+    ],
+  },
   async ({ step }) => {
-    const subjects = await step.run("list-pending", () => readAllPendingDigestSubjects());
-
-    // Group by tenant so we set up RLS once per tenant and can batch the
-    // wrapper email/name lookup.
-    const byTenant = new Map<string, string[]>();
-    for (const s of subjects) {
-      if (!byTenant.has(s.tenantId)) byTenant.set(s.tenantId, []);
-      byTenant.get(s.tenantId)!.push(s.subjectId);
-    }
+    // digest_queue is RLS-scoped, so we can't ask "which subjects have
+    // pending items" globally. Instead: iterate tenants (public-read),
+    // then per tenant use a scoped withRls to read distinct subjects.
+    // Same shape as auto-close.ts's per-tenant loop.
+    const tenants = await step.run("list-tenants", () =>
+      prisma.tenant.findMany({ select: { id: true } })
+    );
 
     let totalSent = 0;
-    for (const [tenantId, subjectIds] of byTenant) {
+    for (const { id: tenantId } of tenants) {
+      const subjectIds = await withRls(
+        { tenantId, userId: null, role: "SUPER_ADMIN" },
+        async (tx) => {
+          const rows = await tx.digestQueue.findMany({
+            where: { tenantId },
+            distinct: ["subjectId"],
+            select: { subjectId: true },
+          });
+          return rows.map((r) => r.subjectId);
+        }
+      );
+      if (subjectIds.length === 0) continue;
+
+      // (fallthrough) — the original per-tenant step body runs below.
+      // Passing subjectIds down keeps the step.run boundary intact for
+      // Inngest's retry semantics.
       const sentInTenant = await step.run(`digest-tenant-${tenantId}`, async () => {
         const wrapperCtx = systemContext(tenantId);
         const [endUsers, teamMembers, branding] = await Promise.all([

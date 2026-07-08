@@ -15,7 +15,7 @@
 // cache miss + no row; that's OK, it just returns the default without
 // creating anything.
 
-import { prisma, withRls } from "@/lib/db";
+import { withRls } from "@/lib/db";
 import type { PrismaClient } from "@/generated/prisma";
 
 export type EmailEventKey =
@@ -199,16 +199,7 @@ export async function writeMyPreferences(
   );
 }
 
-/**
- * Cross-tenant drain path used by the digest Inngest job. Not RLS-scoped
- * on the read (it needs to see every tenant to pick up work) — the
- * import is prisma directly. The write-and-delete cycle IS RLS-scoped
- * per tenant so nothing crosses boundaries.
- */
-export async function readAllPendingDigestSubjects(): Promise<Array<{ tenantId: string; subjectId: string }>> {
-  const rows = await prisma.digestQueue.findMany({
-    distinct: ["tenantId", "subjectId"],
-    select: { tenantId: true, subjectId: true },
-  });
-  return rows;
-}
+// The Inngest daily-digest job used to call a global "list pending"
+// helper from here, but that hit RLS as expected. It now iterates
+// tenants directly in the job (see send-daily-digests.ts) so this
+// module stays purely per-subject.
