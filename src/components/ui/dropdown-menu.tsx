@@ -46,14 +46,25 @@ function useDropdown() {
   return ctx;
 }
 
-export function DropdownMenu({ children, defaultOpen = false }: { children: ReactNode; defaultOpen?: boolean }) {
+export function DropdownMenu({
+  children,
+  defaultOpen = false,
+  className = "",
+}: {
+  children: ReactNode;
+  defaultOpen?: boolean;
+  /** Overrides the default `relative inline-block` wrapper — the
+   *  DropdownSelect wrapper passes `relative block w-full` so its
+   *  outer width class propagates all the way down to the trigger. */
+  className?: string;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const triggerId = useId();
   const contentId = useId();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   return (
     <DropdownCtx.Provider value={{ open, setOpen, triggerId, contentId, triggerRef }}>
-      <div className="relative inline-block">{children}</div>
+      <div className={className || "relative inline-block"}>{children}</div>
     </DropdownCtx.Provider>
   );
 }
@@ -326,7 +337,7 @@ export function DropdownSelect({
   const current = useMemo(() => options.find((o) => o.value === value), [options, value]);
   return (
     <div className={className}>
-      <DropdownMenu>
+      <DropdownMenu className="relative block w-full">
         <DropdownMenuTrigger
           className={`justify-between w-full ${triggerClassName}`}
           disabled={disabled}
