@@ -41,50 +41,38 @@ export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLab
 }
 
 /**
- * Glass-style Select. Wraps a native <select> — we keep the native
- * option list for accessibility + platform correctness, but hide the
- * browser caret via `appearance-none` and render our own chevron so
- * spacing stays consistent across Chrome/Firefox/Safari (native carets
- * hug the right edge with no reliable way to add padding).
- *
- * The `--glass` background layers a translucent surface tint over
- * whatever's behind (backdrop-blur + a subtle white/black wash) so the
- * control still reads as glassy in both light and dark modes without
- * hardcoding a color.
+ * Solid Select. Wraps a native <select> — kept native for accessibility
+ * and the platform's option list — but with a custom chevron so caret
+ * spacing stays consistent across browsers. Surface + border match the
+ * rest of the design system (cards, inputs). Options inherit the
+ * current color-scheme so the popup is readable in both themes.
  */
 export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  // Apply caller className to the wrapper AND the inner select so
+  // Caller className goes on the wrapper AND the inner select so
   // width / height / margin utilities (`h-9`, `w-40`, `mt-1`, …)
   // resize the whole control while text/color utilities still hit
-  // the select itself. Inner defaults use w-full/h-10 so a wrapper
+  // the select itself. Inner defaults are w-full/h-full so a wrapper
   // sized via className fills correctly.
   return (
     <div className={cn("relative h-10 w-full", className)}>
       <select
         className={cn(
           "appearance-none h-full w-full rounded-xl pl-3 pr-9 text-sm",
-          // Glass surface: subtle border, translucent background, blur.
-          "border border-black/10 dark:border-white/10",
-          "bg-white/60 dark:bg-white/[0.04] backdrop-blur",
-          "text-[var(--foreground)]",
-          "shadow-[inset_0_1px_0_rgba(255,255,255,0.4)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
+          "border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[var(--foreground)]",
           "focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30 focus:border-[var(--color-primary)]/60",
           "transition-colors cursor-pointer",
           "disabled:opacity-60 disabled:cursor-not-allowed",
           // Zero the space Safari reserves for its native caret.
           "[&::-ms-expand]:hidden",
-          // Tell the browser which color scheme to render its native
-          // option list in — otherwise Chromium/Firefox show pale grey
-          // text on a light popup, which is unreadable inside our dark
-          // shell. `light dark` follows the current CSS color-scheme
-          // (which our theme provider sets on <html>), so options
-          // become white-on-dark in dark mode and black-on-white in
-          // light mode automatically.
+          // Follow the current color-scheme so the native option
+          // popup renders as dark-on-dark or light-on-light, not
+          // pale grey text on a light popup inside our dark shell.
           "[color-scheme:light_dark]",
-          // Explicit option colors as a fallback for browsers that
-          // don't honor color-scheme on <select> yet — options render
-          // as a proper solid surface with foreground text.
-          "[&>option]:bg-[var(--color-surface)] [&>option]:text-[var(--foreground)]",
+          // Explicit option colors + padding so the popup rows have
+          // breathing room instead of hugging the option box edges,
+          // and stay readable in browsers that don't yet honor
+          // color-scheme on <select>.
+          "[&>option]:bg-[var(--color-surface)] [&>option]:text-[var(--foreground)] [&>option]:py-1.5",
           className
         )}
         {...props}
