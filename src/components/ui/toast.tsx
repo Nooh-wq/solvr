@@ -11,6 +11,13 @@ export type ToastInput = {
   variant?: ToastVariant;
   /** ms before auto-dismiss; 0 disables auto-dismiss. Default 4000. */
   duration?: number;
+  /**
+   * Optional inline action button rendered next to the dismiss icon.
+   * Used by Z6.4 macros for the 10s undo affordance — the toast's
+   * duration doubles as the undo window, and dismissing clears the
+   * action just like a real user cancel would.
+   */
+  action?: { label: string; onClick: () => void };
 };
 
 type ToastItem = ToastInput & { id: number };
@@ -75,6 +82,17 @@ function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss: () => vo
         <p className="text-[13px] font-semibold text-[var(--foreground)]">{toast.title}</p>
         {toast.description && <p className="text-[12px] text-[var(--color-neutral-600)] mt-0.5">{toast.description}</p>}
       </div>
+      {toast.action && (
+        <button
+          onClick={() => {
+            toast.action?.onClick();
+            onDismiss();
+          }}
+          className="shrink-0 text-[12px] font-semibold text-[var(--color-primary)] hover:underline cursor-pointer px-1"
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={onDismiss}
         aria-label="Dismiss"

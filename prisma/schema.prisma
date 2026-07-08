@@ -131,6 +131,7 @@ model Tenant {
   surveyResponses      SurveyResponse[]
   savedViews           SavedView[]
   cannedResponses      CannedResponse[]
+  macros               Macro[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -342,6 +343,29 @@ model CannedResponse {
   @@unique([tenantId, ownerTeamMemberId, shortcut])
   @@index([tenantId, ownerTeamMemberId])
   @@map("canned_responses")
+}
+
+// Z6.4 — Macros. Structured JSON actions (not raw SQL — spec §3),
+// applied against a specific ticket from the ticket-detail composer.
+// Personal or tenant-shared (same nullable-owner pattern as SavedView).
+// Every action's schema is validated by the macro engine before apply;
+// unknown action types are rejected server-side.
+model Macro {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerTeamMemberId String?
+  name              String
+  description       String?
+  // Actions JSON. Shape: [{ type: "add_internal_note", body: string }
+  //   | { type: "change_status", status: TicketStatus }
+  //   | { type: "insert_reply_template", body: string }].
+  actions           Json     @default("[]")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([tenantId, ownerTeamMemberId])
+  @@map("macros")
 }
 
 model Message {

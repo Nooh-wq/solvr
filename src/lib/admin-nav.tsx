@@ -36,6 +36,7 @@ export function buildAdminNav({
     { href: "/admin/fields", label: "Fields", icon: "fields" },
     { href: "/admin/forms", label: "Forms", icon: "forms" },
     { href: "/admin/canned-responses", label: "Canned responses", icon: "forms" },
+    { href: "/admin/macros", label: "Macros", icon: "forms" },
     { href: "/admin/placeholders", label: "Placeholders", icon: "fields" },
     { href: "/admin/branding", label: "Branding", icon: "branding" },
     { href: "/admin/kb", label: "Knowledge base", icon: "kb" },

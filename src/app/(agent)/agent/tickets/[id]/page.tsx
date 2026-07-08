@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listCannedResponses } from "@/actions/cannedResponses";
+import { listMacros } from "@/actions/macros";
+import { MacroLauncher } from "./macro-launcher";
 import { getTenantById } from "@/lib/tenant";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
@@ -19,12 +21,13 @@ import { CopilotPanel } from "./copilot-panel";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [session, ticket, agents, guests, cannedResponses] = await Promise.all([
+  const [session, ticket, agents, guests, cannedResponses, macros] = await Promise.all([
     requireSession({ minRole: "AGENT" }),
     getTicket(id),
     listAgents(),
     listTicketGuests(id),
     listCannedResponses(),
+    listMacros(),
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
@@ -136,6 +139,17 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             // cards entirely.
             headerActions={
               <>
+                <MacroLauncher
+                  ticketId={ticket.id}
+                  macros={macros.map((m) => ({
+                    id: m.id,
+                    name: m.name,
+                    description: m.description,
+                    actions: m.actions,
+                    isShared: m.isShared,
+                  }))}
+                  placeholderContext={placeholderContext}
+                />
                 <TicketPeoplePanel
                   ticketId={ticket.id}
                   initialGuests={guests}
