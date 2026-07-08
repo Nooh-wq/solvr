@@ -19,16 +19,19 @@ import { ContactCard } from "./contact-card";
 import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
 import { CopilotPanel } from "./copilot-panel";
+import { EscalateRail } from "./escalate-rail";
+import { listEscalationPathsForTicket } from "@/actions/escalations";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [session, ticket, agents, guests, cannedResponses, macros] = await Promise.all([
+  const [session, ticket, agents, guests, cannedResponses, macros, escalationPaths] = await Promise.all([
     requireSession({ minRole: "AGENT" }),
     getTicket(id),
     listAgents(),
     listTicketGuests(id),
     listCannedResponses(),
     listMacros(),
+    listEscalationPathsForTicket(id),
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
@@ -203,6 +206,13 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             agents={agents.map((a) => ({ id: a.id, name: a.name ?? a.email }))}
           />
         </div>
+
+        {/* Z8.4 — dynamic escalation rail. Only paths whose categoryIds
+            include this ticket's category (or are empty = all) render. */}
+        <EscalateRail
+          ticketId={ticket.id}
+          paths={escalationPaths.map((p) => ({ id: p.id, label: p.label, destKind: p.destKind }))}
+        />
 
         {/* Contact = client identity + org line + prior activity + ticket meta. */}
         <ContactCard

@@ -149,6 +149,10 @@ model Tenant {
   customFieldValues      CustomFieldValue[]
   customFieldOptions     CustomFieldOption[]
   ticketForms            TicketForm[]
+  rules                  Rule[]
+  ruleRunLogs            RuleRunLog[]
+  escalationPaths        EscalationPath[]
+  escalationLogs         EscalationLog[]
 
   @@map("tenants")
 }
@@ -1307,3 +1311,129 @@ model CoreAuditLog {
 // ===========================================================================
 // END OF STRALIS SHARED PLATFORM REFERENCE MODELS
 // ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Z8 — Workflow Engine (Triggers, Automations, Escalation Paths)
+// ---------------------------------------------------------------------------
+// One Rule table for Triggers + Automations — they share the same
+// condition/action vocabulary; only the firing pattern differs. The
+// `kind` column disambiguates and drives both the query filter (only
+// TRIGGERs load on ticket events; only AUTOMATIONs load on the scheduler
+// tick) and the editor route.
+
+enum RuleKind {
+  TRIGGER
+  AUTOMATION
+}
+
+enum TriggerEventType {
+  TICKET_CREATED
+  TICKET_UPDATED
+  TICKET_REPLIED
+  STATUS_CHANGED
+  PRIORITY_CHANGED
+  SLA_WARNING
+  SLA_BREACH
+  TAG_ADDED
+}
+
+model Rule {
+  id              String            @id @default(cuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind            RuleKind
+  name            String
+  description     String?
+  active          Boolean           @default(true)
+  // TRIGGER-only: which event fires this rule. NULL for AUTOMATION.
+  triggerEvent    TriggerEventType?
+  // AUTOMATION-only: interval hours (simple cadence — cron would be
+  // more flexible but harder to reason about for the DoD's
+  // "batch-processed, no ticket touched more than once per run").
+  intervalHours   Int?
+  // Shape: { match: "all" | "any", conditions: [{ field, op, value }] }
+  conditions      Json
+  // Shape: [{ type, ...params }] — see src/lib/rule-schema.ts
+  actions         Json
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  lastRunAt       DateTime?
+  runLogs         RuleRunLog[]
+
+  @@index([tenantId, kind, active])
+  @@index([tenantId, kind, triggerEvent])
+  @@map("rules")
+}
+
+model RuleRunLog {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ruleId        String
+  rule          Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ticketId      String?
+  // "matched" | "skipped_conditions" | "skipped_cap" | "action_failed"
+  outcome       String
+  ranActionCount Int     @default(0)
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, ruleId, createdAt])
+  @@map("rule_run_logs")
+}
+
+enum EscalationDestKind {
+  TEAM
+  WEBHOOK
+  EMAIL
+  INTEGRATION
+}
+
+enum EscalationStatus {
+  SUCCESS
+  FAILED
+}
+
+model EscalationPath {
+  id             String              @id @default(cuid())
+  tenantId       String
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  label          String
+  // Heroicon key, e.g. "alertTriangle" — free-form so a future icon
+  // set swap doesn't need a schema migration.
+  icon           String?
+  // Category ids that reveal this button. Empty array = show on
+  // every ticket. Stored as Json because Prisma+Postgres arrays of
+  // FK strings are noisy to declare and this is a small opaque list.
+  categoryIds    Json                @default("[]")
+  destKind       EscalationDestKind
+  // Shape depends on destKind:
+  //   TEAM:        { groupId, alsoSetPriority?, alsoAddTag? }
+  //   WEBHOOK:     { url, secret? }
+  //   EMAIL:       { toEmails: string[], subject?, template? }
+  //   INTEGRATION: { kind: "jira"|"github"|"linear", ... } — disabled until M19
+  destConfig     Json
+  active         Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  escalationLogs EscalationLog[]
+
+  @@index([tenantId, active])
+  @@map("escalation_paths")
+}
+
+model EscalationLog {
+  id                String            @id @default(cuid())
+  tenantId          String
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  escalationPathId  String
+  escalationPath    EscalationPath    @relation(fields: [escalationPathId], references: [id], onDelete: Cascade)
+  ticketId          String
+  actorTeamMemberId String?
+  status            EscalationStatus
+  errorMessage      String?
+  createdAt         DateTime          @default(now())
+
+  @@index([tenantId, ticketId, createdAt])
+  @@map("escalation_logs")
+}
