@@ -17,7 +17,10 @@ export default async function AgentLayout({ children }: { children: React.ReactN
   // Admin+ users see the same nav here as on /admin, so clicking Queue
   // from the admin sidebar doesn't collapse the workspace to a
   // Queue+Admin stub. Agents (no admin surface) get the minimal nav.
-  let links: NavLink[];
+  let topLinks: NavLink[];
+  let sections: ReturnType<typeof buildAdminNav>["sections"] | undefined;
+  let footer: NavLink[] | undefined;
+  let showAdminSearch = false;
   if (roleAtLeast(user.role, "ADMIN")) {
     let pendingCount = 0;
     let deletionCount = 0;
@@ -31,21 +34,28 @@ export default async function AgentLayout({ children }: { children: React.ReactN
     } catch {
       // Non-fatal — badges just don't render.
     }
-    links = buildAdminNav({
+    const nav = buildAdminNav({
       role: user.role,
       tenantType: tenant.type,
       pendingCount,
       deletionCount,
     });
+    topLinks = nav.top;
+    sections = nav.sections;
+    footer = nav.footer;
+    showAdminSearch = true;
   } else {
-    links = [{ href: "/agent", label: "Queue", icon: "tickets" }];
+    topLinks = [{ href: "/agent", label: "Queue", icon: "tickets" }];
   }
 
   return (
     <Sidebar
       productName={tenant.branding?.productName ?? "solvr"}
       logoUrl={tenant.branding?.logoUrl ?? null}
-      links={links}
+      links={topLinks}
+      sections={sections}
+      footer={footer}
+      showAdminSearch={showAdminSearch}
       userName={user.name}
       avatarUrl={user.avatarUrl}
       profileHref="/agent/account"
