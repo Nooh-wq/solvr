@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -353,10 +353,10 @@ function CreateFieldModal({
         </label>
         <label className="block">
           <div className="text-xs font-medium mb-1">Type</div>
-          <select
+          <Select
             value={type}
             onChange={(e) => setType(e.target.value as FieldType)}
-            className="w-full h-9 rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-3 text-sm"
+            className="h-9"
           >
             <option value="TEXT">Text</option>
             <option value="NUMBER">Number</option>
@@ -366,7 +366,7 @@ function CreateFieldModal({
             <option value="MULTISELECT">Multiselect</option>
             <option value="USER_LOOKUP">User lookup</option>
             <option value="ORG_LOOKUP">Organization lookup</option>
-          </select>
+          </Select>
           {isOptionType(type) ? (
             <div className="text-[11px] text-[var(--color-neutral-500)] mt-1">
               You&apos;ll add the option list after creating the field.

@@ -8,7 +8,7 @@ import { useRef, useState, useTransition } from "react";
 import { updateProfile, uploadProfilePicture } from "@/actions/profile";
 import { updateMyPreferences, type PreferencesDto } from "@/actions/preferences";
 import { Button } from "@/components/ui/button";
-import { Input, Label } from "@/components/ui/input";
+import { Input, Label, Select } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import type { UserRole as Role } from "@/lib/auth";
 
@@ -180,33 +180,31 @@ export function ProfileTab({
         <h2 className="text-[15px] font-semibold">Locale</h2>
         <div className="space-y-1.5">
           <Label htmlFor="timezone">Timezone</Label>
-          <select
+          <Select
             id="timezone"
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
-            className="w-full h-10 px-3 rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[13px] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
           >
             {TIMEZONES.map((tz) => (
               <option key={tz.value} value={tz.value}>
                 {tz.label}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="language">Language</Label>
-          <select
+          <Select
             id="language"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            className="w-full h-10 px-3 rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[13px] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
           >
             {LANGUAGES.map((l) => (
               <option key={l.value} value={l.value}>
                 {l.label}
               </option>
             ))}
-          </select>
+          </Select>
           <p className="text-[11px] text-[var(--color-neutral-500)]">
             Translations ship in a later milestone; your preference is saved now.
           </p>

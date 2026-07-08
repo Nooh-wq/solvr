@@ -6,6 +6,8 @@
 // intentionally disabled with an explanation until M2 (SLA engine)
 // ships. Spec §3: "do not fake it".
 
+import { Select } from "@/components/ui/input";
+
 export function SlaBusinessHoursStub({
   slaPolicyId,
   businessHoursId,
@@ -47,12 +49,9 @@ function Field({
       <label className="text-[11px] font-semibold text-[var(--color-neutral-600)] uppercase tracking-wide">
         {label}
       </label>
-      <select
-        disabled
-        className="mt-1 w-full h-9 px-3 text-sm border border-[var(--color-neutral-300)] rounded-lg bg-[var(--color-light-gray)] text-[var(--color-neutral-500)] cursor-not-allowed"
-      >
+      <Select disabled className="mt-1 h-9">
         <option>{currentValue ?? placeholder}</option>
-      </select>
+      </Select>
     </div>
   );
 }
