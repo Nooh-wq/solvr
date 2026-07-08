@@ -6,6 +6,7 @@ import { CustomFieldsEditor } from "@/components/custom-fields-editor";
 import { OrgNotesEditor } from "./notes-editor";
 import { OrgActionsMenu } from "./actions-menu";
 import { SlaBusinessHoursStub } from "./sla-stub";
+import { listSlaPolicies, listBusinessCalendars } from "@/actions/sla";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 
 // Z4.2 — Organization detail. Users + tickets + tags + custom fields
@@ -21,6 +22,12 @@ export default async function OrganizationDetailPage({
   if (!org) notFound();
 
   const customFields = await listValuesForTarget("ORG", org.id);
+  // M2.6 — load tenant's SLA + calendar options to populate the override dropdowns.
+  // Empty arrays render as "no policies yet, create one first" hint in the component.
+  const [policies, calendars] = await Promise.all([
+    listSlaPolicies().catch(() => []),
+    listBusinessCalendars().catch(() => []),
+  ]);
 
   return (
     <div>
@@ -152,8 +159,11 @@ export default async function OrganizationDetailPage({
           )}
 
           <SlaBusinessHoursStub
+            organizationId={org.id}
             slaPolicyId={org.slaPolicyId}
             businessHoursId={org.businessHoursId}
+            policies={policies.map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault }))}
+            calendars={calendars.map((c) => ({ id: c.id, name: c.name, timezone: c.timezone, isDefault: c.isDefault }))}
           />
         </div>
       </div>

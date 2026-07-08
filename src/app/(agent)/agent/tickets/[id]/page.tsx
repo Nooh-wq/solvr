@@ -21,10 +21,12 @@ import { AgentControls } from "./agent-controls";
 import { CopilotPanel } from "./copilot-panel";
 import { EscalateRail } from "./escalate-rail";
 import { listEscalationPathsForTicket } from "@/actions/escalations";
+import { getSlaForTicket } from "@/actions/sla";
+import { SlaCountdown } from "@/components/sla-badge";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [session, ticket, agents, guests, cannedResponses, macros, escalationPaths] = await Promise.all([
+  const [session, ticket, agents, guests, cannedResponses, macros, escalationPaths, ticketSla] = await Promise.all([
     requireSession({ minRole: "AGENT" }),
     getTicket(id),
     listAgents(),
@@ -32,6 +34,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
     listCannedResponses(),
     listMacros(),
     listEscalationPathsForTicket(id),
+    getSlaForTicket(id),
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
@@ -101,6 +104,8 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           <div className="min-w-0">
             <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
             <h1 className="text-2xl font-bold truncate">{ticket.title}</h1>
+            {/* M2.3 — renders nothing when ticketSla is empty. No placeholder. */}
+            <SlaCountdown rows={ticketSla} />
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <PriorityLabel priority={ticket.priority} size="lg" />

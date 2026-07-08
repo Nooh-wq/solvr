@@ -336,7 +336,7 @@ export function Sidebar({
           </div>
         )}
 
-        <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5">
+        <nav className="thin-scrollbar flex-1 overflow-y-auto py-3 px-3 space-y-0.5">
           {/* Top-level links — Overview, Analytics, Queue. */}
           {links.map((l) => (
             <NavRow key={l.href} link={l} activeHref={activeHref} collapsed={collapsed} />

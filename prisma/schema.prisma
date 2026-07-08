@@ -153,6 +153,9 @@ model Tenant {
   ruleRunLogs            RuleRunLog[]
   escalationPaths        EscalationPath[]
   escalationLogs         EscalationLog[]
+  slaPolicies            SlaPolicy[]
+  businessCalendars      BusinessCalendar[]
+  ticketSlas             TicketSla[]
 
   @@map("tenants")
 }
@@ -268,6 +271,7 @@ model Ticket {
   guests            TicketGuest[]
   surveyResponse    SurveyResponse?
   ticketViews       TicketView[]
+  slas              TicketSla[]
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -1442,4 +1446,101 @@ model EscalationLog {
 
   @@index([tenantId, ticketId, createdAt])
   @@map("escalation_logs")
+}
+
+// ---------------------------------------------------------------------------
+// M2 — SLA & Business-Hours Engine
+// ---------------------------------------------------------------------------
+// SlaPolicy carries per-priority response/resolution targets as JSON:
+//   { URGENT: { firstResponseMins: 60, resolutionMins: 240 }, ... }
+// Storing the matrix loosely keeps the schema stable if we add new
+// priorities or new target kinds later. `isDefault` marks the tenant
+// fallback used when no org override matches.
+
+model SlaPolicy {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  targets     Json        // { URGENT: {firstResponseMins, resolutionMins}, ... }
+  isDefault   Boolean     @default(false)
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  ticketSlas  TicketSla[]
+
+  @@index([tenantId, active])
+  @@map("sla_policies")
+}
+
+// BusinessCalendar defines the working-hours window that the dueAt
+// walker respects. Weekly hours are per-day time ranges:
+//   { mon: [["09:00","17:00"]], tue: [...], ..., sat: [], sun: [] }
+// Holidays are ISO date strings ("YYYY-MM-DD") in the calendar's tz.
+// One calendar per tenant is expected to be flagged isDefault.
+
+model BusinessCalendar {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  timezone    String   @default("UTC") // IANA
+  weeklyHours Json     // per-day time ranges, see above
+  holidays    Json     @default("[]")
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("business_calendars")
+}
+
+enum SlaKind {
+  FIRST_RESPONSE
+  RESOLUTION
+}
+
+// TicketSla is the per-ticket materialization: one row per (ticket,
+// kind). dueAt is calendar-adjusted at write time so read paths never
+// walk business hours (see spec §3 "do NOT calculate on-read").
+// pausedMs accumulates over the ticket's lifetime whenever status
+// crosses into PENDING; pauseStartedAt marks an open pause. warnedAt
+// / breachedAt are set by the sla.tick cron so events don't re-fire.
+// satisfiedAt is computed from firstReplyAt (FIRST_RESPONSE) or
+// resolvedAt (RESOLUTION) at write time when both are known.
+
+model TicketSla {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId        String
+  ticket          Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  slaPolicyId     String
+  slaPolicy       SlaPolicy @relation(fields: [slaPolicyId], references: [id], onDelete: Cascade)
+  kind            SlaKind
+  targetMins      Int
+  // @db.Timestamptz forces Postgres to store an actual instant with
+  // timezone info instead of a naive `timestamp`. Prisma reads/writes
+  // naive `timestamp` columns through the client's system tz — on a
+  // process running in a non-UTC tz, that shifts every Date by the
+  // offset, breaking the walker's dueAt math. `timestamptz` bypasses
+  // that entirely.
+  startedAt       DateTime  @db.Timestamptz(3)
+  dueAt           DateTime  @db.Timestamptz(3)
+  pausedMs        Int       @default(0)
+  pauseStartedAt  DateTime? @db.Timestamptz(3)
+  warnedAt        DateTime? @db.Timestamptz(3)
+  breachedAt      DateTime? @db.Timestamptz(3)
+  satisfiedAt     DateTime? @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@unique([ticketId, kind])
+  // The sla.tick cron filters on (tenantId, dueAt window, satisfiedAt
+  // null, breachedAt null) — matching index shape lets Postgres skip
+  // the satisfied/breached rows quickly.
+  @@index([tenantId, dueAt, satisfiedAt, breachedAt])
+  @@map("ticket_slas")
 }

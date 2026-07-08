@@ -204,3 +204,59 @@ html[data-density="compact"] main.mx-auto {
   padding-top: 1.25rem;
   padding-bottom: 1.25rem;
 }
+
+/* Thin scrollbar — used on the sidebar nav and any other scrollable
+   surface inside the app shell. Default browser scrollbars land as a
+   chunky vertical band that reads as a piece of chrome dropped on top
+   of the translucent surface; this narrows the track, hides it until
+   hover, and tints it with the same neutral tokens the rest of the
+   shell uses so it disappears into the background until reached for.
+   Firefox uses the scrollbar-* props; Chromium/WebKit uses the
+   ::-webkit-scrollbar pseudos; both paths kept in sync. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s ease;
+}
+.thin-scrollbar:hover,
+.thin-scrollbar:focus-within {
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+:root[data-theme="dark"] .thin-scrollbar:hover,
+:root[data-theme="dark"] .thin-scrollbar:focus-within,
+.dark .thin-scrollbar:hover,
+.dark .thin-scrollbar:focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+}
+.thin-scrollbar:hover::-webkit-scrollbar-thumb,
+.thin-scrollbar:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.18);
+}
+:root[data-theme="dark"] .thin-scrollbar:hover::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .thin-scrollbar:focus-within::-webkit-scrollbar-thumb,
+.dark .thin-scrollbar:hover::-webkit-scrollbar-thumb,
+.dark .thin-scrollbar:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.28);
+}
+:root[data-theme="dark"] .thin-scrollbar::-webkit-scrollbar-thumb:hover,
+.dark .thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+.thin-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}

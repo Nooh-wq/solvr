@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
+import { SlaBadge } from "@/components/sla-badge";
 import { SearchIcon } from "@/components/icons";
 import { Select, Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,9 @@ type QueueTicket = {
   status: TicketStatus;
   assigneeName: string | null;
   updatedAt: string;
+  // M2.3 — SLA rows for this ticket. Empty array = graceful degrade
+  // (no badge rendered). One entry per active TicketSla row.
+  sla?: import("@/components/sla-badge").TicketSlaLite[];
 };
 
 type ViewFilters = {
@@ -444,7 +448,10 @@ export function QueueWorkspace({
                         <PriorityLabel priority={t.priority} />
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={t.status} />
+                        <div className="flex items-center gap-1.5">
+                          <StatusBadge status={t.status} />
+                          {t.sla && t.sla.length > 0 && <SlaBadge rows={t.sla} />}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-[var(--color-neutral-600)]">
                         {t.assigneeName ?? "Unassigned"}
