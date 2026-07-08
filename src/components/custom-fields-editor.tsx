@@ -6,6 +6,7 @@
 // component is only mounted from staff surfaces.
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Select } from "@/components/ui/input";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
 import { upsertValue, searchLookupTargets } from "@/actions/customFields";
@@ -252,11 +253,11 @@ function ValueInput({
       const opts = row.definition.options ?? [];
       return (
         <div className="flex items-center gap-2">
-          <select
+          <Select
             defaultValue={row.value?.valueOptionId ?? ""}
             onChange={(e) => onSave({ valueOptionId: e.target.value || null })}
             disabled={disabled}
-            className="flex-1 h-8 rounded border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-2 text-sm"
+            className="flex-1 h-8 min-w-0"
           >
             <option value="">Select…</option>
             {opts.map((o) => (
@@ -264,7 +265,7 @@ function ValueInput({
                 {o.label}
               </option>
             ))}
-          </select>
+          </Select>
           <button
             type="button"
             onClick={onCancel}

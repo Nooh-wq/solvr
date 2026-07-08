@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import {
   updateTicketForm,
@@ -257,10 +257,10 @@ export function FormEditor({
         <div className="flex items-end gap-2 pt-3 border-t border-[var(--color-neutral-200)]">
           <label className="flex-1">
             <div className="text-xs font-medium mb-1">Add ticket field</div>
-            <select
+            <Select
               value={addingDef}
               onChange={(e) => setAddingDef(e.target.value)}
-              className="w-full h-9 rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-3 text-sm"
+              className="h-9"
             >
               <option value="">
                 {availableDefs.length === 0
@@ -272,7 +272,7 @@ export function FormEditor({
                   {d.label} — {d.key}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <Button size="sm" disabled={pending || !addingDef} onClick={addField}>
             Add
@@ -335,10 +335,10 @@ function VisibilityRuleEditor({
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
       <span className="text-[var(--color-neutral-500)]">Show when</span>
-      <select
+      <Select
         value={whenId}
         onChange={(e) => setWhenId(e.target.value)}
-        className="h-7 rounded-md border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-2"
+        className="h-7 w-40"
       >
         <option value="">Always</option>
         {siblings.map((s) => (
@@ -346,15 +346,15 @@ function VisibilityRuleEditor({
             {s.definition.label}
           </option>
         ))}
-      </select>
+      </Select>
       {whenId ? (
         <>
           <span className="text-[var(--color-neutral-500)]">equals</span>
           {parentType === "DROPDOWN" || parentType === "MULTISELECT" ? (
-            <select
+            <Select
               value={whenValue}
               onChange={(e) => setWhenValue(e.target.value)}
-              className="h-7 rounded-md border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-2"
+              className="h-7 w-40"
             >
               <option value="">Pick a value…</option>
               {parent?.definition.options.map((o) => (
@@ -362,17 +362,17 @@ function VisibilityRuleEditor({
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           ) : parentType === "CHECKBOX" ? (
-            <select
+            <Select
               value={whenValue}
               onChange={(e) => setWhenValue(e.target.value)}
-              className="h-7 rounded-md border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-2"
+              className="h-7 w-40"
             >
               <option value="">Pick a value…</option>
               <option value="true">Checked</option>
               <option value="false">Unchecked</option>
-            </select>
+            </Select>
           ) : (
             <Input
               value={whenValue}

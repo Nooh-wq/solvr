@@ -1,15 +1,15 @@
 "use client";
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-
-const SELECT_CLASS =
-  "h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30";
+import { Select } from "@/components/ui/input";
 
 const RANGE_OPTIONS = [
   { value: "7d", label: "Last 7 days" },
   { value: "30d", label: "Last 30 days" },
   { value: "90d", label: "Last 90 days" },
 ];
+
+const SELECT_WIDTH = "h-9 w-40";
 
 type Filter = {
   range: string;
@@ -45,10 +45,10 @@ export function FilterBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2 mb-6">
-      <select
+      <Select
         value={current.range}
         onChange={(e) => setParam("range", e.target.value)}
-        className={SELECT_CLASS}
+        className={SELECT_WIDTH}
         aria-label="Date range"
       >
         {RANGE_OPTIONS.map((o) => (
@@ -56,24 +56,24 @@ export function FilterBar({
             {o.label}
           </option>
         ))}
-      </select>
+      </Select>
 
-      <select
+      <Select
         value={current.channel ?? "ALL"}
         onChange={(e) => setParam("channel", e.target.value)}
-        className={SELECT_CLASS}
+        className={SELECT_WIDTH}
         aria-label="Channel"
       >
         <option value="ALL">All channels</option>
         <option value="portal">Portal</option>
         <option value="chatbot">Chatbot</option>
         <option value="email">Email</option>
-      </select>
+      </Select>
 
-      <select
+      <Select
         value={current.categoryId ?? "ALL"}
         onChange={(e) => setParam("categoryId", e.target.value)}
-        className={SELECT_CLASS}
+        className={SELECT_WIDTH}
         aria-label="Category"
       >
         <option value="ALL">All categories</option>
@@ -82,12 +82,12 @@ export function FilterBar({
             {c.name}
           </option>
         ))}
-      </select>
+      </Select>
 
-      <select
+      <Select
         value={current.priority ?? "ALL"}
         onChange={(e) => setParam("priority", e.target.value)}
-        className={SELECT_CLASS}
+        className={SELECT_WIDTH}
         aria-label="Priority"
       >
         <option value="ALL">All priorities</option>
@@ -95,12 +95,12 @@ export function FilterBar({
         <option value="MEDIUM">Medium</option>
         <option value="HIGH">High</option>
         <option value="URGENT">Urgent</option>
-      </select>
+      </Select>
 
-      <select
+      <Select
         value={current.assignedToId ?? "ALL"}
         onChange={(e) => setParam("assignedToId", e.target.value)}
-        className={SELECT_CLASS}
+        className={SELECT_WIDTH}
         aria-label="Assigned agent"
       >
         <option value="ALL">All agents</option>
@@ -110,7 +110,7 @@ export function FilterBar({
             {a.name}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }

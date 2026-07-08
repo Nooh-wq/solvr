@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { SearchIcon } from "@/components/icons";
+import { Select } from "@/components/ui/input";
 import type { TicketStatus, Priority } from "@/generated/prisma";
 
 type QueueTicket = {
@@ -63,28 +64,28 @@ export function QueueDirectory({ tickets }: { tickets: QueueTicket[] }) {
             className="h-9 pl-9 pr-3 text-sm border border-[var(--color-neutral-300)] rounded-xl w-64 bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
           />
         </div>
-        <select
+        <Select
           value={status}
           onChange={(e) => setStatus(e.target.value as TicketStatus | "ALL")}
-          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+          className="h-9 w-40"
         >
           {STATUS_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
           ))}
-        </select>
-        <select
+        </Select>
+        <Select
           value={priority}
           onChange={(e) => setPriority(e.target.value as Priority | "ALL")}
-          className="h-9 px-2.5 text-sm border border-[var(--color-neutral-300)] rounded-xl bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+          className="h-9 w-40"
         >
           {PRIORITY_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
           ))}
-        </select>
+        </Select>
         <span className="text-[12px] text-[var(--color-neutral-500)] ml-1">
           {filtered.length} of {tickets.length}
         </span>

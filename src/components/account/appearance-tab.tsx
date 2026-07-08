@@ -17,6 +17,7 @@ import {
   type PreferencesDto,
 } from "@/actions/preferences";
 import { useToast } from "@/components/ui/toast";
+import { Select } from "@/components/ui/input";
 import type { UserRole as Role } from "@/lib/auth";
 
 const THEME_OPTIONS: { value: "light" | "dark" | "system"; label: string }[] = [
@@ -155,18 +156,17 @@ export function AppearanceTab({ role }: { role: Role }) {
         <p className="text-[13px] text-[var(--color-neutral-600)]">
           Where signing in takes you.
         </p>
-        <select
+        <Select
           value={currentLanding}
           disabled={pending}
           onChange={(e) => apply({ defaultLanding: e.target.value })}
-          className="w-full h-10 px-3 rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[13px] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] cursor-pointer"
         >
           {LANDING_BY_ROLE[role].map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
     </div>
   );
