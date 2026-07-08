@@ -1425,6 +1425,31 @@ function buildTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "crea
     ...(f.channel ? { source: f.channel } : {}),
     ...(f.categoryId ? { categoryId: f.categoryId } : {}),
     ...(f.priority ? { priority: f.priority } : {}),
+    ...(f.organizationId ? { organizationId: f.organizationId } : {}),
+    ...(f.assignedToId
+      ? f.assignedToId === "unassigned"
+        ? { assignedTeamMemberId: null }
+        : { assignedTeamMemberId: f.assignedToId }
+      : {}),
+  };
+}
+
+// M13.2 — the prior equivalent-length window, ending the moment the
+// current window began. Used for period-over-period deltas on KPI
+// cards. Returns a `where` clause shaped the same way as the main
+// range so callers can reuse it with tx.ticket.count etc.
+function buildPriorTicketWhere(tenantId: string, f: AnalyticsFilter, dateField: "createdAt" | "resolvedAt" = "createdAt") {
+  const { start, end } = resolveRange(f);
+  const spanMs = end.getTime() - start.getTime();
+  const priorEnd = new Date(start.getTime() - 1);
+  const priorStart = new Date(start.getTime() - spanMs - 1);
+  return {
+    tenantId,
+    [dateField]: { gte: priorStart, lte: priorEnd },
+    ...(f.channel ? { source: f.channel } : {}),
+    ...(f.categoryId ? { categoryId: f.categoryId } : {}),
+    ...(f.priority ? { priority: f.priority } : {}),
+    ...(f.organizationId ? { organizationId: f.organizationId } : {}),
     ...(f.assignedToId
       ? f.assignedToId === "unassigned"
         ? { assignedTeamMemberId: null }
@@ -1706,6 +1731,42 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       .map((tm) => ({ id: tm.id, name: tm.name ?? "" }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    // M13.1 — organization list for the FilterBar dropdown. Sorted by
+    // name; capped at 500 so a tenant with a huge customer directory
+    // doesn't blow the payload (the ones past 500 are rare enough to
+    // paste an id or reach via the org-detail dashboard link).
+    const allOrganizations = await tx.organization.findMany({
+      where: { tenantId },
+      orderBy: { name: "asc" },
+      take: 500,
+      select: { id: true, name: true },
+    });
+
+    // M13.2 — prior-window KPI values for delta chips. Same filters,
+    // shifted back by the current window's length. Only computed for
+    // the KPIs that benefit from a delta view — pure counts and time
+    // averages. SLA/CSAT/deflection carry too much noise on small
+    // samples and their nulls dominate; showing a delta there would
+    // be a lie more often than a signal.
+    const priorWhere = buildPriorTicketWhere(tenantId, f, "createdAt");
+    const [priorTotal, priorResolved, priorFirstReply] = await Promise.all([
+      tx.ticket.count({ where: priorWhere }),
+      tx.ticket.count({ where: { ...priorWhere, resolvedAt: { not: null } } }),
+      tx.ticket.findMany({
+        where: { ...priorWhere, firstReplyAt: { not: null } },
+        select: { createdAt: true, firstReplyAt: true },
+      }),
+    ]);
+    const priorAvgFirstResponseHours =
+      priorFirstReply.length > 0
+        ? priorFirstReply.reduce(
+            (sum, t) => sum + (t.firstReplyAt!.getTime() - t.createdAt.getTime()),
+            0
+          ) /
+          priorFirstReply.length /
+          (1000 * 60 * 60)
+        : null;
+
     return {
       filter: f,
       kpis: {
@@ -1721,13 +1782,25 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
         slaAtRiskCount,
         avgCsatRating,
       },
+      // M13.2 — prior-window values. The UI computes deltas from
+      // these + the current KPIs. Kept as a sibling object (not
+      // inlined into kpis) so a KPI's own value stays a plain number.
+      priorKpis: {
+        totalInRange: priorTotal,
+        resolvedInRange: priorResolved,
+        avgFirstResponseHours: priorAvgFirstResponseHours,
+      },
       dailySeries,
       categoryBreakdown,
       channelBreakdown,
       regionBreakdown,
       agentLeaderboard,
       heatmap,
-      filterOptions: { categories: allCategories, agents: allAgents },
+      filterOptions: {
+        categories: allCategories,
+        agents: allAgents,
+        organizations: allOrganizations,
+      },
     };
   });
 }

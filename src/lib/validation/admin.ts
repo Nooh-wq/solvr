@@ -71,5 +71,7 @@ export const analyticsFilterSchema = z.object({
   // (absent = all agents including unassigned; "unassigned" = only tickets
   // with no assignedToId).
   assignedToId: z.union([z.string().cuid(), z.literal("unassigned")]).optional(),
+  // M13.1 — scope every widget to a single organization.
+  organizationId: z.string().cuid().optional(),
 });
 export type AnalyticsFilter = z.infer<typeof analyticsFilterSchema>;

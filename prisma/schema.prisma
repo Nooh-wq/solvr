@@ -160,6 +160,7 @@ model Tenant {
   autoAssignmentLogs     AutoAssignmentLog[]
   csatQueue              CsatQueue[]
   csatSettings           CsatSettings?
+  savedReports           SavedReport[]
 
   @@map("tenants")
 }
@@ -1683,4 +1684,30 @@ model AutoAssignmentLog {
 
   @@index([tenantId, ticketId, createdAt])
   @@map("auto_assignment_logs")
+}
+
+
+// M13.7 — saved analytics reports. filters mirrors the AnalyticsFilter
+// shape; runNow renders a CSV export, and the (optional) scheduleCron drives
+// a periodic email (deferred: M13 ships schema + CRUD + on-demand export;
+// scheduled email dispatch stays a follow-up until a real per-tenant
+// outbound-email log lands).
+model SavedReport {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  description   String?
+  filters       Json     @default("{}")
+  // Recipients for a scheduled send. Empty array = on-demand only.
+  recipientEmails String[] @default([])
+  // Cron string for the scheduled export cadence, or null for none.
+  scheduleCron  String?
+  lastRunAt     DateTime?
+  createdByTeamMemberId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@map("saved_reports")
 }
