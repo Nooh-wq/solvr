@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/auth";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listCannedResponses } from "@/actions/cannedResponses";
 import { listMacros } from "@/actions/macros";
+import { markTicketViewed } from "@/actions/ticketViews";
 import { MacroLauncher } from "./macro-launcher";
 import { getTenantById } from "@/lib/tenant";
 import { listTicketGuests } from "@/actions/guest";
@@ -31,6 +32,13 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
+
+  // Z6 DoD — record this view so the queue's unread counts drop it out
+  // for the acting agent. Fire-and-forget: a mark-viewed failure must
+  // never break the ticket-detail page.
+  markTicketViewed(ticket.id).catch(() => {
+    // Non-fatal.
+  });
   const tenantForContext = await getTenantById(session.tenantId);
 
   // Z2.1: three independent custom-field lookups — ticket + its requester

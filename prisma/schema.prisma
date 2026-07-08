@@ -132,6 +132,7 @@ model Tenant {
   savedViews           SavedView[]
   cannedResponses      CannedResponse[]
   macros               Macro[]
+  ticketViews          TicketView[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -262,6 +263,7 @@ model Ticket {
   notifications     Notification[]
   guests            TicketGuest[]
   surveyResponse    SurveyResponse?
+  ticketViews       TicketView[]
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -366,6 +368,24 @@ model Macro {
 
   @@index([tenantId, ownerTeamMemberId])
   @@map("macros")
+}
+
+// Z6 DoD closure — per-agent ticket-view tracking. Powers real
+// "unread" counts on views (a view's unread count = tickets in the
+// view whose `updatedAt` is newer than the agent's `lastViewedAt`, or
+// tickets the agent has never opened at all). Support-owned; no
+// wrapper relation on `subjectId` (raw scalar per boundary rule 3).
+model TicketView {
+  subjectId    String
+  ticketId     String
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  lastViewedAt DateTime @default(now())
+
+  @@id([subjectId, ticketId])
+  @@index([tenantId, subjectId])
+  @@map("ticket_views")
 }
 
 model Message {

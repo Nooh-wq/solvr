@@ -132,11 +132,11 @@ async function seedDefaultSharedViewsInTx(
  * defaults. Fire-and-forget from callers — failure is non-fatal.
  */
 /**
- * Z6.1 — returns a map of viewId → matching ticket count for every
- * view the acting agent can see. Counts respect the same scope + view
- * filter that would drive the queue if that view was selected. Not
- * "unread" — that requires per-view read tracking (TicketView table),
- * captured in docs/z6-followups.md as a follow-up.
+ * Z6.1 (DoD closure) — returns { viewId → unread ticket count } for
+ * every view the acting agent can see. Unread = matches this view's
+ * filter AND (never viewed by this agent OR ticket.updatedAt is newer
+ * than the agent's lastViewedAt row). Ticket-detail loads upsert
+ * TicketView so the count decays the moment an agent opens something.
  */
 export async function countViewMatches(): Promise<Record<string, number>> {
   const session = await requireSession({ minRole: "AGENT" });
@@ -153,14 +153,34 @@ export async function countViewMatches(): Promise<Record<string, number>> {
         },
         select: { id: true, filters: true },
       });
+      // Pull the agent's TicketView map once — bounded to visible
+      // tickets — so each per-view count doesn't re-query it.
+      const viewedRows = await tx.ticketView.findMany({
+        where: { tenantId: session.tenantId, subjectId: session.subjectId },
+        select: { ticketId: true, lastViewedAt: true },
+      });
+      const viewedIds = viewedRows.map((v) => v.ticketId);
+
       const counts: Record<string, number> = {};
-      // One count query per view — bounded to a few dozen views per
-      // tenant in practice. Kept sequential inside the tx so RLS scope
-      // is honored uniformly rather than fanning out withRls calls.
       for (const r of rows) {
         const f = parseFilters(r.filters);
         const assignedToId =
           f.assignedToId === "me" ? session.subjectId : f.assignedToId;
+
+        // Two branches so the DB does the "never viewed" AND
+        // "updated since last view" test in one query:
+        //   - tickets whose id isn't in viewedIds → always unread
+        //   - tickets whose id is in viewedIds but updatedAt is newer
+        //     than the matching lastViewedAt → unread
+        // Prisma has no "compare against a per-row lookup" primitive,
+        // so we split into `id NOT IN (viewed)` plus a per-viewed
+        // batched OR. Given at most a few hundred visible tickets per
+        // agent this stays under the batch OR limit comfortably.
+        const perViewedOr = viewedRows.map((v) => ({
+          id: v.ticketId,
+          updatedAt: { gt: v.lastViewedAt },
+        }));
+
         counts[r.id] = await tx.ticket.count({
           where: {
             tenantId: session.tenantId,
@@ -172,6 +192,10 @@ export async function countViewMatches(): Promise<Record<string, number>> {
               : assignedToId && assignedToId !== ""
                 ? { assignedTeamMemberId: assignedToId }
                 : {}),
+            OR: [
+              { id: { notIn: viewedIds } },
+              ...(perViewedOr.length > 0 ? perViewedOr : []),
+            ],
           },
         });
       }
@@ -192,6 +216,19 @@ export async function ensureDefaultSharedViews(): Promise<void> {
       if (anyShared) return;
       await seedDefaultSharedViewsInTx(tx, session.tenantId);
     }
+  );
+}
+
+/**
+ * Z6 DoD closure — seed defaults at tenant-provisioning time, callable
+ * from the signup path where there is no session yet. Runs under a
+ * synthetic SUPER_ADMIN scope pinned to the freshly-created tenant.
+ * Idempotent (same partial-unique-index backstop as the lazy seed).
+ */
+export async function seedDefaultSharedViewsForTenant(tenantId: string): Promise<number> {
+  return withRls(
+    { tenantId, userId: null, role: "SUPER_ADMIN" },
+    (tx) => seedDefaultSharedViewsInTx(tx, tenantId)
   );
 }
 

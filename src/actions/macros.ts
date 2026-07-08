@@ -90,8 +90,8 @@ export async function createMacro(input: z.infer<typeof createSchema>) {
   const ownerTeamMemberId = data.shared ? null : session.subjectId;
   const row = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-    (tx) =>
-      tx.macro.create({
+    async (tx) => {
+      const created = await tx.macro.create({
         data: {
           tenantId: session.tenantId,
           ownerTeamMemberId,
@@ -99,7 +99,17 @@ export async function createMacro(input: z.infer<typeof createSchema>) {
           description: data.description,
           actions: data.actions as Prisma.InputJsonValue,
         },
-      })
+      });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "CREATE_MACRO",
+          toValue: `${created.name}${ownerTeamMemberId === null ? " (shared)" : ""}`,
+        },
+      });
+      return created;
+    }
   );
   revalidatePath("/admin/macros");
   return { id: row.id };
@@ -130,6 +140,15 @@ export async function updateMacro(input: z.infer<typeof updateSchema>) {
           ...(data.actions !== undefined && { actions: data.actions as Prisma.InputJsonValue }),
         },
       });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "UPDATE_MACRO",
+          fromValue: existing.name,
+          toValue: data.name ?? existing.name,
+        },
+      });
     }
   );
   revalidatePath("/admin/macros");
@@ -153,6 +172,14 @@ export async function deleteMacro(id: string) {
         throw new Error("You can only delete your own macros.");
       }
       await tx.macro.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "DELETE_MACRO",
+          fromValue: existing.name,
+        },
+      });
     }
   );
   revalidatePath("/admin/macros");

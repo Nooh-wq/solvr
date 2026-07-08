@@ -6,6 +6,7 @@ import { Prisma } from "@/generated/prisma";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { roleAtLeast } from "@/lib/auth";
+import { actorCols, dualFkForUser } from "@/lib/z1-dual-fk";
 
 // Z6.3 — canned responses. Personal or tenant-shared (Z6.5 uses the
 // same table with ownerTeamMemberId = null). Personal writes any agent;
@@ -87,8 +88,8 @@ export async function createCannedResponse(input: z.infer<typeof createSchema>) 
   try {
     const row = await withRls(
       { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
-      (tx) =>
-        tx.cannedResponse.create({
+      async (tx) => {
+        const created = await tx.cannedResponse.create({
           data: {
             tenantId: session.tenantId,
             ownerTeamMemberId,
@@ -96,7 +97,17 @@ export async function createCannedResponse(input: z.infer<typeof createSchema>) 
             shortcut: data.shortcut,
             body: data.body,
           },
-        })
+        });
+        await tx.auditLog.create({
+          data: {
+            tenantId: session.tenantId,
+            ...actorCols(dualFkForUser(session.subjectId, session.role)),
+            action: "CREATE_CANNED_RESPONSE",
+            toValue: `${created.name} (/${created.shortcut})${ownerTeamMemberId === null ? " (shared)" : ""}`,
+          },
+        });
+        return created;
+      }
     );
     revalidatePath("/admin/canned-responses");
     return { id: row.id };
@@ -135,6 +146,15 @@ export async function updateCannedResponse(input: z.infer<typeof updateSchema>) 
             ...(data.body !== undefined && { body: data.body }),
           },
         });
+        await tx.auditLog.create({
+          data: {
+            tenantId: session.tenantId,
+            ...actorCols(dualFkForUser(session.subjectId, session.role)),
+            action: "UPDATE_CANNED_RESPONSE",
+            fromValue: existing.name,
+            toValue: data.name ?? existing.name,
+          },
+        });
       }
     );
     revalidatePath("/admin/canned-responses");
@@ -164,6 +184,14 @@ export async function deleteCannedResponse(id: string) {
         throw new Error("You can only delete your own canned responses.");
       }
       await tx.cannedResponse.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "DELETE_CANNED_RESPONSE",
+          fromValue: existing.name,
+        },
+      });
     }
   );
   revalidatePath("/admin/canned-responses");
