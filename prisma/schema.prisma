@@ -133,6 +133,7 @@ model Tenant {
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
   subjectAvatars       SubjectAvatar[]
+  organizationSettings OrganizationSettings[]
   subjectPreferences   SubjectPreference[]
   userSessions         UserSession[]
   loginActivity        LoginActivity[]
@@ -522,6 +523,28 @@ model TeamMemberLifecycle {
 
   @@index([tenantId, status])
   @@map("team_member_lifecycle")
+}
+
+// Z4 — Support-owned org sidecar. Wrapper Organization is off-limits
+// (rule 3, docs/shared-platform-boundary.md §3), so Support keeps its
+// own per-org settings row: agent notes that persist across the org's
+// tickets, plus placeholder foreign keys for the SLA policy and
+// business-hours override that M2 will introduce. Both id columns are
+// raw strings — no relation to non-existent tables — so the schema
+// stays valid pre-M2, and switching them to real relations after M2
+// ships is a schema-only change with no data rewrite.
+model OrganizationSettings {
+  organizationId  String   @id
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notes           String?
+  slaPolicyId     String?
+  businessHoursId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("organization_settings")
 }
 
 // Z1.7 — Support-owned avatar store. Same Set B rationale as

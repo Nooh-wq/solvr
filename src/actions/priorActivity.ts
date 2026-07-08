@@ -15,6 +15,29 @@ export type PriorActivitySummary = {
   csatCount: number;
 };
 
+export type OrgActivitySummary = {
+  organizationId: string;
+  openTicketCount: number;
+};
+
+export async function getOrgActivity(
+  organizationId: string
+): Promise<OrgActivitySummary> {
+  const session = await requireSession({ minRole: "AGENT" });
+  const openTicketCount = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) =>
+      tx.ticket.count({
+        where: {
+          tenantId: session.tenantId,
+          organizationId,
+          status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] },
+        },
+      })
+  );
+  return { organizationId, openTicketCount };
+}
+
 export async function getPriorActivityForClient(
   clientEndUserId: string,
   excludingTicketId: string

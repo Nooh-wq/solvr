@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
-import { getPriorActivityForClient } from "@/actions/priorActivity";
+import { getPriorActivityForClient, getOrgActivity } from "@/actions/priorActivity";
+import { OrganizationCard } from "./organization-card";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
@@ -23,7 +24,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   // (if a real EndUser) + its organization. Run in parallel; each is one
   // definitions + values query pair. Requester/org lookups are skipped
   // when the ticket doesn't have that side (guest requester, no org).
-  const [ticketFields, userFields, orgFields, priorActivity] = await Promise.all([
+  const [ticketFields, userFields, orgFields, priorActivity, orgActivity] = await Promise.all([
     listValuesForTarget("TICKET", ticket.id),
     ticket.clientEndUserId
       ? listValuesForTarget("USER", ticket.clientEndUserId)
@@ -31,12 +32,11 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
     ticket.organizationId
       ? listValuesForTarget("ORG", ticket.organizationId)
       : Promise.resolve([]),
-    // Z3.5 — prior-activity summary for the "N prior tickets · avg CSAT"
-    // line on the client card. Only end-user requesters have profile pages
-    // in this pass; team-member requesters keep the old card look.
     ticket.clientEndUserId
       ? getPriorActivityForClient(ticket.clientEndUserId, ticket.id)
       : Promise.resolve(null),
+    // Z4.4 — "N open tickets on this org" for the customer-context card.
+    ticket.organizationId ? getOrgActivity(ticket.organizationId) : Promise.resolve(null),
   ]);
 
   // Z1.4b: ticket.client is now UserLike | null (wrapper-resolved).
@@ -117,6 +117,14 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           }}
           priorActivity={priorActivity}
         />
+
+        {ticket.organization && ticket.organizationId && (
+          <OrganizationCard
+            organizationId={ticket.organizationId}
+            name={ticket.organization.name}
+            openTicketCount={orgActivity?.openTicketCount ?? 0}
+          />
+        )}
 
         <CustomFieldsEditor title="Ticket fields" rows={ticketFields} targetId={ticket.id} />
         {ticket.clientEndUserId ? (
