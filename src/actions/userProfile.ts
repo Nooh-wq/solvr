@@ -44,6 +44,8 @@ export type UserProfileHeader = {
   tags: Array<{ id: string; name: string; color: string }>;
   csatAvg: number | null;
   csatCount: number;
+  /** Z5.2 — only meaningful for TEAM_MEMBER subjects. Null for end users. */
+  ticketAccessScope: "ALL" | "GROUPS" | "ASSIGNED_ONLY" | null;
 };
 
 export type ProfileTicketRow = {
@@ -187,6 +189,7 @@ export async function loadUserProfile(userId: string): Promise<UserProfileData |
       tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
       csatAvg: csatAgg.avg,
       csatCount: csatAgg.count,
+      ticketAccessScope: teamMember?.ticketAccessScope ?? null,
     },
     tickets: tickets.map((t) => ({
       id: t.id,

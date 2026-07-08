@@ -31,6 +31,7 @@ export function buildAdminNav({
     { href: "/admin/organizations", label: "Organizations", icon: "organizations" },
     { href: "/admin/team-members", label: "Team members", icon: "teamMembers", badge: pendingCount },
     { href: "/admin/groups", label: "Groups", icon: "groups" },
+    { href: "/admin/roles", label: "Roles", icon: "shield" },
     { href: "/admin/categories", label: "Categories", icon: "categories" },
     { href: "/admin/fields", label: "Fields", icon: "fields" },
     { href: "/admin/forms", label: "Forms", icon: "forms" },

@@ -5,7 +5,9 @@ import {
   systemContext,
   getEndUser,
   getTeamMemberWithRoleName,
+  listGroupsForTeamMember,
 } from "@/lib/shared-platform";
+import type { TicketAccessScope } from "@/lib/shared-platform";
 import { getAvatarUrl } from "@/lib/avatars";
 
 /**
@@ -45,6 +47,23 @@ export type SessionUser = {
   avatarUrl: string | null;
   /** Set when a SUPER_ADMIN is impersonating this tenant — see src/actions/super.ts. */
   isImpersonating?: boolean;
+  /**
+   * Z5.2 — the wrapper Role's canonical name ("Super Admin"/"Admin"/"Agent"
+   * for standard, "Light Agent"/custom otherwise). Kept alongside the mapped
+   * `role` tier so guardrails that care about the specific preset (Light
+   * Agent's no-public-reply rule) can key off the exact name rather than
+   * having to re-derive it. Null for END_USER sessions.
+   */
+  roleName: string | null;
+  /**
+   * Z5.2 — ticket access scope for team members. Determines which tickets
+   * this user can read/edit. Filtered at the app layer (queue query,
+   * ticket load). Null for END_USER sessions and for impersonating
+   * SUPER_ADMIN (impersonation grants ADMIN with implicit ALL scope).
+   */
+  ticketAccessScope: TicketAccessScope | null;
+  /** Z5.2 — group ids this team member belongs to. Empty for non-team sessions. */
+  groupIds: string[];
 };
 
 /**
@@ -207,6 +226,21 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     ? wrapperRoleNameToUserRole(teamMember.roleName)
     : "CLIENT";
 
+  // Z5.2 — group memberships alongside the identity read. Only meaningful
+  // for team members; end users don't participate in the scope model.
+  // Failure here is non-fatal: an empty groupIds still lets ALL/ASSIGNED
+  // scopes work, and GROUPS-scoped agents just see nothing until the read
+  // succeeds — safer than throwing on session resolve.
+  let groupIds: string[] = [];
+  if (teamMember) {
+    try {
+      const groups = await listGroupsForTeamMember(ctx, teamMember.id);
+      groupIds = groups.map((g) => g.id);
+    } catch {
+      // Non-fatal — logged upstream by the wrapper.
+    }
+  }
+
   const avatarUrl = await getAvatarUrl(payload.tenantId, payload.subjectId);
 
   const baseSession: SessionUser = {
@@ -217,6 +251,9 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     role,
     sessionId: payload.sessionId!,
     avatarUrl,
+    roleName: teamMember?.roleName ?? null,
+    ticketAccessScope: teamMember?.ticketAccessScope ?? null,
+    groupIds,
   };
 
   const impersonation = await getImpersonationPayload();
@@ -234,6 +271,10 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     tenantId: targetTenant.id,
     role: "ADMIN",
     isImpersonating: true,
+    // Impersonators bypass scope — they need full visibility to diagnose
+    // the tenant. groupIds cleared because they belong to the host tenant.
+    ticketAccessScope: "ALL",
+    groupIds: [],
   };
 });
 

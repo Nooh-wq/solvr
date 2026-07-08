@@ -18,7 +18,21 @@ import { MessageComposer } from "@/components/message-composer";
  * client" the one-click default and makes internal notes an explicit,
  * deliberate choice that's harder to send by accident.
  */
-export function AgentReplyBox({ ticketId, mentionNames = [] }: { ticketId: string; mentionNames?: string[] }) {
+export function AgentReplyBox({
+  ticketId,
+  mentionNames = [],
+  isLightAgent = false,
+}: {
+  ticketId: string;
+  mentionNames?: string[];
+  /**
+   * Z5.5 — when true, the public reply composer is replaced by an
+   * internal-note composer. Server-side postAgentReply also rejects any
+   * non-internal message from a Light Agent (see actions/tickets.ts), so
+   * this is UI parity for a rule the backend enforces regardless.
+   */
+  isLightAgent?: boolean;
+}) {
   const router = useRouter();
   const { toast } = useToast();
 
@@ -33,6 +47,34 @@ export function AgentReplyBox({ ticketId, mentionNames = [] }: { ticketId: strin
     } catch (e) {
       toast({ title: "Couldn't send reply", description: e instanceof Error ? e.message : undefined, variant: "error" });
     }
+  }
+
+  async function sendNoteFromMainComposer(body: string, attachmentIds: string[]) {
+    try {
+      await postAgentReply({ ticketId, body, isInternal: true, attachmentIds });
+      router.refresh();
+    } catch (e) {
+      toast({ title: "Couldn't add note", description: e instanceof Error ? e.message : undefined, variant: "error" });
+    }
+  }
+
+  if (isLightAgent) {
+    return (
+      <MessageComposer
+        placeholder="Add an internal note…"
+        onSend={sendNoteFromMainComposer}
+        upload={(fd) => uploadTicketAttachment(ticketId, fd)}
+        mentionNames={mentionNames}
+        footer={
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-[12px] font-medium text-[var(--color-orange-deep)]">
+              Light Agent — internal notes only
+            </span>
+            <span className="text-[11px] text-[var(--color-neutral-400)]">⌘/Ctrl + Enter to send</span>
+          </div>
+        }
+      />
+    );
   }
 
   function addNote() {

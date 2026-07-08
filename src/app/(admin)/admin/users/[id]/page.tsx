@@ -5,6 +5,8 @@ import { listValuesForTarget } from "@/actions/customFields";
 import { CustomFieldsEditor } from "@/components/custom-fields-editor";
 import { NotesEditor } from "./notes-editor";
 import { InteractionsTimeline } from "./interactions-timeline";
+import { ScopeEditor } from "./scope-editor";
+import { requireSession } from "@/lib/auth";
 
 // Z3.3 — Deep user profile. Works for either an EndUser or a
 // TeamMember (subjectId space is shared post-Z1.3). Server component:
@@ -17,9 +19,13 @@ export default async function UserProfilePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const profile = await loadUserProfile(id);
+  const [session, profile] = await Promise.all([
+    requireSession({ minRole: "ADMIN" }),
+    loadUserProfile(id),
+  ]);
   if (!profile) notFound();
   const { header, tickets, chats, kbViews } = profile;
+  const isSelf = header.id === session.subjectId;
 
   // Only end users have USER-scoped custom fields today. The values list
   // is filtered inside the CFV action to hide inactive-with-no-value rows.
@@ -137,6 +143,13 @@ export default async function UserProfilePage({
         </div>
         <div className="space-y-6">
           <NotesEditor userId={header.id} initialNotes={header.notes ?? ""} />
+          {header.kind === "TEAM_MEMBER" && header.ticketAccessScope && (
+            <ScopeEditor
+              teamMemberId={header.id}
+              initialScope={header.ticketAccessScope}
+              disabled={isSelf}
+            />
+          )}
           {customFields.length > 0 && (
             <CustomFieldsEditor
               title="Custom fields"

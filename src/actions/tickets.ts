@@ -49,6 +49,7 @@ import {
   getOrganizationsByIds,
   matchOrganizationByEmailDomain,
   listTeamMembers,
+  listTeamMembersInGroup,
   getRoleByName,
   type EndUser,
   type TeamMember,
@@ -64,6 +65,61 @@ import {
 
 function siteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+}
+
+/**
+ * Z5.2 — resolves the acting team member's ticketAccessScope into a Prisma
+ * `where` fragment. Composed with the caller's other filters via spread.
+ *
+ * Semantics per Zendesk parity:
+ *   ALL / null      — no restriction (returns {}).
+ *   ASSIGNED_ONLY   — only tickets assigned to this agent.
+ *   GROUPS          — tickets assigned to this agent, to any teammate in
+ *                     one of their groups, OR unassigned (so a group-scoped
+ *                     agent can still see the intake queue and claim work).
+ *
+ * SUPER_ADMIN and CLIENT sessions get {} — SUPER_ADMIN needs cross-tenant
+ * health visibility (see rls_policies.sql), CLIENT scope is enforced
+ * separately by ticketClientWhereFor().
+ *
+ * Async because GROUPS needs a wrapper roundtrip: the assignedTeamMemberId
+ * column is a raw scalar (no Prisma relation across the boundary, rule 3
+ * in docs/shared-platform-boundary.md), so a nested relation filter isn't
+ * possible — instead we pre-resolve the set of team-member ids in the
+ * caller's groups and use `assignedTeamMemberId IN (...)`.
+ */
+async function ticketScopeWhereFor(session: {
+  subjectId: string;
+  tenantId: string;
+  role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN";
+  ticketAccessScope: "ALL" | "GROUPS" | "ASSIGNED_ONLY" | null;
+  groupIds: string[];
+}): Promise<Prisma.TicketWhereInput> {
+  if (session.role === "CLIENT" || session.role === "SUPER_ADMIN") return {};
+  const scope = session.ticketAccessScope ?? "ALL";
+  if (scope === "ALL") return {};
+  if (scope === "ASSIGNED_ONLY") {
+    return { assignedTeamMemberId: session.subjectId };
+  }
+  // GROUPS — resolve every teammate in one of the caller's groups.
+  if (session.groupIds.length === 0) {
+    // Zero groups → only self-assigned tickets are visible. Prevents an
+    // admin accidentally locking an agent out of everything by setting
+    // GROUPS scope without adding them to any group.
+    return { assignedTeamMemberId: session.subjectId };
+  }
+  const ctx = systemContext(session.tenantId);
+  const teammatesByGroup = await Promise.all(
+    session.groupIds.map((groupId) => listTeamMembersInGroup(ctx, groupId))
+  );
+  const teammateIds = new Set<string>([session.subjectId]);
+  for (const list of teammatesByGroup) for (const m of list) teammateIds.add(m.id);
+  return {
+    OR: [
+      { assignedTeamMemberId: { in: [...teammateIds] } },
+      { assignedTeamMemberId: null },
+    ],
+  };
 }
 
 /** FR-2: client creates a ticket. Status defaults to Open; fires the "received" email. */
@@ -238,10 +294,17 @@ export async function listAllTickets(filter: Partial<z.infer<typeof ticketFilter
   const f = ticketFilterSchema.parse(filter);
   const PAGE_SIZE = 50;
 
+  const scopeWhere = await ticketScopeWhereFor(session);
+
   const rows = await withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, (tx) =>
     tx.ticket.findMany({
       where: {
         tenantId: session.tenantId,
+        // Scope goes in AND so a caller-supplied assignedTeamMemberId
+        // filter intersects with the scope rather than overwriting it —
+        // otherwise a GROUPS-scoped agent could pass an out-of-scope
+        // assignee id via the query string and escape their scope.
+        AND: [scopeWhere],
         status: f.status,
         priority: f.priority,
         categoryId: f.categoryId,
@@ -324,6 +387,27 @@ export async function getTicket(ticketId: string) {
     return t;
   });
   if (!ticket) return null;
+
+  // Z5.2 — scope re-check for team members. A GROUPS- or ASSIGNED_ONLY-
+  // scoped agent must not be able to load an out-of-scope ticket by
+  // pasting its id into the URL. Return null (upstream treats null as 404).
+  if (session.role === "AGENT" || session.role === "ADMIN") {
+    const scope = session.ticketAccessScope ?? "ALL";
+    if (scope === "ASSIGNED_ONLY") {
+      if (ticket.assignedTeamMemberId !== session.subjectId) return null;
+    } else if (scope === "GROUPS") {
+      const isSelf = ticket.assignedTeamMemberId === session.subjectId;
+      const isUnassigned = ticket.assignedTeamMemberId === null;
+      if (!isSelf && !isUnassigned) {
+        const ctx = systemContext(session.tenantId);
+        const teammates = await Promise.all(
+          session.groupIds.map((gid) => listTeamMembersInGroup(ctx, gid))
+        );
+        const teammateIds = new Set(teammates.flat().map((m) => m.id));
+        if (!ticket.assignedTeamMemberId || !teammateIds.has(ticket.assignedTeamMemberId)) return null;
+      }
+    }
+  }
 
   // Batch-resolve every identity referenced in this ticket tree.
   // Three roundtrips per ticket, regardless of message/attachment count.
@@ -598,6 +682,14 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
 export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
   const session = await requireSession({ minRole: "AGENT" });
   const data = agentReplySchema.parse(input);
+
+  // Z5.5 — Light Agent guardrail. Light Agents can read every ticket in
+  // their scope and add internal notes, but must never be able to send a
+  // public message. Enforced server-side (not just hidden in the UI) so
+  // macros, keyboard shortcuts, or a hand-crafted request can't bypass it.
+  if (session.roleName === "Light Agent" && !data.isInternal) {
+    throw new Error("LIGHT_AGENT_NO_PUBLIC_REPLY");
+  }
 
   const { ticket, client, branding } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },

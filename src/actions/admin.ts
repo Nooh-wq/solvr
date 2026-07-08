@@ -1709,3 +1709,32 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Z5.2 — ticket access scope mutation
+// ---------------------------------------------------------------------------
+
+const changeScopeSchema = z.object({
+  teamMemberId: z.string().min(1),
+  scope: z.enum(["ALL", "GROUPS", "ASSIGNED_ONLY"]),
+});
+
+/**
+ * Z5.2 — sets a team member's ticketAccessScope. Enforced at the app layer
+ * (queue query + getTicket) and, as of Z5.3, at RLS. Admins only; changing
+ * your own scope is disallowed to prevent an accidental self-lockout.
+ */
+export async function changeTeamMemberScope(
+  input: z.infer<typeof changeScopeSchema>
+) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const { teamMemberId, scope } = changeScopeSchema.parse(input);
+  if (teamMemberId === session.subjectId) {
+    throw new Error("Cannot change your own ticket access scope.");
+  }
+  const ctx = systemContext(session.tenantId);
+  await updateTeamMember(ctx, teamMemberId, { ticketAccessScope: scope });
+  revalidatePath(`/admin/users/${teamMemberId}`);
+  revalidatePath("/admin/team-members");
+  return { ok: true };
+}

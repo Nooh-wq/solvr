@@ -49,6 +49,7 @@ export type NavIconKey =
   | "audit"
   | "deletions"
   | "analytics"
+  | "shield"
   | "super";
 
 const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.ReactElement> = {
@@ -70,6 +71,7 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   audit: DocumentIcon,
   deletions: UserMinusIcon,
   analytics: ChartBarIcon,
+  shield: ShieldIcon,
   super: ShieldIcon,
 };
 
