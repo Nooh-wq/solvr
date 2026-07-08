@@ -265,6 +265,21 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
     });
   }
 
+  // Z8.2 — fire TICKET_CREATED triggers. Awaited so a rule that
+  // reassigns the just-created ticket is reflected in the response
+  // (matters for the redirect to /portal); failures are caught so a
+  // broken rule can't fail the primary create.
+  try {
+    const { runRulesForEvent } = await import("@/lib/rule-engine");
+    await runRulesForEvent({
+      event: "TICKET_CREATED",
+      ticketId: ticket.id,
+      session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+    });
+  } catch {
+    // Non-fatal — rule failures are logged to RuleRunLog by the engine.
+  }
+
   revalidatePath("/portal");
   return { ok: true, ticket };
 }
@@ -769,6 +784,21 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
     }
   }
 
+  // Z8.2 — fire TICKET_REPLIED. Internal notes don't fire (spec's
+  // "reply posted" is a public-message event).
+  if (!data.isInternal) {
+    try {
+      const { runRulesForEvent } = await import("@/lib/rule-engine");
+      await runRulesForEvent({
+        event: "TICKET_REPLIED",
+        ticketId: ticket.id,
+        session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+      });
+    } catch {
+      // Non-fatal.
+    }
+  }
+
   revalidatePath(`/agent/tickets/${ticket.id}`);
   return { ok: true };
 }
@@ -932,6 +962,25 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
       const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
       await sendCsatRequestEmail(client.email, rateUrl, branding);
     }
+  }
+
+  // Z8.2 — fire the update-family events. All are attempted best-effort
+  // and share the same session; the rule engine tracks its own
+  // invocation depth. TICKET_UPDATED always fires; STATUS_CHANGED and
+  // PRIORITY_CHANGED only fire when those actually changed so their
+  // rules don't run on unrelated edits.
+  try {
+    const { runRulesForEvent } = await import("@/lib/rule-engine");
+    const engineSession = { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role };
+    await runRulesForEvent({ event: "TICKET_UPDATED", ticketId: updated.id, session: engineSession });
+    if (statusChanged) {
+      await runRulesForEvent({ event: "STATUS_CHANGED", ticketId: updated.id, session: engineSession });
+    }
+    if (data.priority !== undefined) {
+      await runRulesForEvent({ event: "PRIORITY_CHANGED", ticketId: updated.id, session: engineSession });
+    }
+  } catch {
+    // Non-fatal.
   }
 
   revalidatePath(`/agent/tickets/${updated.id}`);
