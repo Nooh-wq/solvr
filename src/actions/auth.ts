@@ -27,7 +27,7 @@ import {
 import { notify } from "@/lib/notifications";
 import { recordLoginActivity } from "@/lib/login-activity";
 import { createUserSession } from "@/lib/user-session";
-import { REDIRECT_BY_ROLE } from "@/lib/redirect-by-role";
+import { REDIRECT_BY_ROLE, resolvePostAuthLanding } from "@/lib/redirect-by-role";
 import { matchCompanyByEmail } from "@/lib/company-match";
 import {
   systemContext,
@@ -371,7 +371,19 @@ export async function login(input: z.infer<typeof loginSchema>) {
     subjectId: lookup.subjectId,
     subjectKind,
   });
-  return { ok: true, redirectTo: REDIRECT_BY_ROLE[role] };
+  // M21.5 — honor the saved defaultLanding preference if it's still a
+  // valid destination for this role. Fetched here rather than in a
+  // separate query because SubjectPreference is small and this is the
+  // one moment where landing choice matters.
+  const saved = await withRls(
+    { tenantId: tenant.id, userId: lookup.subjectId, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.subjectPreference.findUnique({
+        where: { subjectId: lookup.subjectId },
+        select: { defaultLanding: true },
+      })
+  );
+  return { ok: true, redirectTo: resolvePostAuthLanding(role, saved?.defaultLanding ?? null) };
 }
 
 export async function logout() {

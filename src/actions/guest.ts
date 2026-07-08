@@ -7,6 +7,11 @@ import { requireSession } from "@/lib/auth";
 import { createGuestToken, parseGuestToken } from "@/lib/guest-access";
 import { sendTicketGuestInviteEmail, sendClientReplyNotification } from "@/lib/email/events";
 import { notify } from "@/lib/notifications";
+import {
+  getEmailDecision,
+  queueDigestEmail,
+  shouldWriteInAppInTx,
+} from "@/lib/notification-prefs";
 import { uploadAttachment, getAttachmentSignedUrl } from "@/lib/storage";
 import { ATTACHMENT_ALLOWED_MIME, ATTACHMENT_MAX_BYTES } from "@/lib/validation/ticket";
 import {
@@ -346,7 +351,7 @@ export async function postGuestReply(
       const assignedAgent = ticket.assignedTeamMemberId
         ? await getTeamMember(systemContext(guest.tenantId), ticket.assignedTeamMemberId)
         : null;
-      if (assignedAgent) {
+      if (assignedAgent && await shouldWriteInAppInTx(tx, assignedAgent.id, "ticketReply")) {
         await notify(tx, {
           tenantId: guest.tenantId,
           userId: assignedAgent.id,
@@ -361,7 +366,22 @@ export async function postGuestReply(
     }
   );
 
-  if (assignedAgent) await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+  if (assignedAgent) {
+    const decision = await getEmailDecision(guest.tenantId, assignedAgent.id, "ticketReply");
+    if (decision === "send") {
+      await sendClientReplyNotification(ticket, assignedAgent.email, branding);
+    } else if (decision === "digest") {
+      await queueDigestEmail({
+        tenantId: guest.tenantId,
+        subjectId: assignedAgent.id,
+        eventKey: "ticketReply",
+        subject: `[#${ticket.ticketNumber}] Guest replied`,
+        body: `${guest.name ?? guest.email} replied on ${ticket.reference}: ${data.body.slice(0, 200)}`,
+        ticketRef: ticket.reference,
+        ticketUrl: `/agent/tickets/${ticket.id}`,
+      });
+    }
+  }
 
   revalidatePath(`/guest/${data.token}`);
   return { ok: true };

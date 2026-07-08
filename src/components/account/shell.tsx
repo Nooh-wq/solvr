@@ -65,7 +65,7 @@ export function AccountSettingsShell({
       {active === "profile" && <ProfileTab profile={profile} preferences={preferences} />}
       {active === "security" && <SecurityTab currentEmail={profile.email} />}
       {active === "notifications" && <NotificationsTab />}
-      {active === "appearance" && <AppearanceTab />}
+      {active === "appearance" && <AppearanceTab role={profile.role} />}
       {active === "danger" && <DangerZoneTab />}
     </div>
   );

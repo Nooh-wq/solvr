@@ -4,6 +4,7 @@ import { getTenantById } from "@/lib/tenant";
 import { Sidebar, type NavLink } from "@/components/sidebar";
 import { ImpersonationBanner } from "./impersonation-banner";
 import { listPendingUsers } from "@/actions/admin";
+import { listPendingAccountDeletions } from "@/actions/accountDeletions";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getSessionUser();
@@ -21,9 +22,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // if the query fails for any reason (RLS, stale session, etc.) we just
   // omit the badge rather than breaking the whole admin layout.
   let pendingCount = 0;
+  let deletionCount = 0;
   try {
-    const pending = await listPendingUsers();
+    const [pending, deletions] = await Promise.all([
+      listPendingUsers(),
+      listPendingAccountDeletions(),
+    ]);
     pendingCount = pending.length;
+    deletionCount = deletions.length;
   } catch {
     // Non-fatal.
   }
@@ -38,6 +44,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     { href: "/admin/branding", label: "Branding", icon: "branding" },
     { href: "/admin/kb", label: "Knowledge base", icon: "kb" },
     { href: "/admin/audit-log", label: "Audit log", icon: "audit" },
+    { href: "/admin/account-deletions", label: "Deletion requests", icon: "audit", badge: deletionCount },
     { href: "/agent", label: "Queue", icon: "tickets" },
     ...(user.role === "SUPER_ADMIN" && tenant.type === "INTERNAL"
       ? [{ href: "/admin/super", label: "Super admin", icon: "super" as const }]

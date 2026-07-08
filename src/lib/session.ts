@@ -326,6 +326,51 @@ export async function verifyEmailChangeToken(token: string): Promise<EmailChange
 }
 
 // ---------------------------------------------------------------------------
+// Data-export download token — see actions/dangerZone.ts (M21.6). Signs
+// a link that /api/data-export/[token] can verify server-side. 72-hour
+// expiry mirrors expiresAt on the DataExportRequest row: two-layer check
+// so the download stops working even if the token is unusable but the row
+// hasn't been cleaned up yet.
+// ---------------------------------------------------------------------------
+
+const DATA_EXPORT_DURATION_SECONDS = 60 * 60 * 72; // 72 hours
+
+export type DataExportTokenPayload = {
+  requestId: string;
+  tenantId: string;
+  subjectId: string;
+};
+
+export async function signDataExportToken(payload: DataExportTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "data-export" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${DATA_EXPORT_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyDataExportToken(token: string): Promise<DataExportTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "data-export") return null;
+    if (
+      typeof payload.requestId !== "string" ||
+      typeof payload.tenantId !== "string" ||
+      typeof payload.subjectId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      requestId: payload.requestId,
+      tenantId: payload.tenantId,
+      subjectId: payload.subjectId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Invite accept + first-login OTP (Team > Invite — see actions/admin.ts's
 // inviteUser() / actions/auth.ts's acceptInvite()/verifyLoginOtp()).
 //

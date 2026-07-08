@@ -192,3 +192,15 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* M21.5 — density modes. `data-density="compact"` on <html> tightens the
+   root font size and shrinks the two big shell paddings that dominate the
+   perceived space budget on desktop. Kept deliberately small: users who
+   want compact want a subtle shift, not a redesign. */
+html[data-density="compact"] {
+  font-size: 14px;
+}
+html[data-density="compact"] main.mx-auto {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+}

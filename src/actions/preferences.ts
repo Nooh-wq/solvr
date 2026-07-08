@@ -44,14 +44,18 @@ export async function getMyPreferences(): Promise<PreferencesDto> {
   return row ?? EMPTY_PREFS;
 }
 
-// Loose validation on purpose — M21.1 accepts whatever IANA/BCP-47 string
-// the browser hands us; the Appearance tab in M21.5 will constrain the
-// theme/density/defaultLanding enum values.
+// timezone/language stay loose (IANA/BCP-47 strings). theme/density/
+// defaultLanding are enum-constrained now that M21.5 owns those toggles
+// — invalid values are rejected rather than round-tripped through the DB.
 const updatePreferencesSchema = z.object({
   timezone: z.string().max(64).nullable().optional(),
   language: z.string().max(16).nullable().optional(),
-  theme: z.string().max(16).nullable().optional(),
-  density: z.string().max(16).nullable().optional(),
+  theme: z.enum(["light", "dark", "system"]).nullable().optional(),
+  density: z.enum(["regular", "compact"]).nullable().optional(),
+  // Kept as free string with a max — the valid options depend on the
+  // caller's role (a CLIENT can't default-land on /admin). The runtime
+  // check lives in getPostLoginRedirect() so a stale preference is
+  // silently ignored rather than throwing.
   defaultLanding: z.string().max(64).nullable().optional(),
 });
 
