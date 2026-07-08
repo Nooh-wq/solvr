@@ -422,3 +422,133 @@ export function UserPlusIcon(props: IconProps) {
     </svg>
   );
 }
+
+// Sidebar-nav additions: each admin surface deserves a visually
+// distinct glyph so a collapsed sidebar (and a scanning admin) can
+// tell rows apart at a glance. The pre-existing ShieldIcon was
+// overloaded across 6+ rows before these landed.
+
+/** Lightning bolt — Triggers. Reads as "instant fire on an event." */
+export function BoltIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M11 2 4 11h5l-1 7 7-9h-5l1-7Z" />
+    </svg>
+  );
+}
+
+/** Circular arrows — Automations. Reads as "runs on a schedule." */
+export function RefreshIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3.5 8a6.5 6.5 0 0 1 12-2.5" />
+      <path d="M16.5 12a6.5 6.5 0 0 1-12 2.5" />
+      <path d="M15.5 2v3.5H12M4.5 18v-3.5H8" />
+    </svg>
+  );
+}
+
+/** Arrow trending up-right — Escalation paths. Reads as "escalate." */
+export function TrendingUpIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 14 8 9l3 3 6-6" />
+      <path d="M13 3h4v4" />
+    </svg>
+  );
+}
+
+/** Clock — SLA policies. Reads as "time budget." */
+export function ClockIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 5.5V10l2.5 1.5" />
+    </svg>
+  );
+}
+
+/** Calendar — Business calendars. */
+export function CalendarIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="4.5" width="14" height="12.5" rx="1.5" />
+      <path d="M3 8h14M7 3v3M13 3v3" />
+    </svg>
+  );
+}
+
+/** Key — Roles. Reads as "who holds what permission." */
+export function KeyIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="7" cy="13" r="3.5" />
+      <path d="M9.5 10.5 17 3M14 6l2 2M12 8l2 2" />
+    </svg>
+  );
+}
+
+/** Split node — Routing. Reads as "path chooser." */
+export function SplitIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 4v3.5a4 4 0 0 0 4 4h4a4 4 0 0 1 4 4V17" />
+      <path d="M2.5 4h3M14.5 17h3" />
+      <circle cx="4" cy="4" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="16" cy="17" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Play square — Macros. Reads as "canned run." */
+export function PlaySquareIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="3" width="14" height="14" rx="2.5" />
+      <path d="M8.5 7 13 10l-4.5 3V7Z" />
+    </svg>
+  );
+}
+
+/** Chat rectangle with lines — Canned responses (pre-written text). */
+export function MessageSquareIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 4.5h14v9H8L5 17v-3.5H3v-9Z" />
+      <path d="M6.5 8h7M6.5 10.5h4" />
+    </svg>
+  );
+}
+
+/** Curly braces — Placeholders (template variables). */
+export function BracesIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 3.5C6.5 3.5 6 4.5 6 5.5v3c0 1-.5 1.5-2 1.5 1.5 0 2 .5 2 1.5v3c0 1 .5 2 2 2" />
+      <path d="M12 3.5c1.5 0 2 1 2 2v3c0 1 .5 1.5 2 1.5-1.5 0-2 .5-2 1.5v3c0 1-.5 2-2 2" />
+    </svg>
+  );
+}
+
+/** Smiley — CSAT & Feedback. */
+export function SmileyIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M7 12c.7 1 1.7 1.5 3 1.5s2.3-.5 3-1.5" />
+      <circle cx="7.5" cy="8" r=".5" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="8" r=".5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Two nested arrows — Analytics/Reports export. Distinct from
+ *  ChartBarIcon (Analytics) so the two adjacent nav rows don't blur. */
+export function FileTextIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 2.5h7l4 4V17a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" />
+      <path d="M12 2.5V7h4M7 10.5h6M7 13.5h6" />
+    </svg>
+  );
+}

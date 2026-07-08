@@ -29,6 +29,18 @@ import {
   ChevronDownIcon,
   MenuIcon,
   StarIcon,
+  BoltIcon,
+  RefreshIcon,
+  TrendingUpIcon,
+  ClockIcon,
+  CalendarIcon,
+  KeyIcon,
+  SplitIcon,
+  PlaySquareIcon,
+  MessageSquareIcon,
+  BracesIcon,
+  SmileyIcon,
+  FileTextIcon,
 } from "@/components/icons";
 
 // Every nav row needs a visually distinct glyph so collapsed-mode users
@@ -50,8 +62,20 @@ export type NavIconKey =
   | "audit"
   | "deletions"
   | "analytics"
+  | "reports"
   | "shield"
-  | "super";
+  | "super"
+  | "triggers"
+  | "automations"
+  | "escalations"
+  | "sla"
+  | "calendars"
+  | "roles"
+  | "routing"
+  | "macros"
+  | "cannedResponses"
+  | "placeholders"
+  | "csat";
 
 const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.ReactElement> = {
   overview: HomeIcon,
@@ -70,8 +94,20 @@ const ICONS: Record<NavIconKey, (props: React.SVGProps<SVGSVGElement>) => React.
   audit: DocumentIcon,
   deletions: UserMinusIcon,
   analytics: ChartBarIcon,
+  reports: FileTextIcon,
   shield: ShieldIcon,
   super: ShieldIcon,
+  triggers: BoltIcon,
+  automations: RefreshIcon,
+  escalations: TrendingUpIcon,
+  sla: ClockIcon,
+  calendars: CalendarIcon,
+  roles: KeyIcon,
+  routing: SplitIcon,
+  macros: PlaySquareIcon,
+  cannedResponses: MessageSquareIcon,
+  placeholders: BracesIcon,
+  csat: SmileyIcon,
 };
 
 export type NavLink = { href: string; label: string; icon: NavIconKey; badge?: number };
