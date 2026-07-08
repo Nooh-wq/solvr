@@ -358,6 +358,67 @@ export async function updateOrganizationNotes(
   return { ok: true };
 }
 
+// M2.6 — org SLA + business-hours overrides. Written to
+// OrganizationSettings so the SLA engine's resolveSlaPolicy /
+// resolveBusinessCalendar functions pick them up on the next ticket
+// create. Passing null clears the override (falls back to tenant
+// default).
+const orgOverridesSchema = z.object({
+  organizationId: z.string().min(1),
+  slaPolicyId: z.string().min(1).nullable(),
+  businessHoursId: z.string().min(1).nullable(),
+});
+
+export async function updateOrganizationOverrides(input: z.infer<typeof orgOverridesSchema>) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = orgOverridesSchema.parse(input);
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      // Verify the referenced policy/calendar belong to THIS tenant.
+      // RLS on those tables already guarantees it, but a friendlier
+      // error message beats a raw FK/permission failure.
+      if (data.slaPolicyId) {
+        const p = await tx.slaPolicy.findFirst({
+          where: { id: data.slaPolicyId, tenantId: session.tenantId },
+          select: { id: true },
+        });
+        if (!p) throw new Error("SLA policy not found in this tenant.");
+      }
+      if (data.businessHoursId) {
+        const c = await tx.businessCalendar.findFirst({
+          where: { id: data.businessHoursId, tenantId: session.tenantId },
+          select: { id: true },
+        });
+        if (!c) throw new Error("Business calendar not found in this tenant.");
+      }
+      await tx.organizationSettings.upsert({
+        where: { organizationId: data.organizationId },
+        create: {
+          organizationId: data.organizationId,
+          tenantId: session.tenantId,
+          slaPolicyId: data.slaPolicyId,
+          businessHoursId: data.businessHoursId,
+        },
+        update: {
+          slaPolicyId: data.slaPolicyId,
+          businessHoursId: data.businessHoursId,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "UPDATE_ORG_OVERRIDES",
+          toValue: `sla=${data.slaPolicyId ?? "default"} cal=${data.businessHoursId ?? "default"}`,
+        },
+      });
+    }
+  );
+  revalidatePath(`/admin/organizations/${data.organizationId}`);
+  return { ok: true as const };
+}
+
 // ---------------------------------------------------------------------------
 // Create + delete
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { listAllTickets } from "@/actions/tickets";
+import { getSlaForTickets } from "@/actions/sla";
 import {
   listMyViews,
   ensureDefaultSharedViews,
@@ -44,6 +45,11 @@ export default async function AgentQueuePage({
     : {};
   const tickets = await listAllTickets(filter);
 
+  // M2.3 — batch-load SLA rows for the visible tickets so each row
+  // can render its badge without a per-row query. Graceful degrade
+  // (empty map) if no policy is configured for this tenant yet.
+  const slaByTicketId = await getSlaForTickets(tickets.map((t) => t.id));
+
   const open = tickets.filter((t) => t.status === "OPEN").length;
   const unassigned = tickets.filter((t) => !t.assignedTeamMemberId).length;
 
@@ -70,6 +76,7 @@ export default async function AgentQueuePage({
         status: t.status,
         assigneeName: t.assignedTo?.name ?? null,
         updatedAt: t.updatedAt.toISOString(),
+        sla: slaByTicketId[t.id] ?? [],
       }))}
       openCount={open}
       unassignedCount={unassigned}

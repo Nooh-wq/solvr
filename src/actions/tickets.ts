@@ -265,6 +265,20 @@ export async function createTicket(input: z.infer<typeof createTicketSchema>) {
     });
   }
 
+  // M2.2 — materialize TicketSla rows BEFORE firing triggers. A rule
+  // that reads SLA state (e.g. an "assign to tier-2 if URGENT breach"
+  // rule wired later) should see a valid TicketSla row rather than
+  // observe a race with the writer.
+  try {
+    const { applySlaToNewTicket } = await import("@/lib/sla-engine");
+    await applySlaToNewTicket({
+      session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+      ticketId: ticket.id,
+    });
+  } catch {
+    // Non-fatal — SLA is best-effort and gracefully degrades to no row.
+  }
+
   // Z8.2 — fire TICKET_CREATED triggers. Awaited so a rule that
   // reassigns the just-created ticket is reflected in the response
   // (matters for the redirect to /portal); failures are caught so a
@@ -689,6 +703,22 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
     }
   }
 
+  // M2.4 — client reply resumes any paused SLA clocks (spec §1's
+  // "resume on client reply"). This is the correct location even
+  // though the PENDING→IN_PROGRESS status transition above would
+  // also trip it: postClientReply may fire on a ticket that never
+  // went through PENDING, and we still want the resume to be a no-op
+  // rather than a false trigger.
+  try {
+    const { resumeSlaClocks } = await import("@/lib/sla-engine");
+    await resumeSlaClocks({
+      session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+      ticketId: ticket.id,
+    });
+  } catch {
+    // Non-fatal.
+  }
+
   revalidatePath(`/portal/tickets/${ticket.id}`);
   return { ok: true };
 }
@@ -781,6 +811,25 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         ticketRef: ticket.reference,
         ticketUrl: `/portal/tickets/${ticket.id}`,
       });
+    }
+  }
+
+  // M2.2 — first public agent reply satisfies FIRST_RESPONSE SLA.
+  // Reuses the existing Ticket.firstReplyAt field (spec §3: "Do NOT
+  // confuse firstReplyAt with FIRST_RESPONSE satisfaction. They're
+  // the same event"). Only fires when the ticket had no prior first
+  // reply — we key off `!ticket.firstReplyAt` before the tx, because
+  // the tx already updated it if this was the first reply.
+  if (!data.isInternal && !ticket.firstReplyAt) {
+    try {
+      const { markFirstResponseSatisfied } = await import("@/lib/sla-engine");
+      await markFirstResponseSatisfied({
+        session: { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role },
+        ticketId: ticket.id,
+        at: new Date(),
+      });
+    } catch {
+      // Non-fatal — SLA is best-effort.
     }
   }
 
@@ -961,6 +1010,44 @@ export async function updateTicket(input: z.infer<typeof updateTicketSchema>) {
       const token = await signCsatToken({ ticketId: updated.id, tenantId: session.tenantId });
       const rateUrl = `${siteUrl()}/rate/${encodeURIComponent(token)}`;
       await sendCsatRequestEmail(client.email, rateUrl, branding);
+    }
+  }
+
+  // M2.4 — SLA clock state transitions on status change. PENDING is
+  // the only auto-pause state (spec §3): IN_PROGRESS and RESOLVED
+  // both keep ticking. Any transition INTO PENDING pauses; any
+  // transition OUT OF PENDING resumes. RESOLUTION satisfaction fires
+  // the first time status crosses into RESOLVED.
+  if (statusChanged) {
+    try {
+      const engineSession = { tenantId: session.tenantId, subjectId: session.subjectId, role: session.role };
+      const { pauseSlaClocks, resumeSlaClocks, markResolutionSatisfied } = await import("@/lib/sla-engine");
+      // `data.status` is what was requested; the pre-update ticket's
+      // `status` is where we came from.
+      const previousStatus = statusChanged ? (updated.status !== data.status ? updated.status : null) : null;
+      const wasPending = previousStatus === "PENDING" || (previousStatus === null && data.status !== "PENDING");
+      // Simpler: pause if transitioning INTO PENDING; resume if
+      // transitioning OUT OF PENDING. The tx already committed the
+      // new status, so we compare updated.status to what pauseSlaClocks
+      // needs.
+      if (data.status === "PENDING") {
+        await pauseSlaClocks({ session: engineSession, ticketId: updated.id });
+      } else {
+        // Any non-PENDING transition: safely no-op if no rows were
+        // in a paused state.
+        await resumeSlaClocks({ session: engineSession, ticketId: updated.id });
+      }
+      if (data.status === "RESOLVED") {
+        await markResolutionSatisfied({
+          session: engineSession,
+          ticketId: updated.id,
+          at: new Date(),
+        });
+      }
+      // silence the unused vars — kept for clarity in the block above.
+      void wasPending;
+    } catch {
+      // Non-fatal.
     }
   }
 
