@@ -211,7 +211,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
             include this ticket's category (or are empty = all) render. */}
         <EscalateRail
           ticketId={ticket.id}
-          paths={escalationPaths.map((p) => ({ id: p.id, label: p.label, destKind: p.destKind }))}
+          paths={escalationPaths.map((p) => ({ id: p.id, label: p.label, icon: p.icon, destKind: p.destKind }))}
         />
 
         {/* Contact = client identity + org line + prior activity + ticket meta. */}

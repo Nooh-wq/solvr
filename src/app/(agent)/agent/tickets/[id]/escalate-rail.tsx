@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/toast";
 type Path = {
   id: string;
   label: string;
+  icon: string | null;
   destKind: "TEAM" | "WEBHOOK" | "EMAIL" | "INTEGRATION";
 };
 
@@ -22,6 +23,17 @@ const DEST_HINT: Record<Path["destKind"], string> = {
   WEBHOOK: "Posts to a webhook",
   EMAIL: "Sends an email",
   INTEGRATION: "Marketplace integration",
+};
+
+// Small icon glyph set — kept as unicode so no icon-library dependency
+// is needed for this one lightweight decoration. `icon` is validated at
+// the schema layer (ESCALATION_ICON_KEYS in lib/escalations.ts).
+const ICON_GLYPH: Record<string, string> = {
+  alertTriangle: "⚠",
+  shield: "🛡",
+  flame: "🔥",
+  arrowUp: "↑",
+  megaphone: "📣",
 };
 
 export function EscalateRail({ ticketId, paths }: { ticketId: string; paths: Path[] }) {
@@ -66,7 +78,10 @@ export function EscalateRail({ ticketId, paths }: { ticketId: string; paths: Pat
             className="text-left px-3 py-2 rounded-lg text-[13px] font-medium bg-black/[0.03] dark:bg-white/[0.04] hover:bg-[var(--color-primary)] hover:text-white transition-colors duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate">{p.label}</span>
+              <span className="flex items-center gap-1.5 truncate">
+                {p.icon && ICON_GLYPH[p.icon] && <span aria-hidden className="text-[14px] leading-none">{ICON_GLYPH[p.icon]}</span>}
+                <span className="truncate">{p.label}</span>
+              </span>
               <span className="text-[10px] opacity-60">{p.destKind}</span>
             </div>
           </button>

@@ -142,7 +142,9 @@ export type ActionExecutionResult = {
 export async function executeActions(
   rawActions: Prisma.JsonValue,
   ticketId: string,
-  session: RuleEngineSession
+  session: RuleEngineSession,
+  /** Depth of the rule-invocation chain that led here. Used to cap loops. */
+  invocationDepth: number = 0
 ): Promise<ActionExecutionResult> {
   const parsed = actionListSchema.safeParse(rawActions);
   if (!parsed.success) {
@@ -155,7 +157,7 @@ export async function executeActions(
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i];
     try {
-      await executeOne(a, ticketId, session);
+      await executeOne(a, ticketId, session, invocationDepth);
       ranActionCount++;
     } catch (e) {
       errors.push({ index: i, message: e instanceof Error ? e.message : "Unknown error" });
@@ -164,7 +166,12 @@ export async function executeActions(
   return { ranActionCount, errors };
 }
 
-async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSession): Promise<void> {
+async function executeOne(
+  a: RuleAction,
+  ticketId: string,
+  session: RuleEngineSession,
+  invocationDepth: number
+): Promise<void> {
   // Rules operate as a "system agent" within their tenant — RLS is
   // still scoped to session.tenantId, but role is elevated to ADMIN
   // for the duration of the rule's mutation so the rule can perform
@@ -186,6 +193,7 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           data: { assignedTeamMemberId: pick.id },
         })
       );
+      await runRulesForEvent({ event: "TICKET_UPDATED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "assign_team_member": {
@@ -195,6 +203,7 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           data: { assignedTeamMemberId: a.teamMemberId },
         })
       );
+      await runRulesForEvent({ event: "TICKET_UPDATED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "set_status": {
@@ -207,6 +216,8 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           },
         })
       );
+      await runRulesForEvent({ event: "STATUS_CHANGED", ticketId, session, invocationDepth: invocationDepth + 1 });
+      await runRulesForEvent({ event: "TICKET_UPDATED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "set_priority": {
@@ -216,6 +227,8 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           data: { priority: a.priority },
         })
       );
+      await runRulesForEvent({ event: "PRIORITY_CHANGED", ticketId, session, invocationDepth: invocationDepth + 1 });
+      await runRulesForEvent({ event: "TICKET_UPDATED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "set_category": {
@@ -225,6 +238,7 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           data: { categoryId: a.categoryId },
         })
       );
+      await runRulesForEvent({ event: "TICKET_UPDATED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "add_tag": {
@@ -252,6 +266,10 @@ async function executeOne(a: RuleAction, ticketId: string, session: RuleEngineSe
           update: {},
         });
       });
+      // Z8 gap-close — chain TAG_ADDED so rules watching for tag
+      // application can react. Depth counter carries into the child
+      // fire, so a self-tagging loop hits INVOCATION_CAP.
+      await runRulesForEvent({ event: "TAG_ADDED", ticketId, session, invocationDepth: invocationDepth + 1 });
       return;
     }
     case "add_internal_note": {
@@ -367,25 +385,21 @@ export async function runRulesForEvent(params: {
   const { event, ticketId, session } = params;
   const depth = params.invocationDepth ?? 0;
   if (depth >= INVOCATION_CAP) {
-    // Cap hit — log once, then bail. Every rule that would have fired
-    // beyond the cap gets the same halt entry (one per event, not per
-    // rule) so the audit stream isn't flooded on a runaway.
+    // Cap hit — log once via AuditLog (RuleRunLog.ruleId is FK-bound
+    // to Rule, so a synthetic "cap-halted" sentinel can't live there).
+    // Writing to AuditLog keeps the halt visible in the audit stream
+    // one row per cap event, and the halt itself is the load-bearing
+    // guarantee here — silent-halt would be worse than no log.
     await withRls(
       { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
       async (tx) => {
-        await tx.ruleRunLog.create({
+        await tx.auditLog.create({
           data: {
             tenantId: session.tenantId,
-            ruleId: "cap-halted", // sentinel; no FK constraint
             ticketId,
-            outcome: "skipped_cap",
-            ranActionCount: 0,
-            errorMessage: `Invocation cap ${INVOCATION_CAP} reached for event ${event}`,
+            action: "RULE_INVOCATION_CAP",
+            toValue: `Event ${event} halted at depth ${depth} (cap ${INVOCATION_CAP})`,
           },
-        }).catch(() => {
-          // If the sentinel row can't be written (FK enforcement in a
-          // future migration), we just swallow — the cap still halts
-          // the loop, which is the primary guarantee.
         });
       }
     );
@@ -492,7 +506,7 @@ export async function runRulesForEvent(params: {
   );
 
   for (const rule of matched) {
-    const result = await executeActions(rule.actions, ticketId, session);
+    const result = await executeActions(rule.actions, ticketId, session, depth);
     await withRls(
       { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
       async (tx) => {

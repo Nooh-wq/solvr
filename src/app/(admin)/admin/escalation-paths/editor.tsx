@@ -45,6 +45,7 @@ export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(initialRows[0]?.id ?? null);
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
+  const [icon, setIcon] = useState<string>("alertTriangle");
   const [destKind, setDestKind] = useState<DestKind>("TEAM");
   const [categoryIdsText, setCategoryIdsText] = useState("");
   const [configText, setConfigText] = useState(EXAMPLE_CONFIGS.TEAM);
@@ -66,6 +67,7 @@ export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
         try {
           await createEscalationPath({
             label: label.trim(),
+            icon,
             categoryIds,
             destKind,
             destConfig,
@@ -114,6 +116,30 @@ export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
         {createOpen && (
           <div className="mb-3 space-y-2 border-t border-black/5 dark:border-white/10 pt-3">
             <Input placeholder="Button label (e.g. Escalate to Dev)" value={label} onChange={(e) => setLabel(e.target.value)} />
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-[var(--color-neutral-500)] font-semibold">Icon</label>
+              <div className="flex gap-1 mt-1">
+                {(["alertTriangle", "shield", "flame", "arrowUp", "megaphone"] as const).map((k) => {
+                  const glyph = { alertTriangle: "⚠", shield: "🛡", flame: "🔥", arrowUp: "↑", megaphone: "📣" }[k];
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setIcon(k)}
+                      className={`h-8 w-8 rounded-lg text-[15px] flex items-center justify-center transition-colors cursor-pointer ${
+                        icon === k
+                          ? "bg-[var(--color-primary)] text-white"
+                          : "bg-black/[0.045] dark:bg-white/[0.06] hover:bg-black/[0.08] dark:hover:bg-white/[0.1]"
+                      }`}
+                      aria-label={k}
+                      title={k}
+                    >
+                      {glyph}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <Select
               value={destKind}
               onChange={(e) => {
