@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
+import { listCannedResponses } from "@/actions/cannedResponses";
+import { getTenantById } from "@/lib/tenant";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
 import { getPriorActivityForClient, getOrgActivity } from "@/actions/priorActivity";
@@ -17,14 +19,16 @@ import { CopilotPanel } from "./copilot-panel";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [session, ticket, agents, guests] = await Promise.all([
+  const [session, ticket, agents, guests, cannedResponses] = await Promise.all([
     requireSession({ minRole: "AGENT" }),
     getTicket(id),
     listAgents(),
     listTicketGuests(id),
+    listCannedResponses(),
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
+  const tenantForContext = await getTenantById(session.tenantId);
 
   // Z2.1: three independent custom-field lookups — ticket + its requester
   // (if a real EndUser) + its organization. Run in parallel; each is one
@@ -50,6 +54,27 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   // (RLS-invisible / not yet backfilled).
   const clientName = ticket.client?.name ?? "Unknown";
   const mentionNames = participantNames(clientName, ticket.messages);
+
+  // Z6.3 — placeholder context for canned-response expansion in the
+  // composer. Client-side expand() runs on this snapshot; no additional
+  // DB round-trips fire at insert time.
+  const placeholderContext = {
+    tenantId: session.tenantId,
+    ticket: {
+      reference: ticket.reference,
+      title: ticket.title,
+      priority: ticket.priority,
+      status: ticket.status,
+      requester: ticket.client
+        ? { name: ticket.client.name, email: ticket.client.email }
+        : null,
+      organization: ticket.organization
+        ? { name: ticket.organization.name }
+        : null,
+    },
+    agent: { name: session.name, email: session.email },
+    tenant: { productName: tenantForContext?.branding?.productName ?? null },
+  };
 
   return (
     // Fill the viewport so the conversation column can stretch to the
@@ -93,7 +118,19 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
               sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
               attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
             }))}
-            composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} isLightAgent={isLightAgent} />}
+            composer={
+              <AgentReplyBox
+                ticketId={ticket.id}
+                mentionNames={mentionNames}
+                isLightAgent={isLightAgent}
+                cannedResponses={cannedResponses.map((r) => ({
+                  shortcut: r.shortcut,
+                  name: r.name,
+                  body: r.body,
+                }))}
+                placeholderContext={placeholderContext}
+              />
+            }
             // People + Files & links now surface as compact triggers in
             // the conversation header so the right rail can drop those
             // cards entirely.

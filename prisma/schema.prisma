@@ -130,6 +130,7 @@ model Tenant {
   ticketGuests         TicketGuest[]
   surveyResponses      SurveyResponse[]
   savedViews           SavedView[]
+  cannedResponses      CannedResponse[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -319,6 +320,28 @@ model SavedView {
 
   @@index([tenantId, ownerTeamMemberId])
   @@map("saved_views")
+}
+
+// Z6.3 — Canned responses. Support-owned. Personal to a team member
+// when ownerTeamMemberId is set; tenant-shared (Z6.5 shape) when null.
+// `shortcut` is the /trigger the composer expands — unique per (tenant,
+// owner) so agents don't collide with each other but shared responses
+// live in a global namespace. Body may contain placeholders resolved
+// via src/lib/placeholders.ts at expansion time.
+model CannedResponse {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerTeamMemberId String?
+  name              String
+  shortcut          String
+  body              String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, ownerTeamMemberId, shortcut])
+  @@index([tenantId, ownerTeamMemberId])
+  @@map("canned_responses")
 }
 
 model Message {

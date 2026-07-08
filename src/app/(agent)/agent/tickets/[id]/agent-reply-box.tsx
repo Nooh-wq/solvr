@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
-import { MessageComposer } from "@/components/message-composer";
+import { MessageComposer, type CannedResponseOption } from "@/components/message-composer";
+import type { PlaceholderContext } from "@/lib/placeholders";
 
 /**
  * Rendered as the composer slot inside ConversationThread, so it lives at the
@@ -22,9 +23,13 @@ export function AgentReplyBox({
   ticketId,
   mentionNames = [],
   isLightAgent = false,
+  cannedResponses = [],
+  placeholderContext,
 }: {
   ticketId: string;
   mentionNames?: string[];
+  cannedResponses?: CannedResponseOption[];
+  placeholderContext?: PlaceholderContext;
   /**
    * Z5.5 — when true, the public reply composer is replaced by an
    * internal-note composer. Server-side postAgentReply also rejects any
@@ -99,6 +104,8 @@ export function AgentReplyBox({
         onSend={sendReply}
         upload={(fd) => uploadTicketAttachment(ticketId, fd)}
         mentionNames={mentionNames}
+        cannedResponses={cannedResponses}
+        placeholderContext={placeholderContext}
         footer={
           <div className="flex items-center justify-between mt-2">
             <button

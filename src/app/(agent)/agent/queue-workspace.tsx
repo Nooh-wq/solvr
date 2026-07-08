@@ -45,6 +45,8 @@ type ViewRow = {
   id: string;
   name: string;
   isDefault: boolean;
+  isShared: boolean;
+  count: number;
   filters: ViewFilters;
   sort: ViewSort;
 };
@@ -78,12 +80,15 @@ export function QueueWorkspace({
   tickets,
   openCount,
   unassignedCount,
+  canShareViews,
 }: {
   views: ViewRow[];
   activeViewId: string | null;
   tickets: QueueTicket[];
   openCount: number;
   unassignedCount: number;
+  /** Z6.5 — only admins can create shared views (permission catalog wiring to follow). */
+  canShareViews: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -105,6 +110,7 @@ export function QueueWorkspace({
 
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [saveShared, setSaveShared] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -144,9 +150,11 @@ export function QueueWorkspace({
           name,
           filters: currentFilters(),
           sort: { key: "updatedAt", dir: "desc" },
+          shared: saveShared,
         });
         setSaveOpen(false);
         setSaveName("");
+        setSaveShared(false);
         toast({ title: `Saved view "${name}"`, variant: "success" });
         router.push(`/agent?view=${res.id}`);
       } catch (e) {
@@ -240,6 +248,25 @@ export function QueueWorkspace({
                 }`}
               >
                 <span className="truncate flex-1">{v.name}</span>
+                <span
+                  className={`text-[11px] font-mono shrink-0 ${
+                    isActive ? "text-white/80" : "text-[var(--color-neutral-500)]"
+                  }`}
+                >
+                  {v.count}
+                </span>
+                {v.isShared && (
+                  <span
+                    className={`text-[9px] uppercase tracking-wide font-semibold shrink-0 px-1 py-px rounded ${
+                      isActive
+                        ? "bg-white/25 text-white"
+                        : "bg-[var(--color-neutral-100)] dark:bg-white/[0.08] text-[var(--color-neutral-500)]"
+                    }`}
+                    title="Shared view"
+                  >
+                    Shared
+                  </span>
+                )}
                 {v.isDefault && (
                   <span
                     className={`text-[10px] shrink-0 ${
@@ -426,16 +453,33 @@ export function QueueWorkspace({
         onClose={() => setSaveOpen(false)}
         title="Save as view"
       >
-        <p className="text-[12px] text-[var(--color-neutral-600)] mb-3">
-          Personal views are visible only to you. Sharing views with your
-          group is coming soon.
-        </p>
         <Input
           value={saveName}
           onChange={(e) => setSaveName(e.target.value)}
           placeholder="e.g. My open tickets"
           autoFocus
         />
+        {canShareViews && (
+          <label className="mt-3 flex items-start gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={saveShared}
+              onChange={(e) => setSaveShared(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-[var(--color-primary)] cursor-pointer"
+            />
+            <span>
+              <span className="block font-medium">Share with team</span>
+              <span className="block text-[var(--color-neutral-500)]">
+                All agents on this tenant can select it; only admins can edit or delete.
+              </span>
+            </span>
+          </label>
+        )}
+        {!canShareViews && (
+          <p className="text-[11px] text-[var(--color-neutral-500)] mt-3">
+            Personal views are visible only to you.
+          </p>
+        )}
         <div className="flex justify-end gap-2 mt-3">
           <Button variant="secondary" onClick={() => setSaveOpen(false)}>
             Cancel

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useStagedAttachments, StagedAttachmentChips, type UploadResult } from "@/components/staged-attachments";
 import { PaperclipIcon, AtIcon, SendIcon, BoldIcon, ItalicIcon, UnderlineIcon, ListBulletIcon, ListOrderedIcon } from "@/components/icons";
 import { ATTACHMENT_ALLOWED_MIME } from "@/lib/validation/ticket";
+import { expand, type PlaceholderContext } from "@/lib/placeholders";
 
 // Split of the composer's single "attach" affordance into image-vs-document.
 // The whitelist itself hasn't changed — every doc mime here already sat in
@@ -20,6 +21,19 @@ function mentionMatchAt(text: string, pos: number): { atIndex: number; query: st
   const m = upToCursor.match(/(?:^|\s)@([\w'-]*)$/);
   if (!m) return null;
   return { atIndex: upToCursor.lastIndexOf("@"), query: m[1] };
+}
+
+/**
+ * Z6.3 — matches "/partial-shortcut" ending at `pos` in `text`. Same rule as
+ * mentionMatchAt but for canned-response shortcuts. Kept intentionally
+ * narrow (a-z, 0-9, dash) so a stray slash in prose ("and/or") doesn't
+ * open the picker.
+ */
+function shortcutMatchAt(text: string, pos: number): { slashIndex: number; query: string } | null {
+  const upToCursor = text.slice(0, pos);
+  const m = upToCursor.match(/(?:^|\s)\/([a-z0-9-]*)$/);
+  if (!m) return null;
+  return { slashIndex: upToCursor.lastIndexOf("/"), query: m[1] };
 }
 
 function initialsOf(name: string) {
@@ -64,11 +78,15 @@ function ToolbarButton({
  * back out by conversation-thread.tsx's renderMessageBody(). No HTML is ever
  * stored or dangerouslySetInnerHTML'd, so there's no new XSS surface.
  */
+export type CannedResponseOption = { shortcut: string; name: string; body: string };
+
 export function MessageComposer({
   placeholder,
   onSend,
   upload,
   mentionNames = [],
+  cannedResponses = [],
+  placeholderContext,
   disabled,
   footer,
 }: {
@@ -76,12 +94,27 @@ export function MessageComposer({
   onSend: (body: string, attachmentIds: string[]) => Promise<void>;
   upload: (formData: FormData) => Promise<UploadResult>;
   mentionNames?: string[];
+  /**
+   * Z6.3 — canned responses the acting session can insert with /shortcut.
+   * Empty (the default) disables the picker entirely. Bodies may contain
+   * {{...}} placeholders resolved through `placeholderContext` at insert
+   * time via src/lib/placeholders.ts.
+   */
+  cannedResponses?: CannedResponseOption[];
+  /**
+   * Z6.2 — context passed to expand() when a canned response is inserted.
+   * The composer is a plain-text surface, so expansion runs in "text"
+   * mode (HTML-escaped). Omitting this while providing cannedResponses
+   * still works — placeholders that can't be resolved render as blanks.
+   */
+  placeholderContext?: PlaceholderContext;
   disabled?: boolean;
   footer?: React.ReactNode;
 }) {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [shortcutQuery, setShortcutQuery] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -110,6 +143,14 @@ export function MessageComposer({
   const { staged, uploading, addFiles, remove, reset, attachmentIds } = useStagedAttachments(upload);
 
   const filteredMentions = mentionQuery === null ? [] : mentionNames.filter((n) => n.toLowerCase().includes(mentionQuery.toLowerCase()));
+  const filteredShortcuts =
+    shortcutQuery === null
+      ? []
+      : cannedResponses.filter(
+          (r) =>
+            r.shortcut.toLowerCase().startsWith(shortcutQuery.toLowerCase()) ||
+            r.name.toLowerCase().includes(shortcutQuery.toLowerCase())
+        );
 
   function setBodyAndCaret(next: string, caret: number) {
     setBody(next);
@@ -153,6 +194,19 @@ export function MessageComposer({
     });
   }
 
+  function insertShortcut(option: CannedResponseOption) {
+    const el = textareaRef.current;
+    const pos = el?.selectionStart ?? body.length;
+    const match = shortcutMatchAt(body, pos);
+    if (!match) return;
+    const expanded = placeholderContext
+      ? expand(option.body, placeholderContext, "text")
+      : option.body;
+    const next = `${body.slice(0, match.slashIndex)}${expanded}${body.slice(pos)}`;
+    setBodyAndCaret(next, match.slashIndex + expanded.length);
+    setShortcutQuery(null);
+  }
+
   function insertMention(name: string) {
     const el = textareaRef.current;
     const pos = el?.selectionStart ?? body.length;
@@ -179,6 +233,12 @@ export function MessageComposer({
     setBody(value);
     const match = mentionMatchAt(value, caret);
     setMentionQuery(match ? match.query : null);
+    if (!match && cannedResponses.length > 0) {
+      const s = shortcutMatchAt(value, caret);
+      setShortcutQuery(s ? s.query : null);
+    } else {
+      setShortcutQuery(null);
+    }
     setHighlightedIndex(0);
   }
 
@@ -202,6 +262,29 @@ export function MessageComposer({
     }
     if (mentionQuery !== null && e.key === "Escape") {
       setMentionQuery(null);
+      return;
+    }
+    if (shortcutQuery !== null && filteredShortcuts.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.min(i + 1, filteredShortcuts.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        insertShortcut(
+          filteredShortcuts[Math.min(highlightedIndex, filteredShortcuts.length - 1)]
+        );
+        return;
+      }
+    }
+    if (shortcutQuery !== null && e.key === "Escape") {
+      setShortcutQuery(null);
       return;
     }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -245,6 +328,60 @@ export function MessageComposer({
           onKeyDown={handleKeyDown}
           className="w-full resize-none border-0 bg-transparent px-3 py-2 text-[13px] focus:outline-none placeholder:text-[var(--color-neutral-400)]"
         />
+
+        {shortcutQuery !== null && filteredShortcuts.length > 0 && (
+          <div className="absolute bottom-full left-0 mb-2 w-80 rounded-xl border border-[var(--color-neutral-200)] bg-[var(--color-surface)] shadow-[0_16px_40px_-12px_rgba(0,0,0,0.3)] overflow-hidden z-20">
+            <div className="max-h-56 overflow-y-auto py-1.5">
+              {filteredShortcuts.map((r, i) => {
+                const active = i === highlightedIndex;
+                return (
+                  <button
+                    key={r.shortcut}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setHighlightedIndex(i)}
+                    onClick={() => insertShortcut(r)}
+                    className={`w-full flex items-start gap-2.5 px-3 py-1.5 text-[13px] text-left cursor-pointer transition-colors duration-100 ${
+                      active ? "bg-[var(--color-primary)] text-white" : "text-[var(--foreground)]"
+                    }`}
+                  >
+                    <span
+                      className={`shrink-0 mt-0.5 font-mono text-[11px] px-1.5 py-0.5 rounded ${
+                        active
+                          ? "bg-white/20 text-white"
+                          : "bg-[var(--color-neutral-100)] dark:bg-white/[0.06] text-[var(--color-neutral-700)]"
+                      }`}
+                    >
+                      /{r.shortcut}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium truncate">{r.name}</span>
+                      <span
+                        className={`block text-[11px] truncate ${
+                          active ? "text-white/80" : "text-[var(--color-neutral-500)]"
+                        }`}
+                      >
+                        {r.body.slice(0, 80)}
+                        {r.body.length > 80 ? "…" : ""}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-3 px-3 py-1.5 border-t border-black/5 dark:border-white/10 bg-[var(--color-light-gray)]/70 text-[10px] text-[var(--color-neutral-500)]">
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">↑↓</kbd> navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">↵</kbd> insert
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1 py-0.5 rounded bg-[var(--color-surface)] border border-black/10 dark:border-white/10 font-mono text-[9px]">esc</kbd> dismiss
+              </span>
+            </div>
+          </div>
+        )}
 
         {mentionQuery !== null && filteredMentions.length > 0 && (
           <div className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-[var(--color-neutral-200)] bg-[var(--color-surface)] shadow-[0_16px_40px_-12px_rgba(0,0,0,0.3)] overflow-hidden z-20">
