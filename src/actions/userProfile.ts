@@ -46,6 +46,13 @@ export type UserProfileHeader = {
   csatCount: number;
   /** Z5.2 — only meaningful for TEAM_MEMBER subjects. Null for end users. */
   ticketAccessScope: "ALL" | "GROUPS" | "ASSIGNED_ONLY" | null;
+  /**
+   * Z5.4 — the wrapper Role id/name for TEAM_MEMBER subjects. Kept
+   * alongside the coarse `role` tier so the profile page can render a
+   * dynamic custom-role picker. Null for END_USER subjects.
+   */
+  roleId: string | null;
+  roleName: string | null;
 };
 
 export type ProfileTicketRow = {
@@ -190,6 +197,8 @@ export async function loadUserProfile(userId: string): Promise<UserProfileData |
       csatAvg: csatAgg.avg,
       csatCount: csatAgg.count,
       ticketAccessScope: teamMember?.ticketAccessScope ?? null,
+      roleId: teamMember?.roleId ?? null,
+      roleName: roleName,
     },
     tickets: tickets.map((t) => ({
       id: t.id,
