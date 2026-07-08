@@ -330,9 +330,9 @@ export function Sidebar({
       )}
 
       <aside
-        className={`fixed left-0 bottom-0 z-40 flex flex-col border-r border-white/50 dark:border-white/10 bg-[var(--color-surface)]/80 backdrop-blur-xl shadow-[1px_0_24px_rgba(0,0,0,0.04)] w-[248px] transition-[width,transform] duration-200 ${
+        className={`fixed left-0 bottom-0 z-40 flex flex-col border-r border-white/50 dark:border-white/10 bg-[var(--color-surface)]/80 backdrop-blur-xl shadow-[1px_0_24px_rgba(0,0,0,0.04)] w-[272px] transition-[width,transform] duration-200 ${
           banner ? "top-9 md:top-9" : "top-0"
-        } ${collapsed ? "md:w-[76px]" : "md:w-[248px]"} ${mobileOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 ${
+        } ${collapsed ? "md:w-[76px]" : "md:w-[272px]"} ${mobileOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 ${
           mounted ? "" : "duration-0"
         }`}
       >
@@ -465,7 +465,7 @@ export function Sidebar({
         </button>
       </aside>
 
-      <div className={`min-h-screen transition-[margin] duration-200 ml-0 ${collapsed ? "md:ml-[76px]" : "md:ml-[248px]"}`}>
+      <div className={`min-h-screen transition-[margin] duration-200 ml-0 ${collapsed ? "md:ml-[76px]" : "md:ml-[272px]"}`}>
         {children}
       </div>
     </div>

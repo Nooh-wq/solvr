@@ -217,7 +217,12 @@ export function DropdownMenuContent({
         `origin-top-${align === "end" ? "right" : "left"} ` +
         `rounded-lg border border-[var(--color-neutral-300)] bg-[var(--color-surface)] ` +
         `shadow-lg shadow-black/[0.06] dark:shadow-black/40 py-1 ` +
-        `max-h-72 overflow-y-auto thin-scrollbar ` +
+        // overflow-x-hidden — long option labels truncate at the item level
+        // (see the `truncate` class on the label span in DropdownMenuItem),
+        // so there's never a need for a horizontal scrollbar and the extra
+        // rail was pure noise. Vertical rides the shared thin-scrollbar
+        // style so it visually matches the sidebar.
+        `max-h-72 overflow-y-auto overflow-x-hidden thin-scrollbar ` +
         className
       }
     >
