@@ -53,6 +53,14 @@ export type UserProfileHeader = {
    */
   roleId: string | null;
   roleName: string | null;
+  /**
+   * M3 — AgentProfile for TEAM_MEMBER subjects. Missing profile rows
+   * collapse to defaults (available, no skills, no cap) — see the
+   * routing engine for the same fallback shape.
+   */
+  agentSkills: string[];
+  agentMaxOpen: number;
+  agentIsAvailable: boolean;
 };
 
 export type ProfileTicketRow = {
@@ -99,7 +107,7 @@ export async function loadUserProfile(userId: string): Promise<UserProfileData |
   ]);
 
   // Support-side reads: lifecycle, tickets, CSAT, chats, role name. One RLS scope.
-  const { lifecycle, tickets, csatAgg, chats, roleName } = await withRls(
+  const { lifecycle, tickets, csatAgg, chats, roleName, agentProfile } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const [lc, tickets, csatRows, chatRows] = await Promise.all([
@@ -158,13 +166,24 @@ export async function loadUserProfile(userId: string): Promise<UserProfileData |
         }),
       ]);
       let roleName: string | null = null;
+      let agentProfile: {
+        skills: string[];
+        maxOpen: number;
+        isAvailable: boolean;
+      } | null = null;
       if (kind === "TEAM_MEMBER" && teamMember) {
         const r = await tx.role.findUnique({ where: { id: teamMember.roleId } });
         roleName = r?.name ?? null;
+        const ap = await tx.agentProfile.findFirst({
+          where: { tenantId: session.tenantId, teamMemberId: teamMember.id },
+          select: { skills: true, maxOpen: true, isAvailable: true },
+        });
+        agentProfile = ap;
       }
       return {
         lifecycle: lc,
         tickets,
+        agentProfile,
         csatAgg:
           csatRows.length === 0
             ? { avg: null, count: 0 }
@@ -199,6 +218,9 @@ export async function loadUserProfile(userId: string): Promise<UserProfileData |
       ticketAccessScope: teamMember?.ticketAccessScope ?? null,
       roleId: teamMember?.roleId ?? null,
       roleName: roleName,
+      agentSkills: agentProfile?.skills ?? [],
+      agentMaxOpen: agentProfile?.maxOpen ?? 0,
+      agentIsAvailable: agentProfile?.isAvailable ?? true,
     },
     tickets: tickets.map((t) => ({
       id: t.id,

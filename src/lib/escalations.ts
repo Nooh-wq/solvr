@@ -2,6 +2,7 @@ import { z } from "zod";
 import { withRls } from "@/lib/db";
 import type { RuleEngineSession } from "@/lib/rule-engine";
 import { listTeamMembersInGroup, systemContext } from "@/lib/shared-platform";
+import { routeTicket, ROUTING_STRATEGIES } from "@/lib/routing";
 
 // Z8.4 — escalation path executor. Called from the ticket-detail
 // "Escalate to X" button and from the rule engine's
@@ -11,6 +12,11 @@ import { listTeamMembersInGroup, systemContext } from "@/lib/shared-platform";
 
 export const TEAM_DEST_CONFIG = z.object({
   groupId: z.string().min(1),
+  // M3 — routing strategy applied when picking an assignee from the group.
+  // Default keeps back-compat with pre-M3 escalations: first member of the
+  // group, no rotation.
+  strategy: z.enum(ROUTING_STRATEGIES).optional(),
+  requiredSkills: z.array(z.string().max(60)).max(10).optional(),
   alsoSetPriority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   alsoAddTag: z.string().max(60).optional(),
 });
@@ -103,13 +109,31 @@ export async function runEscalation(params: {
   try {
     if (path.destKind === "TEAM") {
       const cfg = TEAM_DEST_CONFIG.parse(path.destConfig);
-      const members = await listTeamMembersInGroup(systemContext(session.tenantId), cfg.groupId);
-      if (members.length === 0) throw new Error(`Group ${cfg.groupId} has no members.`);
-      const pick = members[0];
+      // M3 — if a strategy is configured, route through the engine
+      // (scope + availability + capacity + loop cap). Otherwise fall
+      // back to the pre-M3 shape (first member of the group) so
+      // existing paths stay identical until an admin opts in.
+      let pickedId: string;
+      if (cfg.strategy) {
+        const result = await routeTicket({
+          session,
+          ticketId,
+          groupId: cfg.groupId,
+          strategy: cfg.strategy,
+          requiredSkills: cfg.requiredSkills,
+          source: "ESCALATION",
+        });
+        if (!result.ok) throw new Error(`Routing failed: ${result.message}`);
+        pickedId = result.teamMemberId;
+      } else {
+        const members = await listTeamMembersInGroup(systemContext(session.tenantId), cfg.groupId);
+        if (members.length === 0) throw new Error(`Group ${cfg.groupId} has no members.`);
+        pickedId = members[0].id;
+      }
       const { updateTicket } = await import("@/actions/tickets");
       await updateTicket({
         ticketId,
-        assignedTeamMemberId: pick.id,
+        assignedToId: pickedId,
         ...(cfg.alsoSetPriority && { priority: cfg.alsoSetPriority }),
       });
       if (cfg.alsoAddTag) {

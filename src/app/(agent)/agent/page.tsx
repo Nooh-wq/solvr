@@ -7,6 +7,7 @@ import {
 } from "@/actions/views";
 import { viewToTicketFilter } from "@/lib/view-filter";
 import { requireSession, roleAtLeast } from "@/lib/auth";
+import { withRls } from "@/lib/db";
 import { QueueWorkspace } from "./queue-workspace";
 
 // Z6.1 — the queue is now the fallback surface behind Views. Landing
@@ -53,8 +54,25 @@ export default async function AgentQueuePage({
   const open = tickets.filter((t) => t.status === "OPEN").length;
   const unassigned = tickets.filter((t) => !t.assignedTeamMemberId).length;
 
+  // M3 — agent's own availability for the header chip. Fresh accounts
+  // with no AgentProfile row default to Available (matches routing
+  // engine's fallback).
+  let initialAvailable = true;
+  if (session.subjectId) {
+    const ap = await withRls(
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+      (tx) =>
+        tx.agentProfile.findFirst({
+          where: { tenantId: session.tenantId, teamMemberId: session.subjectId! },
+          select: { isAvailable: true },
+        })
+    );
+    if (ap) initialAvailable = ap.isAvailable;
+  }
+
   return (
     <QueueWorkspace
+      initialAvailable={initialAvailable}
       canShareViews={roleAtLeast(session.role, "ADMIN")}
       views={views.map((v) => ({
         id: v.id,

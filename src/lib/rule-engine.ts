@@ -356,6 +356,25 @@ async function executeOne(
       });
       return;
     }
+    case "auto_route": {
+      // M3 — funnel through the routing engine. On success, thread the
+      // assignment through updateTicket so audit + downstream rule
+      // events fire via the normal path. On failure (no candidates,
+      // loop-cap), throw so the rule-run log records why.
+      const { routeTicket } = await import("@/lib/routing");
+      const result = await routeTicket({
+        session,
+        ticketId,
+        groupId: a.groupId,
+        strategy: a.strategy,
+        requiredSkills: a.requiredSkills,
+        source: "RULE",
+      });
+      if (!result.ok) throw new Error(`auto_route: ${result.message}`);
+      const { updateTicket } = await import("@/actions/tickets");
+      await updateTicket({ ticketId, assignedToId: result.teamMemberId });
+      return;
+    }
   }
 }
 
