@@ -129,6 +129,7 @@ model Tenant {
   notifications        Notification[]
   ticketGuests         TicketGuest[]
   surveyResponses      SurveyResponse[]
+  savedViews           SavedView[]
   authCredentials      AuthCredential[]
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
@@ -286,6 +287,38 @@ model SurveyResponse {
 
   @@index([tenantId])
   @@map("survey_responses")
+}
+
+// Z6.1 — Views. A saved filter/sort configuration an agent applies to the
+// queue as their primary work surface. Support-owned; no Prisma relation
+// to the wrapper TeamMember (raw scalar ownerTeamMemberId, per boundary
+// rule 3). A nullable owner is reserved for shared views (Z6.5): NULL
+// means tenant-shared. Filters are structured JSON so they're safe,
+// portable, and eventually swappable to a different query layer (never
+// raw SQL, per Z6 §3 "do NOT store view filter definitions as raw SQL").
+model SavedView {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Owner of a personal view. NULL is reserved for Z6.5 shared views —
+  // enforced today via app-layer checks that reject NULL on create.
+  ownerTeamMemberId   String?
+  name                String
+  // Structured filter JSON: { status?, priority?, categoryId?,
+  // assignedToId? ("me" | "unassigned" | teamMemberId), search? }.
+  // Kept as Json rather than columnized so new filter fields can land
+  // without a migration on this table.
+  filters             Json     @default("{}")
+  // Sort JSON: { key: "updatedAt" | "createdAt" | "priority", dir: "asc" | "desc" }.
+  sort                Json     @default("{\"key\":\"updatedAt\",\"dir\":\"desc\"}")
+  // Marks this view as the agent's default (opens on /agent). Only one
+  // per owner is allowed — enforced at the app layer in setDefaultView().
+  isDefault           Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([tenantId, ownerTeamMemberId])
+  @@map("saved_views")
 }
 
 model Message {
