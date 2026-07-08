@@ -133,6 +133,9 @@ model Tenant {
   teamMemberLifecycles TeamMemberLifecycle[]
   endUserLifecycles    EndUserLifecycle[]
   subjectAvatars       SubjectAvatar[]
+  subjectPreferences   SubjectPreference[]
+  userSessions         UserSession[]
+  loginActivity        LoginActivity[]
   customFieldDefinitions CustomFieldDefinition[]
   customFieldValues      CustomFieldValue[]
   customFieldOptions     CustomFieldOption[]
@@ -479,6 +482,12 @@ model AuthCredential {
   subjectTeamMemberId String?
   passwordHash        String
   passwordChangedAt   DateTime?
+  // M21.2 — email-change flow. `pendingEmail` is the address the confirmation
+  // link resolves to; cleared on confirm (or by a fresh request superseding it).
+  // Held Support-side because the wrapper email column stays authoritative
+  // for identity; nothing outside this flow reads pendingEmail.
+  pendingEmail            String?
+  pendingEmailRequestedAt DateTime?
   mfaSecret           String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -523,6 +532,70 @@ model SubjectAvatar {
 
   @@index([tenantId])
   @@map("subject_avatars")
+}
+
+// M21.1 — Support-owned user preferences (timezone, language). Same Set
+// B pattern as SubjectAvatar: wrapper stays identity-only, Support owns
+// UI concerns. Keyed by subjectId (unique across end_users / team_members
+// thanks to Z1.3 preserved-ids). Density / theme / defaultLanding are
+// reserved for M21.5 (Appearance tab) but the columns land here so a
+// second migration isn't needed.
+model SubjectPreference {
+  subjectId      String   @id
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  timezone       String?
+  language       String?
+  theme          String?
+  density        String?
+  defaultLanding String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("subject_preferences")
+}
+
+// M21.3 — per-device session tracking. Every issued session cookie
+// carries a `sessionId` claim; getSessionUser rejects any cookie whose
+// row is missing or expired. Revoking a session = deleting its row.
+// `subjectKind` mirrors the SessionPayload TS union — kept as a plain
+// string column (not a Prisma enum) so this table works with either
+// end_users or team_members without a wrapper-owned enum.
+model UserSession {
+  id           String   @id
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId    String
+  subjectKind  String
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([tenantId, subjectId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+// M21.3 — append-only login history. Populated in actions/auth.ts's
+// login() on every successful sign-in. Displayed in the Security tab.
+// Kept separate from UserSession so revoking a session doesn't erase the
+// audit trail.
+model LoginActivity {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectId   String
+  subjectKind String
+  userAgent   String?
+  ipAddress   String?
+  country     String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, subjectId, createdAt])
+  @@map("login_activity")
 }
 
 model EndUserLifecycle {

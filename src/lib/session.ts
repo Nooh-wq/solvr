@@ -38,6 +38,12 @@ export type SessionPayload = {
   subjectId: string;
   subjectKind: SubjectKind;
   tenantId: string;
+  /**
+   * M21.3 — the row id of the UserSession this cookie references.
+   * getSessionUser rejects any cookie whose row is missing or expired,
+   * so revoking a session = deleting its row.
+   */
+  sessionId: string;
   /** JWT issued-at (seconds since epoch). Used to invalidate sessions issued before a password change — see getSessionUser(). */
   iat?: number;
 };
@@ -52,6 +58,8 @@ export type DecodedSessionPayload = {
   subjectId: string;
   subjectKind: SubjectKind | undefined;
   tenantId: string;
+  /** M21.3 — undefined for pre-M21.3 legacy cookies; those are rejected by getSessionUser. */
+  sessionId: string | undefined;
   iat?: number;
 };
 
@@ -60,6 +68,7 @@ export async function signSessionToken(payload: SessionPayload): Promise<string>
     subjectId: payload.subjectId,
     subjectKind: payload.subjectKind,
     tenantId: payload.tenantId,
+    sessionId: payload.sessionId,
     purpose: "session",
   })
     .setProtectedHeader({ alg: "HS256" })
@@ -88,6 +97,8 @@ export async function verifySessionToken(token: string): Promise<DecodedSessionP
     if (payload.purpose !== undefined && payload.purpose !== "session") return null;
     if (typeof payload.tenantId !== "string") return null;
 
+    const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+
     // New-shape (Z1.8a onwards)
     if (typeof payload.subjectId === "string" && typeof payload.subjectKind === "string") {
       if (payload.subjectKind !== "END_USER" && payload.subjectKind !== "TEAM_MEMBER") return null;
@@ -95,6 +106,7 @@ export async function verifySessionToken(token: string): Promise<DecodedSessionP
         subjectId: payload.subjectId,
         subjectKind: payload.subjectKind,
         tenantId: payload.tenantId,
+        sessionId,
         iat: payload.iat,
       };
     }
@@ -107,6 +119,7 @@ export async function verifySessionToken(token: string): Promise<DecodedSessionP
         subjectId: payload.userId,
         subjectKind: undefined,
         tenantId: payload.tenantId,
+        sessionId,
         iat: payload.iat,
       };
     }
@@ -117,7 +130,14 @@ export async function verifySessionToken(token: string): Promise<DecodedSessionP
   }
 }
 
-/** Sets the session cookie. Call from a Server Action only (cookies() is writable there). */
+/**
+ * Sets the session cookie. Call from a Server Action only (cookies() is
+ * writable there).
+ *
+ * `sessionId` must be an existing UserSession row (see
+ * @/lib/user-session's createUserSession — kept in a separate module so
+ * middleware's Edge runtime doesn't try to import Prisma).
+ */
 export async function createSessionCookie(payload: SessionPayload) {
   const token = await signSessionToken(payload);
   const cookieStore = await cookies();
@@ -129,6 +149,8 @@ export async function createSessionCookie(payload: SessionPayload) {
     maxAge: SESSION_DURATION_SECONDS,
   });
 }
+
+export { SESSION_DURATION_SECONDS };
 
 export async function destroySessionCookie() {
   const cookieStore = await cookies();
@@ -244,6 +266,60 @@ export async function verifyPasswordResetToken(token: string): Promise<PasswordR
     if (payload.purpose !== "password-reset") return null;
     if (typeof payload.userId !== "string" || typeof payload.tenantId !== "string") return null;
     return { userId: payload.userId, tenantId: payload.tenantId, iat: payload.iat };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Email-change link — see actions/emailChange.ts (M21.2). Signed, single-use
+// via the pendingEmail column: the confirm handler matches the token's
+// newEmail against AuthCredential.pendingEmail and clears it, so a second
+// click finds nothing pending and is rejected.
+//
+// 24-hour expiry: shorter than password reset because the alert email to the
+// old address is time-sensitive — if someone hijacked the account, the real
+// owner needs a plausible window to notice and act, not a week.
+// ---------------------------------------------------------------------------
+
+const EMAIL_CHANGE_DURATION_SECONDS = 60 * 60 * 24; // 24 hours
+
+export type EmailChangeTokenPayload = {
+  userId: string;
+  tenantId: string;
+  newEmail: string;
+  iat?: number;
+};
+
+export async function signEmailChangeToken(payload: {
+  userId: string;
+  tenantId: string;
+  newEmail: string;
+}): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "email-change" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${EMAIL_CHANGE_DURATION_SECONDS}s`)
+    .sign(getSecret());
+}
+
+export async function verifyEmailChangeToken(token: string): Promise<EmailChangeTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    if (payload.purpose !== "email-change") return null;
+    if (
+      typeof payload.userId !== "string" ||
+      typeof payload.tenantId !== "string" ||
+      typeof payload.newEmail !== "string"
+    ) {
+      return null;
+    }
+    return {
+      userId: payload.userId,
+      tenantId: payload.tenantId,
+      newEmail: payload.newEmail,
+      iat: payload.iat,
+    };
   } catch {
     return null;
   }

@@ -25,6 +25,8 @@ import {
   sendLoginOtpEmail,
 } from "@/lib/email/events";
 import { notify } from "@/lib/notifications";
+import { recordLoginActivity } from "@/lib/login-activity";
+import { createUserSession } from "@/lib/user-session";
 import { REDIRECT_BY_ROLE } from "@/lib/redirect-by-role";
 import { matchCompanyByEmail } from "@/lib/company-match";
 import {
@@ -258,10 +260,21 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
 
   if (result.autoApproved) {
     await sendRegistrationApprovedEmail(result.email, result.branding);
+    const sessionId = await createUserSession({
+      subjectId: payload.userId,
+      subjectKind: "END_USER",
+      tenantId: payload.tenantId,
+    });
     await createSessionCookie({
       subjectId: payload.userId,
       subjectKind: "END_USER",
       tenantId: payload.tenantId,
+      sessionId,
+    });
+    await recordLoginActivity({
+      tenantId: payload.tenantId,
+      subjectId: payload.userId,
+      subjectKind: "END_USER",
     });
     return { ok: true, redirectTo: REDIRECT_BY_ROLE.CLIENT };
   }
@@ -338,10 +351,25 @@ export async function login(input: z.infer<typeof loginSchema>) {
   if (status === "INVITED") return { error: "Please accept your invite email first to set up your account." };
 
   const role = lookup.isStaff ? wrapperRoleNameToUserRole(lookup.roleName!) : "CLIENT";
+  const subjectKind = lookup.isStaff ? "TEAM_MEMBER" : "END_USER";
+  const sessionId = await createUserSession({
+    subjectId: lookup.subjectId,
+    subjectKind,
+    tenantId: tenant.id,
+  });
   await createSessionCookie({
     subjectId: lookup.subjectId,
-    subjectKind: lookup.isStaff ? "TEAM_MEMBER" : "END_USER",
+    subjectKind,
     tenantId: tenant.id,
+    sessionId,
+  });
+  // M21.3 — append-only login history. Fire-and-forget so a slow write
+  // doesn't stall the login response; failure here is silently swallowed
+  // since it must never block a valid credential from signing in.
+  await recordLoginActivity({
+    tenantId: tenant.id,
+    subjectId: lookup.subjectId,
+    subjectKind,
   });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[role] };
 }
@@ -459,10 +487,22 @@ export async function confirmPasswordReset(
 
   if (result.failed) return { error: result.message };
 
+  const subjectKind = result.isStaff ? "TEAM_MEMBER" : "END_USER";
+  const sessionId = await createUserSession({
+    subjectId: payload.userId,
+    subjectKind,
+    tenantId: payload.tenantId,
+  });
   await createSessionCookie({
     subjectId: payload.userId,
-    subjectKind: result.isStaff ? "TEAM_MEMBER" : "END_USER",
+    subjectKind,
     tenantId: payload.tenantId,
+    sessionId,
+  });
+  await recordLoginActivity({
+    tenantId: payload.tenantId,
+    subjectId: payload.userId,
+    subjectKind,
   });
   return { ok: true as const, redirectTo: REDIRECT_BY_ROLE[result.role] };
 }
@@ -612,10 +652,22 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
 
   if (result.failed) return { error: result.message };
 
+  const subjectKind = result.isStaff ? "TEAM_MEMBER" : "END_USER";
+  const sessionId = await createUserSession({
+    subjectId: payload.userId,
+    subjectKind,
+    tenantId: payload.tenantId,
+  });
   await createSessionCookie({
     subjectId: payload.userId,
-    subjectKind: result.isStaff ? "TEAM_MEMBER" : "END_USER",
+    subjectKind,
     tenantId: payload.tenantId,
+    sessionId,
+  });
+  await recordLoginActivity({
+    tenantId: payload.tenantId,
+    subjectId: payload.userId,
+    subjectKind,
   });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
 }
