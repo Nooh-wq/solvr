@@ -156,6 +156,8 @@ model Tenant {
   slaPolicies            SlaPolicy[]
   businessCalendars      BusinessCalendar[]
   ticketSlas             TicketSla[]
+  agentProfiles          AgentProfile[]
+  autoAssignmentLogs     AutoAssignmentLog[]
 
   @@map("tenants")
 }
@@ -1543,4 +1545,55 @@ model TicketSla {
   // the satisfied/breached rows quickly.
   @@index([tenantId, dueAt, satisfiedAt, breachedAt])
   @@map("ticket_slas")
+}
+
+
+// ===========================================================================
+// M3 — Routing & Assignment Engine
+// ===========================================================================
+// Support-owned. teamMemberId is a scalar (no Prisma relation to the wrapper
+// TeamMember, boundary rule 3). One row per team member per tenant.
+
+model AgentProfile {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  teamMemberId String
+  // Exact-string skill tags (e.g. "billing", "spanish"). M9 will add
+  // fuzzy/synonym matching on top of this list; M3 stays exact-match.
+  skills       String[] @default([])
+  // Soft ceiling on open tickets. Load-based strategy skips candidates
+  // whose open count >= maxOpen. 0 = unlimited (default so an admin
+  // who never touches this page doesn't accidentally block routing).
+  maxOpen      Int      @default(0)
+  // Agent-controlled availability. Away agents are excluded from every
+  // strategy. Toggled from the agent header (Available/Away chip).
+  isAvailable  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, teamMemberId])
+  @@index([tenantId, isAvailable])
+  @@map("agent_profiles")
+}
+
+// Loop cap for auto-reassignment. Every time routeTicket picks a new
+// assignee, one row is written. The engine reads the last N rows for a
+// ticket and refuses to auto-reassign if the last N are all auto-picks
+// within the cap window. Manual assignments (source=MANUAL) reset the
+// window.
+model AutoAssignmentLog {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId       String
+  // Picked assignee. Null on cap-halt (recorded for audit).
+  teamMemberId   String?
+  strategy       String   // "ROUND_ROBIN" | "LOAD_BASED" | "SKILLS_BASED"
+  source         String   // "ESCALATION" | "RULE" | "MANUAL"
+  cappedOut      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, ticketId, createdAt])
+  @@map("auto_assignment_logs")
 }

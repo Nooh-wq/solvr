@@ -8,6 +8,7 @@ import { NotesEditor } from "./notes-editor";
 import { InteractionsTimeline } from "./interactions-timeline";
 import { ScopeEditor } from "./scope-editor";
 import { RoleEditor } from "./role-editor";
+import { AgentProfileEditor } from "./agent-profile-editor";
 import { requireSession } from "@/lib/auth";
 
 // Z3.3 — Deep user profile. Works for either an EndUser or a
@@ -167,6 +168,14 @@ export default async function UserProfilePage({
               teamMemberId={header.id}
               initialScope={header.ticketAccessScope}
               disabled={isSelf}
+            />
+          )}
+          {header.kind === "TEAM_MEMBER" && (
+            <AgentProfileEditor
+              teamMemberId={header.id}
+              initialSkills={header.agentSkills}
+              initialMaxOpen={header.agentMaxOpen}
+              initialIsAvailable={header.agentIsAvailable}
             />
           )}
           {customFields.length > 0 && (

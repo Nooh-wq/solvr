@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { SlaBadge } from "@/components/sla-badge";
+import { AvailabilityChip } from "@/components/availability-chip";
 import { SearchIcon } from "@/components/icons";
 import { Select, Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,7 @@ export function QueueWorkspace({
   openCount,
   unassignedCount,
   canShareViews,
+  initialAvailable,
 }: {
   views: ViewRow[];
   activeViewId: string | null;
@@ -93,6 +95,8 @@ export function QueueWorkspace({
   unassignedCount: number;
   /** Z6.5 — only admins can create shared views (permission catalog wiring to follow). */
   canShareViews: boolean;
+  /** M3 — current agent's AgentProfile.isAvailable. */
+  initialAvailable: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -333,13 +337,14 @@ export function QueueWorkspace({
               <span className="text-[11px] text-[var(--color-neutral-500)]">Default</span>
             )}
           </div>
-          <div className="flex gap-4 text-[13px] text-[var(--color-neutral-600)]">
+          <div className="flex items-center gap-4 text-[13px] text-[var(--color-neutral-600)]">
             <span>
               <strong className="text-[var(--foreground)]">{openCount}</strong> open
             </span>
             <span>
               <strong className="text-[var(--foreground)]">{unassignedCount}</strong> unassigned
             </span>
+            <AvailabilityChip initialAvailable={initialAvailable} />
           </div>
         </div>
 
