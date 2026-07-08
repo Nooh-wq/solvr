@@ -130,6 +130,12 @@ export type TeamRow = {
   id: string;
   name: string | null;
   email: string;
+  /**
+   * Coarse tier — used by matrix guards + legacy callers (SUPER_ADMIN /
+   * ADMIN / AGENT / CLIENT). Derived from the wrapper Role.name via
+   * wrapperRoleNameToTeamRole(); an unknown custom-role name collapses
+   * to AGENT (safest tier) so a mis-named role never inherits ADMIN+.
+   */
   role: TeamRole;
   status: UserStatus;
   company: string | null;
@@ -143,6 +149,14 @@ export type TeamRow = {
   rejectedById: string | null;
   avatarUrl: string | null;
   createdAt: Date;
+  /**
+   * Z5.4 — the wrapper Role's id + display name. Null for CLIENT rows
+   * (end users are not on a wrapper Role). Together they let the team
+   * table render a dynamic role picker across every Role in the tenant,
+   * including custom roles created via /admin/roles.
+   */
+  roleId: string | null;
+  roleName: string | null;
 };
 
 const SUPER_ADMIN_ROLE_NAME = "Super Admin";
@@ -213,6 +227,8 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
       rejectedById: lc?.rejectedById ?? null,
       avatarUrl: avatarRow?.avatarUrl ?? null,
       createdAt: endUser.createdAt,
+      roleId: null,
+      roleName: null,
     };
   }
   const tm = teamMember!;
@@ -234,6 +250,8 @@ async function loadTeamRow(tx: Tx, tenantId: string, subjectId: string): Promise
     rejectedById: lc?.rejectedById ?? null,
     avatarUrl: avatarRow?.avatarUrl ?? null,
     createdAt: tm.createdAt,
+    roleId: tm.roleId,
+    roleName: tm.role.name,
   };
 }
 
@@ -298,6 +316,8 @@ async function loadTeamRows(
       rejectedById: lc?.rejectedById ?? null,
       avatarUrl: avatarBySubjectId.get(eu.id) ?? null,
       createdAt: eu.createdAt,
+      roleId: null,
+      roleName: null,
     });
   }
 
@@ -322,6 +342,8 @@ async function loadTeamRows(
       rejectedById: lc?.rejectedById ?? null,
       avatarUrl: avatarBySubjectId.get(tm.id) ?? null,
       createdAt: tm.createdAt,
+      roleId: tm.roleId,
+      roleName: tm.role.name,
     });
   }
 
@@ -1708,4 +1730,184 @@ export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> =
       filterOptions: { categories: allCategories, agents: allAgents },
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Z5.4 — assign a team member to any wrapper Role (standard or custom).
+// ---------------------------------------------------------------------------
+
+const changeRoleByIdSchema = z.object({
+  userId: z.string().min(1),
+  roleId: z.string().min(1),
+});
+
+/**
+ * Z5.4 — sets a team member's Role by wrapper roleId. Enforces:
+ *   - Only ADMIN+ can call.
+ *   - Cannot change your own role (matrix rule).
+ *   - Cannot assign "Super Admin" via this path — that goes through
+ *     promoteToSuperAdmin() below, which requires an acting SUPER_ADMIN.
+ *   - Cannot demote the last active Super Admin.
+ *   - The target roleId must exist on this tenant (defense-in-depth
+ *     against a stale/cross-tenant id being posted).
+ */
+export async function changeTeamMemberRoleById(
+  input: z.infer<typeof changeRoleByIdSchema>
+) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const data = changeRoleByIdSchema.parse(input);
+
+  const { target, targetRole, fromRoleName } = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      const target = await loadTeamRow(tx, session.tenantId, data.userId);
+      if (!target) throw new Error("User not found.");
+      if (target.role === "CLIENT") {
+        throw new Error("End users are not on a wrapper role.");
+      }
+      if (target.id === session.subjectId) {
+        throw new Error("Cannot change your own role.");
+      }
+      const targetRole = await tx.role.findFirst({
+        where: { id: data.roleId, tenantId: session.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!targetRole) throw new Error("Role not found on this tenant.");
+      if (targetRole.name === "Super Admin") {
+        throw new Error(
+          "Use the Promote to Super Admin action to grant the Super Admin role."
+        );
+      }
+      if (target.roleId === targetRole.id) {
+        return { target, targetRole, fromRoleName: target.roleName };
+      }
+      const isTargetLastSuperAdmin = await isLastSuperAdmin(
+        tx,
+        target.id,
+        session.tenantId,
+        target.role,
+        target.status
+      );
+      if (isTargetLastSuperAdmin) {
+        throw new Error(
+          "Can't demote the last active Super Admin. Promote another Admin first."
+        );
+      }
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "ROLE_CHANGE",
+          fromValue: target.roleName ?? target.role,
+          toValue: targetRole.name,
+        },
+      });
+      return { target, targetRole, fromRoleName: target.roleName };
+    }
+  );
+
+  if (target.roleId !== targetRole.id) {
+    const ctx = systemContext(session.tenantId);
+    await updateTeamMember(ctx, target.id, { roleId: targetRole.id });
+  }
+
+  revalidatePath("/admin/team-members");
+  revalidatePath(`/admin/users/${target.id}`);
+  return {
+    ok: true as const,
+    userId: target.id,
+    fromRoleName: fromRoleName ?? null,
+    toRoleName: targetRole.name,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Z5.4 — Promote to Super Admin (Zendesk-style "Transfer ownership" flow,
+// but additive: multiple Super Admins are permitted, the last-SA guard
+// prevents ever losing all of them).
+// ---------------------------------------------------------------------------
+
+/**
+ * Grants Super Admin to a target team member. Restricted to sessions
+ * that are themselves SUPER_ADMIN — an ordinary admin cannot self-elevate
+ * or elevate a peer. Preserves the current Super Admin (no demotion of
+ * anyone else), matching the app's existing "may have N Super Admins"
+ * schema. The last-SA guard on subsequent demotion/deletion still holds.
+ */
+export async function promoteToSuperAdmin(userId: string) {
+  const session = await requireSession({ minRole: "SUPER_ADMIN" });
+  if (typeof userId !== "string" || userId.length === 0) {
+    throw new Error("Missing user id.");
+  }
+  if (userId === session.subjectId) {
+    throw new Error("You are already a Super Admin.");
+  }
+  const { target, superRoleId, fromRoleName } = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      const target = await loadTeamRow(tx, session.tenantId, userId);
+      if (!target) throw new Error("User not found.");
+      if (target.role === "CLIENT") {
+        throw new Error("Only team members can be promoted to Super Admin.");
+      }
+      if (target.role === "SUPER_ADMIN") {
+        throw new Error("This user is already a Super Admin.");
+      }
+      const superRole = await tx.role.findFirst({
+        where: { tenantId: session.tenantId, name: "Super Admin" },
+        select: { id: true },
+      });
+      if (!superRole) {
+        throw new Error(
+          `Wrapper role "Super Admin" is not seeded on this tenant.`
+        );
+      }
+      await tx.auditLog.create({
+        data: {
+          tenantId: session.tenantId,
+          ...actorCols(dualFkForUser(session.subjectId, session.role)),
+          action: "ROLE_CHANGE",
+          fromValue: target.roleName ?? target.role,
+          toValue: "Super Admin",
+        },
+      });
+      return { target, superRoleId: superRole.id, fromRoleName: target.roleName };
+    }
+  );
+
+  const ctx = systemContext(session.tenantId);
+  await updateTeamMember(ctx, target.id, { roleId: superRoleId });
+
+  revalidatePath("/admin/team-members");
+  revalidatePath(`/admin/users/${target.id}`);
+  return { ok: true as const, userId: target.id, fromRoleName };
+}
+
+// ---------------------------------------------------------------------------
+// Z5.2 — ticket access scope mutation
+// ---------------------------------------------------------------------------
+
+const changeScopeSchema = z.object({
+  teamMemberId: z.string().min(1),
+  scope: z.enum(["ALL", "GROUPS", "ASSIGNED_ONLY"]),
+});
+
+/**
+ * Z5.2 — sets a team member's ticketAccessScope. Enforced at the app layer
+ * (queue query + getTicket) and, as of Z5.3, at RLS. Admins only; changing
+ * your own scope is disallowed to prevent an accidental self-lockout.
+ */
+export async function changeTeamMemberScope(
+  input: z.infer<typeof changeScopeSchema>
+) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  const { teamMemberId, scope } = changeScopeSchema.parse(input);
+  if (teamMemberId === session.subjectId) {
+    throw new Error("Cannot change your own ticket access scope.");
+  }
+  const ctx = systemContext(session.tenantId);
+  await updateTeamMember(ctx, teamMemberId, { ticketAccessScope: scope });
+  revalidatePath(`/admin/users/${teamMemberId}`);
+  revalidatePath("/admin/team-members");
+  return { ok: true };
 }

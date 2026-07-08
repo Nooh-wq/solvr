@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { requireSession } from "@/lib/auth";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
@@ -16,8 +17,14 @@ import { CopilotPanel } from "./copilot-panel";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [ticket, agents, guests] = await Promise.all([getTicket(id), listAgents(), listTicketGuests(id)]);
+  const [session, ticket, agents, guests] = await Promise.all([
+    requireSession({ minRole: "AGENT" }),
+    getTicket(id),
+    listAgents(),
+    listTicketGuests(id),
+  ]);
   if (!ticket) notFound();
+  const isLightAgent = session.roleName === "Light Agent";
 
   // Z2.1: three independent custom-field lookups — ticket + its requester
   // (if a real EndUser) + its organization. Run in parallel; each is one
@@ -86,7 +93,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
               sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
               attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
             }))}
-            composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} />}
+            composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} isLightAgent={isLightAgent} />}
             // People + Files & links now surface as compact triggers in
             // the conversation header so the right rail can drop those
             // cards entirely.
