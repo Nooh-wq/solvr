@@ -241,6 +241,7 @@ export async function updateTeamMember(
         const updated = await tx.teamMember.update({
           where: { id },
           data: {
+            ...(patch.email !== undefined && { email: patch.email }),
             ...(patch.name !== undefined && { name: patch.name }),
             ...(patch.roleId !== undefined && { roleId: patch.roleId }),
             ...(patch.ticketAccessScope !== undefined && {
@@ -253,11 +254,13 @@ export async function updateTeamMember(
           resourceType: "TeamMember",
           resourceId: id,
           fromValue: {
+            email: existing.email,
             name: existing.name,
             roleId: existing.roleId,
             ticketAccessScope: existing.ticketAccessScope,
           },
           toValue: {
+            email: updated.email,
             name: updated.name,
             roleId: updated.roleId,
             ticketAccessScope: updated.ticketAccessScope,
@@ -265,6 +268,7 @@ export async function updateTeamMember(
         });
         return toDto(updated);
       } catch (e) {
+        if (patch.email !== undefined) throw translateUnique(e, "TeamMember", "email", patch.email);
         throw e;
       }
     }

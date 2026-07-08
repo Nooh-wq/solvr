@@ -145,6 +145,17 @@ export async function changeMyPassword(input: z.infer<typeof changePasswordSchem
       where: { tenantId: session.tenantId, [subjectField]: session.subjectId },
       data: { passwordHash, passwordChangedAt: now },
     });
+    // M21.3 — nuke every other UserSession row for this subject so the
+    // "active sessions" list in the Security tab reflects reality after
+    // the password change. The current session survives because we
+    // re-cookie with the same sessionId below.
+    await tx.userSession.deleteMany({
+      where: {
+        tenantId: session.tenantId,
+        subjectId: session.subjectId,
+        NOT: { id: session.sessionId },
+      },
+    });
     return { ok: true as const };
   });
 
@@ -152,11 +163,13 @@ export async function changeMyPassword(input: z.infer<typeof changePasswordSchem
 
   // Re-issue THIS session's cookie with a fresh iat (>= passwordChangedAt) so
   // the user who just changed their password stays logged in on this device,
-  // while all their other sessions are invalidated.
+  // while all their other sessions are invalidated (via passwordChangedAt
+  // iat-check AND the userSession.deleteMany above).
   await createSessionCookie({
     subjectId: session.subjectId,
     subjectKind: roleToSubjectKind(session.role),
     tenantId: session.tenantId,
+    sessionId: session.sessionId,
   });
   return result;
 }

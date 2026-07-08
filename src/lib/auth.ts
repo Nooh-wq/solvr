@@ -35,6 +35,8 @@ export type SessionUser = {
   email: string;
   name: string;
   role: UserRole;
+  /** M21.3 — id of the UserSession row backing this cookie. */
+  sessionId: string;
   /**
    * Z1.7: sourced from the Support-owned SubjectAvatar table (see
    * boundary doc §7.10 + lib/avatars.ts). Null when the subject has
@@ -78,6 +80,10 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const payload = await getSessionPayload();
   if (!payload) return null;
 
+  // M21.3 — pre-M21.3 cookies with no sessionId are rejected: without a
+  // row backing them they can't be tracked or revoked. Users just re-login.
+  if (!payload.sessionId) return null;
+
   const ctx = systemContext(payload.tenantId);
 
   // Resolve subject via wrapper. New-shape cookies name their kind
@@ -108,13 +114,13 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   if (endUser && endUser.tenantId !== payload.tenantId) return null;
   if (teamMember && teamMember.tenantId !== payload.tenantId) return null;
 
-  // Lifecycle status + credentials read. Both share the same withRls scope
-  // so RLS is set up once. auth.ts is a critical path — bounded to two
-  // parallel reads per request.
-  const { status, passwordChangedAt, lastActiveAt } = await withRls(
+  // Lifecycle status + credentials read + M21.3 UserSession row. Sharing
+  // the same withRls scope so RLS is set up once. auth.ts is a critical
+  // path — bounded to three parallel reads per request.
+  const { status, passwordChangedAt, lastActiveAt, sessionRow } = await withRls(
     { tenantId: payload.tenantId, userId: payload.subjectId },
     async (tx) => {
-      const [lifecycleRow, credRow] = await Promise.all([
+      const [lifecycleRow, credRow, sessionRow] = await Promise.all([
         subjectKind === "TEAM_MEMBER"
           ? tx.teamMemberLifecycle.findUnique({ where: { subjectId: payload.subjectId } })
           : tx.endUserLifecycle.findUnique({ where: { subjectId: payload.subjectId } }),
@@ -127,16 +133,30 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
           },
           select: { passwordChangedAt: true },
         }),
+        tx.userSession.findUnique({ where: { id: payload.sessionId! } }),
       ]);
       return {
         status: lifecycleRow?.status ?? null,
         passwordChangedAt: credRow?.passwordChangedAt ?? null,
         lastActiveAt: lifecycleRow?.lastActiveAt ?? null,
+        sessionRow,
       };
     }
   );
 
   if (status !== "ACTIVE") return null;
+
+  // M21.3 — revoked (row deleted) or expired sessions are rejected.
+  // subjectId mismatch also rejects, defensively — a valid JWT signature
+  // shouldn't point at another subject's session row, but if the DB is
+  // ever restored from a divergent point in time, this keeps things safe.
+  if (
+    !sessionRow ||
+    sessionRow.subjectId !== payload.subjectId ||
+    sessionRow.expiresAt.getTime() < Date.now()
+  ) {
+    return null;
+  }
 
   // Invalidate any session whose token was issued before the user's last
   // password change (compared in whole seconds, matching the JWT `iat`
@@ -146,27 +166,31 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     if (payload.iat < Math.floor(passwordChangedAt.getTime() / 1000)) return null;
   }
 
-  // Best-effort update of lastActiveAt on the lifecycle row. Throttled to at
-  // most once per hour per user. Fire-and-forget: any failure is silently
-  // swallowed since it must never break session auth.
+  // Best-effort update of lastActiveAt on the lifecycle row AND the
+  // M21.3 session row. Throttled to at most once per hour per user;
+  // session-row touch runs on the same cadence to keep the two aligned
+  // and to keep write volume down. Fire-and-forget: any failure is
+  // silently swallowed since it must never break session auth.
   const now = new Date();
   const staleThresholdMs = 60 * 60 * 1000;
   const shouldTouchActive =
     !lastActiveAt || now.getTime() - lastActiveAt.getTime() > staleThresholdMs;
   if (shouldTouchActive) {
     const targetKind = subjectKind;
+    const sessionId = payload.sessionId!;
     withRls({ tenantId: payload.tenantId, userId: payload.subjectId }, async (tx) => {
-      if (targetKind === "TEAM_MEMBER") {
-        await tx.teamMemberLifecycle.update({
-          where: { subjectId: payload.subjectId },
-          data: { lastActiveAt: now },
-        });
-      } else {
-        await tx.endUserLifecycle.update({
-          where: { subjectId: payload.subjectId },
-          data: { lastActiveAt: now },
-        });
-      }
+      await Promise.all([
+        targetKind === "TEAM_MEMBER"
+          ? tx.teamMemberLifecycle.update({
+              where: { subjectId: payload.subjectId },
+              data: { lastActiveAt: now },
+            })
+          : tx.endUserLifecycle.update({
+              where: { subjectId: payload.subjectId },
+              data: { lastActiveAt: now },
+            }),
+        tx.userSession.update({ where: { id: sessionId }, data: { lastActiveAt: now } }),
+      ]);
     }).catch(() => {
       // Non-fatal.
     });
@@ -191,6 +215,7 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     email,
     name,
     role,
+    sessionId: payload.sessionId!,
     avatarUrl,
   };
 

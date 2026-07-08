@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getTicket, getTicketMessages, listAgents } from "@/actions/tickets";
 import { listTicketGuests } from "@/actions/guest";
 import { listValuesForTarget } from "@/actions/customFields";
+import { getPriorActivityForClient } from "@/actions/priorActivity";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { ConversationThread } from "@/components/conversation-thread";
 import { participantNames } from "@/lib/participants";
@@ -22,7 +23,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   // (if a real EndUser) + its organization. Run in parallel; each is one
   // definitions + values query pair. Requester/org lookups are skipped
   // when the ticket doesn't have that side (guest requester, no org).
-  const [ticketFields, userFields, orgFields] = await Promise.all([
+  const [ticketFields, userFields, orgFields, priorActivity] = await Promise.all([
     listValuesForTarget("TICKET", ticket.id),
     ticket.clientEndUserId
       ? listValuesForTarget("USER", ticket.clientEndUserId)
@@ -30,6 +31,12 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
     ticket.organizationId
       ? listValuesForTarget("ORG", ticket.organizationId)
       : Promise.resolve([]),
+    // Z3.5 — prior-activity summary for the "N prior tickets · avg CSAT"
+    // line on the client card. Only end-user requesters have profile pages
+    // in this pass; team-member requesters keep the old card look.
+    ticket.clientEndUserId
+      ? getPriorActivityForClient(ticket.clientEndUserId, ticket.id)
+      : Promise.resolve(null),
   ]);
 
   // Z1.4b: ticket.client is now UserLike | null (wrapper-resolved).
@@ -94,18 +101,21 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           client={{
             name: clientName,
             email: ticket.client?.email ?? "",
-            // Z1.4b: `company` is no longer exposed on UserLike — Organization
-            // is a first-class relation on the ticket now. Passing the
-            // organization name preserves the card's "company line" UX.
             company: ticket.organization?.name ?? null,
-            // avatarUrl: always null in Z1.4b. See boundary doc §7.10.
             avatarUrl: null,
+            // Z3.5 — link into the deep profile page when the requester is
+            // a real EndUser. Guest / legacy / TM-requester tickets don't
+            // have a profile URL and just get the classic card.
+            profileHref: ticket.clientEndUserId
+              ? `/admin/users/${ticket.clientEndUserId}`
+              : null,
           }}
           ticketMeta={{
             createdAt: ticket.createdAt.toISOString(),
             source: ticket.source,
             category: ticket.category?.name ?? null,
           }}
+          priorActivity={priorActivity}
         />
 
         <CustomFieldsEditor title="Ticket fields" rows={ticketFields} targetId={ticket.id} />

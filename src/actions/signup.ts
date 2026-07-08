@@ -9,6 +9,8 @@ import {
   verifyTenantSignupSchema,
 } from "@/lib/validation/signup";
 import { signTenantSignupToken, verifyTenantSignupToken, createSessionCookie } from "@/lib/session";
+import { createUserSession } from "@/lib/user-session";
+import { recordLoginActivity } from "@/lib/login-activity";
 import { sendLoginOtpEmail } from "@/lib/email/events";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import {
@@ -223,10 +225,21 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
   await assignTeamMemberToGroup(ctx, adminTeamMember.id, defaultGroup.id);
 
   // Tenant signup creates the initial SUPER_ADMIN — always a TEAM_MEMBER.
+  const sessionId = await createUserSession({
+    subjectId: created.userId,
+    subjectKind: "TEAM_MEMBER",
+    tenantId: created.tenantId,
+  });
   await createSessionCookie({
     subjectId: created.userId,
     subjectKind: "TEAM_MEMBER",
     tenantId: created.tenantId,
+    sessionId,
+  });
+  await recordLoginActivity({
+    tenantId: created.tenantId,
+    subjectId: created.userId,
+    subjectKind: "TEAM_MEMBER",
   });
   return { ok: true, redirectTo: "/admin" };
 }

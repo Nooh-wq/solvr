@@ -23,7 +23,7 @@ export default async function AgentLayout({ children }: { children: React.ReactN
       links={links}
       userName={user.name}
       avatarUrl={user.avatarUrl}
-      profileHref="/agent/profile"
+      profileHref="/agent/account"
     >
       <main className="mx-auto max-w-screen-2xl px-6 py-8">{children}</main>
     </Sidebar>
