@@ -45,8 +45,12 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
   const mentionNames = participantNames(clientName, ticket.messages);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2 flex flex-col min-w-0">
+    // Fill the viewport so the conversation column can stretch to the
+    // bottom instead of leaving a big empty area under the composer.
+    // 8rem covers the shell's header + main padding — same math as
+    // other full-height admin surfaces.
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-[calc(100vh-8rem)]">
+      <div className="lg:col-span-2 flex flex-col min-w-0 min-h-0">
         <div className="flex items-start justify-between mb-4">
           <div className="min-w-0">
             <span className="font-mono text-[12px] text-[var(--color-neutral-600)]">{ticket.reference}</span>
@@ -58,33 +62,61 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           </div>
         </div>
 
-        <ConversationThread
-          description={ticket.description}
-          clientName={clientName}
-          mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
-          mentionNames={mentionNames}
-          onPoll={async () => {
-            "use server";
-            const msgs = await getTicketMessages(ticket.id);
-            if (!msgs) return null;
-            return msgs.map((m) => ({
-              ...m,
+        <div className="flex-1 min-h-0">
+          <ConversationThread
+            description={ticket.description}
+            clientName={clientName}
+            mySenderRoles={["AGENT", "ADMIN", "SUPER_ADMIN"]}
+            mentionNames={mentionNames}
+            onPoll={async () => {
+              "use server";
+              const msgs = await getTicketMessages(ticket.id);
+              if (!msgs) return null;
+              return msgs.map((m) => ({
+                ...m,
+                sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
+              }));
+            }}
+            messages={ticket.messages.map((m) => ({
+              id: m.id,
+              body: m.body,
+              senderRole: m.senderRole,
+              isInternal: m.isInternal,
+              createdAt: m.createdAt.toISOString(),
               sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
-            }));
-          }}
-          messages={ticket.messages.map((m) => ({
-            id: m.id,
-            body: m.body,
-            senderRole: m.senderRole,
-            isInternal: m.isInternal,
-            createdAt: m.createdAt.toISOString(),
-            // Sender is pre-resolved by getTicket() (MessageSender union).
-            // Adapt to ConversationThread's simpler shape: name+avatar.
-            sender: { name: m.sender.name ?? "Unknown", avatarUrl: m.sender.avatarUrl },
-            attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
-          }))}
-          composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} />}
-        />
+              attachments: m.attachments.map((a) => ({ id: a.id, fileName: a.fileName, mimeType: a.mimeType, sizeBytes: a.sizeBytes, fileUrl: a.fileUrl })),
+            }))}
+            composer={<AgentReplyBox ticketId={ticket.id} mentionNames={mentionNames} />}
+            // People + Files & links now surface as compact triggers in
+            // the conversation header so the right rail can drop those
+            // cards entirely.
+            headerActions={
+              <>
+                <TicketPeoplePanel
+                  ticketId={ticket.id}
+                  initialGuests={guests}
+                  variant="chip"
+                />
+                <FilesAndLinksPanel
+                  variant="chip"
+                  files={ticket.attachments.map((a) => ({
+                    id: a.id,
+                    fileName: a.fileName,
+                    mimeType: a.mimeType,
+                    sizeBytes: a.sizeBytes,
+                    url: a.fileUrl,
+                    uploadedAt: a.uploadedAt.toISOString(),
+                    uploadedByName: a.uploadedBy?.name ?? null,
+                  }))}
+                  messages={ticket.messages.map((m) => ({
+                    body: m.body,
+                    createdAt: m.createdAt.toISOString(),
+                  }))}
+                />
+              </>
+            }
+          />
+        </div>
       </div>
 
       {/*
@@ -167,33 +199,7 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
           </div>
         )}
 
-        {/* People + Files under one shared card with hairline divider. */}
-        <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4">
-          <TicketPeoplePanel
-            ticketId={ticket.id}
-            initialGuests={guests}
-            variant="flat"
-          />
-          <div className="border-t border-[var(--color-neutral-200)] dark:border-white/5 mt-4 pt-3 -mx-4 px-4">
-            <FilesAndLinksPanel
-              files={ticket.attachments.map((a) => ({
-                id: a.id,
-                fileName: a.fileName,
-                mimeType: a.mimeType,
-                sizeBytes: a.sizeBytes,
-                url: a.fileUrl,
-                uploadedAt: a.uploadedAt.toISOString(),
-                uploadedByName: a.uploadedBy?.name ?? null,
-              }))}
-              messages={ticket.messages.map((m) => ({
-                body: m.body,
-                createdAt: m.createdAt.toISOString(),
-              }))}
-              variant="flat"
-            />
-          </div>
-        </div>
-
+        {/* People + Files & links moved to the conversation header. */}
         <CopilotPanel ticketId={ticket.id} />
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { PaperclipIcon, LinkIcon, SearchIcon, ChevronDownIcon } from "@/components/icons";
+import { Modal } from "@/components/ui/modal";
 
 export type PanelFile = {
   id: string;
@@ -36,7 +37,11 @@ export function FilesAndLinksPanel({
 }: {
   files: PanelFile[];
   messages: { body: string; createdAt: string }[];
-  variant?: "card" | "flat";
+  /** "card" — bordered accordion for the right rail. "flat" — no wrapper
+   *  for nesting inside another card. "chip" — compact trigger button
+   *  + count that opens a Modal with the full list; used from the
+   *  conversation toolbar. */
+  variant?: "card" | "flat" | "chip";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -61,6 +66,79 @@ export function FilesAndLinksPanel({
   const filteredFiles = q ? files.filter((f) => f.fileName.toLowerCase().includes(q)) : files;
   const filteredLinks = q ? links.filter((l) => l.url.toLowerCase().includes(q)) : links;
   const total = files.length + links.length;
+
+  // Chip variant: compact button + Modal. Same list body as the accordion.
+  if (variant === "chip") {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="h-8 px-2.5 text-[12px] font-medium rounded-lg border border-[var(--color-neutral-300)] text-[var(--color-neutral-700)] hover:bg-[var(--color-light-gray)] transition-colors duration-150 cursor-pointer flex items-center gap-1.5"
+          title="Files & links on this ticket"
+        >
+          <PaperclipIcon className="h-3.5 w-3.5" />
+          Files & links
+          {total > 0 && (
+            <span className="text-[10px] font-semibold text-[var(--color-neutral-500)] tabular-nums">
+              {total}
+            </span>
+          )}
+        </button>
+        <Modal open={open} onClose={() => setOpen(false)} title="Files & links">
+          <div className="space-y-3">
+            {total > 0 && (
+              <div className="relative">
+                <SearchIcon className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-neutral-400)]" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search files & links…"
+                  autoFocus
+                  className="h-8 w-full pl-7 pr-3 text-[12px] border border-[var(--color-neutral-300)] bg-[var(--color-surface)] text-[var(--foreground)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+                />
+              </div>
+            )}
+            <div className="max-h-80 overflow-y-auto space-y-1">
+              {total === 0 && <p className="text-[13px] text-[var(--color-neutral-500)] py-6 text-center">Nothing shared yet.</p>}
+              {total > 0 && filteredFiles.length === 0 && filteredLinks.length === 0 && (
+                <p className="text-[13px] text-[var(--color-neutral-500)] py-6 text-center">No matches.</p>
+              )}
+              {filteredFiles.map((f) => (
+                <a
+                  key={f.id}
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] transition-colors duration-150"
+                >
+                  <PaperclipIcon className="h-4 w-4 shrink-0 text-[var(--color-neutral-400)]" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-medium truncate">{f.fileName}</span>
+                    <span className="block text-[11px] text-[var(--color-neutral-500)]">
+                      {formatBytes(f.sizeBytes)} · {f.uploadedByName ?? "Unknown"}
+                    </span>
+                  </span>
+                </a>
+              ))}
+              {filteredLinks.map((l, i) => (
+                <a
+                  key={`${l.url}-${i}`}
+                  href={l.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/[0.03] dark:hover:bg-white/[0.05] transition-colors duration-150"
+                >
+                  <LinkIcon className="h-4 w-4 shrink-0 text-[var(--color-neutral-400)]" />
+                  <span className="min-w-0 flex-1 block text-[13px] text-[var(--color-primary)] truncate">{l.url}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      </>
+    );
+  }
 
   return (
     <div className={
