@@ -189,8 +189,44 @@ Any pre-existing callsite that legitimately depended on cross-tenant SELECT via 
 
 ---
 
-## Phase 3 — Not yet started
+## Phase 3 — Integration tests
+
+Script: `scripts/qa_phase3_integration.mjs`. Runs against QA tenant `_qa-test-1783563390756` via `APP_DIRECT_URL` (`app_runtime` role, no `BYPASSRLS`), through the same `withRls` transactional wrapper `src/lib/db.ts` uses in-app. Covers 25 milestone-pair scenarios from the approved plan (Z2×M13 CF filter and Z4×M2 org override resolver already covered by Phase 2 behavior — noted and skipped here) plus 4 multi-tenant checks.
+
+### Final result
+
+**34 pass / 0 fail** across all integration + multi-tenant checks.
+
+### P2 bug found and fixed during Phase 3 — RLS dormant on `sla_policies`
+
+`MT#1` (RLS-on-every-tenant-scoped-table sweep) flagged `sla_policies` as the only tenant-scoped table without RLS **ENABLED**. Investigation:
+
+- `prisma/m2_migration.sql` declares `ENABLE`, `FORCE`, and the `tenant_isolation` policy.
+- On this DB: `relforcerowsecurity = true` and the `tenant_isolation` policy row exists in `pg_policies`, but `relrowsecurity = false` — so the policy is dormant. Likely a `prisma db push` regenerated the table at some point and dropped the ENABLE bit while the policy definition persisted.
+- Sibling tables `business_calendars` and `ticket_slas` are correctly enabled.
+
+**Impact.** All `sla_policies` callsites (`src/lib/sla-engine.ts`, `src/actions/sla.ts`, `src/actions/organizations.ts`) include explicit `tenantId` in every `where` clause. So no observable cross-tenant leak — same class as the earlier `super_admin_read` finding: defense-in-depth safety net missing, not a live leak.
+
+**Fix.** `prisma/qa_fix_rls_sla_policies_enable.sql` — a single `ALTER TABLE sla_policies ENABLE ROW LEVEL SECURITY`. Applied via `scripts/qa_apply_sla_rls_fix.mjs`. Post-fix `pg_class` snapshot confirms `relrowsecurity = true, relforcerowsecurity = true`. Phase 3 rerun: 34/34 pass.
+
+### Bugs deferred as follow-ups from Phase 3 (none)
+
+All 25 milestone-pair probes and all 4 multi-tenant checks passed on rerun. No further critical findings.
+
+### Phase 3 summary
+
+- Milestone-pair integration (25 probes across Z2×Z3, Z2×Z6, Z2×M1, Z3×Z4, Z4×Z5, Z4×M13, Z5×M1/M3/M13/Z6, Z6×M1/Placeholders, M1×M2 warn/breach, M1×M3/M5, M2×M3/M13, M3×M2/M5, M5×Z4/M13, M13×Z2/Z6, Z7×*): **PASS**
+- Multi-tenant checks (RLS sweep, cross-tenant read, guest-access binding, Inngest cron registration): **PASS**
+- 1 P2 dormant-RLS bug found, filed, fixed, verified.
 
 ---
 
-## Phase 3 — Not started
+## Overall QA sweep verdict
+
+| Phase | Result | Bugs found | Bugs fixed |
+|---|---|---|---|
+| Phase 1 — Static | PASS | 3 (P1-A, P1-B, P1-C) | 3 |
+| Phase 2 — Functional | PASS | 1 critical RLS (super_admin_read) | 1 |
+| Phase 3 — Integration | PASS | 1 P2 dormant RLS (sla_policies) | 1 |
+
+5 bugs found across all 12 milestones. 5 fixed. 0 deferred as blockers. 0 open critical findings. Ready to resume feature work.
