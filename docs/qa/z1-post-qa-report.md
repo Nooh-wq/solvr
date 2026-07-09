@@ -110,9 +110,72 @@ Post-fix: `npx tsc --noEmit` PASSES clean. Phase 2 can now exercise the tag / ro
 
 ---
 
-## Phase 2 — In progress
+## Phase 2 — HALTED for critical finding
 
-TBD.
+**Sweep stopped per bug policy.** Critical RLS bypass surfaced during behavior probes.
+
+### Setup
+
+Seeded QA tenant: `_qa-test-1783563390756` (id `cmrcvlcx00000ccdsgkglqmpl`).
+Fixtures: 8 users (SA/Admin/2 Agents/Light Agent/3 Clients), 3 orgs, 2 groups, 3 CF definitions + 14 values, 1 SLA policy + 1 calendar + 20 TicketSla rows (5 warning / 5 breached / 10 satisfied), 5 survey responses (3 CSAT + 2 NPS), 2 rules + 1 escalation, 1 shared view + 1 canned + 1 macro, 50 tickets across statuses/priorities/orgs.
+
+### Phase 2 probes run
+
+Two probe suites executed against the QA tenant:
+
+- **DB invariants** (`scripts/qa_phase2_probes.mjs`): **41 pass / 0 fail.** Covered every milestone's shipped-schema shape — CF constraints, dual-FK invariant on auth creds, lifecycle rows, scope mix, view/canned/macro shape, TICKET_CREATED-matching trigger, SLA target shapes, CSAT enum coverage, etc.
+- **Behavior probes** (`scripts/qa_phase2_behavior.mjs`): **14 pass / 1 fail.**
+  - PASS: rule engine would fire on URGENT open ticket; SLA cron would pick up exactly the 5 warning + 5 breach rows I seeded; routing dry-run finds the right member set; CSAT enqueue would fire; analytics compute matches seed distribution; Z2 × M13 CF filter narrows correctly (severity=High → 3 tickets); Z4 × M2 override falls through to tenant default.
+  - **FAIL: RLS cross-tenant isolation.** SUPER_ADMIN-scoped withRls tx returned 82 tickets when the QA tenant has 50. Investigation below.
+
+### CRITICAL bug — `super_admin_read` RLS policy grants unbounded cross-tenant SELECT
+
+**Scope:** 10 Support-owned tables:
+`tickets`, `custom_field_definitions`, `custom_field_options`, `custom_field_values`, `organization_settings`, `subject_avatars`, `subject_preferences`, `ticket_forms`, `ticket_form_fields`, `ticket_form_categories`.
+
+**The policy:**
+```
+CREATE POLICY super_admin_read ON <table>
+  FOR SELECT USING (app_current_role() = 'SUPER_ADMIN');
+```
+No tenant clause.
+
+**Why it's broken:**
+PostgreSQL RLS policies of the same command type are OR-combined (permissive by default). `tenant_isolation` restricts to `tenantId = app_current_tenant_id()`. `super_admin_read` unconditionally grants SELECT when `app.role='SUPER_ADMIN'`. **If either passes, the row is visible.** Any session with `app.role='SUPER_ADMIN'` reads across all tenants.
+
+**Who's a SUPER_ADMIN:** `src/lib/auth.ts::wrapperRoleNameToUserRole()` maps wrapper Role name "Super Admin" → session role `"SUPER_ADMIN"` for **every** tenant, not just the host `INTERNAL` tenant. Every provisioned tenant seeds a "Super Admin" role. Any tenant admin invited with that role gets a session that opens `app.role='SUPER_ADMIN'` in every `withRls` call.
+
+**Concrete demonstration** (behavior probe output):
+```
+✗ RLS.SUPER_ADMIN scoped-tx returns only this tenant's tickets
+  — RLS-scoped count=82 (expected 50)
+```
+withRls set `app.tenant_id` to the QA tenant, `app.role` to `SUPER_ADMIN`, called `tx.ticket.count({})` with no `where`. The policy union let it read 32 tickets from other tenants.
+
+**Why this hasn't surfaced in the UI yet:**
+Every current Prisma call site includes an explicit `tenantId` in `where`. So the query result is still restricted at the app layer, and no UI has been observed leaking data. But the RLS safety net — the whole reason we have `withRls` — is broken for SUPER_ADMIN sessions. Any future callsite (or any bug that drops `tenantId` from a where) would leak.
+
+**Intended purpose (my read):**
+`super_admin_read` was added so host-tenant SUPER_ADMINs on `INTERNAL` tenants could see cross-tenant data for surfaces like `/admin/super/analytics`. But host-tenant paths already bypass RLS via the bare `prisma` client (`src/actions/superAnalytics.ts`, host-tenant crons). The policy is redundant AND permissive to non-host tenant super admins.
+
+**Fix options** (not applying yet — reporting first):
+1. **Drop `super_admin_read` on all 10 tables.** Host-tenant reads already use bare `prisma`; nothing in the app relies on the policy for correctness.
+2. **Add tenant-type gate to the policy.** Requires an EXISTS subquery on `tenants` — expensive to evaluate per-row.
+3. **Downgrade `role` at `withRls` call sites.** Non-host tenants pass `role: "ADMIN"` instead of `"SUPER_ADMIN"` to the RLS session. Least invasive, but requires touching every callsite.
+
+**Recommendation:** option 1. The policy has no legitimate consumer.
+
+### Bug filed as follow-up task
+
+Task queued as critical. **Sweep halted.** Awaiting decision:
+- Fix in place and continue Phase 2 (recommend option 1: drop the 10 policies + verify no host-tenant regression), OR
+- File as blocker and defer Phase 2 until the fix ships as its own PR.
+
+Recommend the former — the fix is small (single migration file, ~30 lines of SQL), reversible, and re-running the behavior probe will confirm.
+
+---
+
+## Phase 3 — Blocked on Phase 2 resumption
 
 ---
 
