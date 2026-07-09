@@ -544,3 +544,17 @@ Expected size: ~15 lines removed.
 3. If old-shape decodes are >1%: extend contingency, re-file removal for day 14.
 
 **Post-removal.** Delete this §7.15 entry from the boundary doc in the same follow-up commit. The item's job is done.
+
+### 7.16 Purpose-claim casing inconsistency: `analytics_share` uses underscore
+
+**Filed during B3 (core-auth tokens.ts port)** to make the inconsistency deliberate rather than an accident of history.
+
+**What.** Every JWT this codebase mints carries a `purpose` claim. Nine of the ten values use kebab-case (`session`, `password-reset`, `email-change`, `data-export`, `invite`, `otp-verify`, `tenant-signup`, `csat`, plus the coming `impersonation`). One — `analytics_share` — uses snake_case. See `src/lib/session.ts:540` for the wire-format origin (M13 gap 2 read-only share tokens) and `src/core/auth/types.ts::TokenPurpose` for the union that mirrors it.
+
+**Why preserved.** `analytics_share` links are signed with a 30-day TTL and land in customer inboxes as clickable URLs. Renaming the claim from `analytics_share` to `analytics-share` would silently invalidate every share link already delivered — the verifier's `purpose !== "analytics-share"` check would reject the old claim value. Normalising is a token-rotation exercise (issue-a-warning-then-swap-then-drop the old claim), not a types change.
+
+**Not doing now.** No rotation exercise scheduled. Cosmetic inconsistency accepted.
+
+**When to revisit.** If any future work touches share-link issuance for another reason (e.g., adding revocation state, scoping share tokens to a specific viewer email), fold the rename into that same rotation. Until then, `analytics_share` stays.
+
+**Post-normalisation.** Delete this §7.16 entry. Its job is done.
