@@ -558,3 +558,43 @@ Expected size: ~15 lines removed.
 **When to revisit.** If any future work touches share-link issuance for another reason (e.g., adding revocation state, scoping share tokens to a specific viewer email), fold the rename into that same rotation. Until then, `analytics_share` stays.
 
 **Post-normalisation.** Delete this §7.16 entry. Its job is done.
+
+### 7.17 Impersonation-verify grace period (B6.1)
+
+**Filed during B6.1 (session.ts → core migration)** to make the impersonation-claim rotation window deliberate and time-bounded.
+
+**What.** B6.1 replaces Support's internal `signImpersonationToken` (never set a `purpose` claim) with `signPurposeToken("impersonation", …)` from core (always sets the claim). The verifier in `getImpersonationPayload` is temporarily loosened via a Support-local `verifyImpersonationTokenGrace` wrapper that accepts **both** `purpose === undefined` (legacy tokens still in flight) **and** `purpose === "impersonation"` (post-B6.1 tokens). Alg allow-list (`["HS256"]`) and every other verify check remains strict.
+
+**Why grace, not straight swap.** Impersonation TTL is 1 hour. A straight swap would immediately invalidate every legacy impersonation cookie at deploy time — a Super Admin mid-way through investigating a live P0 ticket would get silently kicked out. Grace-period pattern mirrors §7.15's Z1.8a session-cookie dual-shape decode: a pattern the codebase already understands.
+
+**Removal target.** **Deploy timestamp + 24 hours** (24× the 1-hour token TTL, no in-flight legacy tokens possible). One-file follow-up commit tightens the wrapper to `purpose === "impersonation"` only, and — for symmetry with the B3 verifier surface — the follow-up can just delete `verifyImpersonationTokenGrace` and call `verifyPurposeToken(t, "impersonation")` from core directly.
+
+Expected follow-up commit size: ~5 lines removed. Same size-and-shape as the §7.15 removal.
+
+**Day-1 contingency.** If deploy is rolled back (any reason) inside the 24-hour window, reset the removal clock to the redeploy timestamp + 24 hours.
+
+**Post-removal.** Delete this §7.17 entry from the boundary doc in the same follow-up commit.
+
+### 7.18 Test-infrastructure helper: withAppPrisma (B4 follow-up)
+
+**Filed during B4** ([adapter.ts](../src/core/auth/adapter.ts) tests) to make the flag durable rather than let it slip.
+
+**What.** The live-Postgres round-trip tests in B4 (and the QA Phase 2/3 scripts) all duplicate the same setup pattern:
+
+```ts
+const url = process.env.APP_DIRECT_URL || process.env.APP_DATABASE_URL;
+const p = new PrismaClient({ datasources: { db: { url } } });
+try {
+  // …test work…
+} finally {
+  await p.$disconnect();
+}
+```
+
+Four files today: `scripts/qa_phase2_behavior.mjs`, `scripts/qa_phase2_probes.mjs`, `scripts/qa_phase3_integration.mjs`, `src/core/auth/adapter.test.ts`. Each will grow more callsites as the core/ migration proceeds.
+
+**Not doing now.** Extracting to `src/test-utils/withAppPrisma.ts` is straightforward but sits outside every current chunk's scope (Z-post/core-auth). Doing it inline in one of those chunks would muddle the diff.
+
+**When to revisit.** After M7's cross-repo integration testing needs stabilise — the helper's shape should be informed by whether Support's platform side wants to consume it (via workspace-relative import) or write its own. Speculative extraction now would likely need to be redone.
+
+**Post-extraction.** Delete this §7.18 entry.
