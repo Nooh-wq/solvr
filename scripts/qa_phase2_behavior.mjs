@@ -11,7 +11,18 @@ if (!slug || !slug.startsWith("_qa-test-")) {
   process.exit(1);
 }
 
-const p = new PrismaClient();
+// Use the app_runtime connection — the DIRECT_URL / DATABASE_URL role
+// has BYPASSRLS on the schema-owner side, which would defeat the
+// point of every RLS assertion below. APP_DIRECT_URL uses app_runtime
+// (no BYPASSRLS), matching the app's runtime connection.
+const appUrl = process.env.APP_DIRECT_URL || process.env.APP_DATABASE_URL;
+if (!appUrl) {
+  console.error(
+    "APP_DIRECT_URL / APP_DATABASE_URL not set. RLS assertions require the app_runtime role."
+  );
+  process.exit(1);
+}
+const p = new PrismaClient({ datasources: { db: { url: appUrl } } });
 const t = await p.tenant.findUnique({ where: { slug } });
 const tid = t.id;
 

@@ -165,17 +165,31 @@ Every current Prisma call site includes an explicit `tenantId` in `where`. So th
 
 **Recommendation:** option 1. The policy has no legitimate consumer.
 
-### Bug filed as follow-up task
+### Fix applied and verified
 
-Task queued as critical. **Sweep halted.** Awaiting decision:
-- Fix in place and continue Phase 2 (recommend option 1: drop the 10 policies + verify no host-tenant regression), OR
-- File as blocker and defer Phase 2 until the fix ships as its own PR.
+Option 1 chosen — `prisma/qa_fix_rls_super_admin_read.sql` drops the `super_admin_read` policy from all 10 tables. Applied via node splitter; `pg_policies` confirms 0 remaining rows for that policyname.
 
-Recommend the former — the fix is small (single migration file, ~30 lines of SQL), reversible, and re-running the behavior probe will confirm.
+Verified via re-run of `scripts/qa_phase2_behavior.mjs` under **APP_DIRECT_URL** (which uses the `app_runtime` role, no BYPASSRLS — the same role the live app uses). Before the fix, the SUPER_ADMIN-scoped tx returned 82 tickets. After the fix, 50 (exactly the QA tenant's set). Cross-tenant isolation for SUPER_ADMIN sessions **restored**.
+
+**Behavior probe suite: 15 pass / 0 fail.**
+
+No functional regression for legitimate cross-tenant consumers — every host-tenant super-admin surface (`superAnalytics.ts`, host crons) uses the bare `prisma` root client (BYPASSRLS role), unchanged.
+
+### Regression risk noted
+
+Any pre-existing callsite that legitimately depended on cross-tenant SELECT via `super_admin_read` would now return zero rows for non-host-tenant Super Admins. Grep confirms all `tx.ticket` / `tx.customField*` / `tx.subjectAvatar` / `tx.subjectPreference` / `tx.ticketForm*` / `tx.organizationSettings` calls sit inside `withRls({tenantId: session.tenantId})`, so no such consumer exists in the current codebase. Documented for future review.
+
+### Phase 2 summary
+
+- Static invariants (41 probes across 12 milestones): **PASS**
+- Behavior probes (15 probes covering M1/M2/M3/M5/M13 + Z2×M13 + Z4×M2 + cross-tenant): **PASS**
+- 1 critical RLS bypass found, filed, fixed, verified.
+
+**Phase 2 complete. Ready to proceed to Phase 3 (integration).**
 
 ---
 
-## Phase 3 — Blocked on Phase 2 resumption
+## Phase 3 — Not yet started
 
 ---
 
