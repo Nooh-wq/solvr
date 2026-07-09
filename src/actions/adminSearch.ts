@@ -75,7 +75,11 @@ export async function searchAdmin(query: string): Promise<AdminSearchResult[]> {
 
   try {
     const orgs = await listOrganizations(ctx);
-    const orgMatches = orgs
+    // listOrganizations returns a wrapper Page<Organization>
+    // (`{ items, hasMore, ... }`), not a raw array. Reach into
+    // `items` before running the filter — pre-Z1.5c this used to be
+    // a plain array and the consumer never got updated.
+    const orgMatches = orgs.items
       .filter((o) => o.name.toLowerCase().includes(q.toLowerCase()))
       .slice(0, RESULTS_PER_KIND);
     for (const o of orgMatches) {

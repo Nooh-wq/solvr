@@ -65,7 +65,10 @@ export async function rebuildRollupFor(tenantId: string, dayStart: Date, dayEnd:
         }),
       ]);
       let firstReplyCount = 0;
-      let firstReplySumMs = 0n;
+      // BigInt literal (0n) requires ES2020; tsconfig target is ES2017,
+      // so the equivalent explicit constructor keeps tsc green while
+      // Node 18+ evaluates it identically.
+      let firstReplySumMs = BigInt(0);
       for (const r of createdRows) {
         if (!r.firstReplyAt) continue;
         firstReplyCount += 1;
