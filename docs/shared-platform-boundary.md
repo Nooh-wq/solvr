@@ -598,3 +598,24 @@ Four files today: `scripts/qa_phase2_behavior.mjs`, `scripts/qa_phase2_probes.mj
 **When to revisit.** After M7's cross-repo integration testing needs stabilise — the helper's shape should be informed by whether Support's platform side wants to consume it (via workspace-relative import) or write its own. Speculative extraction now would likely need to be redone.
 
 **Post-extraction.** Delete this §7.18 entry.
+
+### 7.19 M-core-extraction — extract `src/core/*` to Shared Platform
+
+**Filed during B7.1 wrap-up** when it was clarified that the entire `src/core/auth` + `src/core/rbac` build (B1 through B7.1) landed in Support's working tree rather than in Shared Platform's — the intended long-term home. Not reverting: the code is correct as-is; only the location is transitional. This entry names the future extraction so the reasoning is durable, not implicit.
+
+**What.** Move `src/core/*` (currently `auth/*` and `rbac/*`; ~1000 LOC across ~10 files including tests) out of the Support repo and into Shared Platform as a first-class package. Callers in Support (13 files migrating through B7.1–B7.5) swap their `@/core/auth/*` import path for whatever the extracted package's public surface ends up being.
+
+**Trigger.** When HRMS or CRM planning begins consuming these services. Neither app exists yet; conservative estimate is 6–12 months out. Support consumes core in the meantime without any special ceremony.
+
+**Extraction-invariant** (enforced today, so extraction stays cheap): `src/core/*` MUST NOT import from `src/lib/*` or `src/app/*`. Enforced by ESLint (`no-restricted-imports` under `src/core/**` in `eslint.config.mjs`) and by review discipline (AGENTS.md "src/core/* is an extraction candidate — hard import rule"). Same shape as ADR-004's reference-model read-only rule.
+
+**Design questions to resolve at extraction time** — deliberately not decided now:
+
+- **Package structure.** Single `@stralis/core` package with sub-paths (`@stralis/core/auth`, `@stralis/core/rbac`)? Or one package per subsystem? Sub-paths keep the boundary tight without inflating the package count.
+- **Consumption pattern.** npm workspace inside a Shared Platform monorepo? Published to a private registry consumed by Support/HRMS/CRM separately? HTTP client wrapping a hosted core-auth service? Each shape has different implications for cross-app secret rotation and version drift.
+- **Migration coordination with Support's live tenants.** `SESSION_SECRET` is the seam — any change to how it's read or where it lives has to preserve every in-flight session cookie. §7.15's grace-period pattern is the reference precedent.
+- **What comes with core, what stays** — some current core-adjacent code (`src/lib/session.ts`'s Support-owned cookie R/W layer per B6.0's Category B/C) explicitly does NOT extract. Extraction plan needs to name every file that DOES and every file that DOESN'T, with reasoning.
+
+**Not scoping now.** No design pass, no tranching, no follow-up commits until the trigger fires.
+
+**Post-extraction.** Delete this §7.19 entry. Delete or refactor AGENTS.md's core-extraction section (rule becomes moot once core lives in its own package). Update ESLint config to remove the now-redundant restriction rule.
