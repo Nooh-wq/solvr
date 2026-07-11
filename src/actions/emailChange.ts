@@ -19,7 +19,8 @@ import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import { getCurrentTenant } from "@/lib/current-tenant";
-import { signEmailChangeToken, verifyEmailChangeToken } from "@/lib/session";
+// B7.3: this file has no cookie R/W — both imports migrate fully.
+import { signPurposeToken, verifyPurposeToken } from "@/core/auth/tokens";
 import {
   systemContext,
   getEndUser,
@@ -117,7 +118,7 @@ export async function requestEmailChange(input: z.infer<typeof requestSchema>): 
 
   if ("error" in result) return { error: result.error ?? "Couldn't request change." };
 
-  const token = await signEmailChangeToken({
+  const token = await signPurposeToken("email-change", {
     userId: session.subjectId,
     tenantId: session.tenantId,
     newEmail,
@@ -148,7 +149,7 @@ export async function confirmEmailChange(input: z.infer<typeof confirmSchema>): 
   );
   if (!rate.allowed) return { error: "Too many attempts. Try again shortly." };
 
-  const payload = await verifyEmailChangeToken(parsed.data.token);
+  const payload = await verifyPurposeToken(parsed.data.token, "email-change");
   if (!payload) return { error: "This link is invalid or has expired." };
 
   const ctx = systemContext(payload.tenantId);

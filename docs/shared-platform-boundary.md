@@ -597,6 +597,8 @@ Four files today: `scripts/qa_phase2_behavior.mjs`, `scripts/qa_phase2_probes.mj
 
 **When to revisit.** After M7's cross-repo integration testing needs stabilise — the helper's shape should be informed by whether Support's platform side wants to consume it (via workspace-relative import) or write its own. Speculative extraction now would likely need to be redone.
 
+**QA-seed extension (filed during B7.2 wrap-up).** `scripts/qa_seed_tenant.mjs` currently seeds wrapper `EndUser` / `TeamMember` rows but does **not** seed `AuthCredential` rows for them. B7.2's live-app verification for the password-reset flow hit this gap: no seeded user is loggable, so end-to-end reset/verify against a real user was skipped in favour of unit-level round-trips. Future F-5 test-hardening passes for `src/lib/auth.ts` (central session resolver) and `src/actions/super.ts` (impersonation) will hit the same gap — both require a real logged-in session to exercise meaningfully. Extend the QA seed to include bcrypt-hashed `AuthCredential` rows for at least one seeded `TeamMember` and one seeded `EndUser`, then the F-5 test-hardening work becomes tractable. Bundle into the `withAppPrisma` helper design if the shape converges naturally.
+
 **Post-extraction.** Delete this §7.18 entry.
 
 ### 7.19 M-core-extraction — extract `src/core/*` to Shared Platform

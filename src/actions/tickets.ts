@@ -31,7 +31,6 @@ import {
   type EmailEventKey,
 } from "@/lib/notification-prefs";
 import { getAttachmentSignedUrl } from "@/lib/storage";
-import { signCsatToken } from "@/lib/session";
 import {
   dualFkForUser,
   ticketClientCols,

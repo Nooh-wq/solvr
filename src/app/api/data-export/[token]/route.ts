@@ -5,14 +5,15 @@
 
 import { NextResponse } from "next/server";
 import { withRls } from "@/lib/db";
-import { verifyDataExportToken } from "@/lib/session";
+// B7.5: no cookie R/W here — verifyDataExportToken fully migrates.
+import { verifyPurposeToken } from "@/core/auth/tokens";
 
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
-  const payload = await verifyDataExportToken(token);
+  const payload = await verifyPurposeToken(token, "data-export");
   if (!payload) {
     return NextResponse.json({ error: "This link is invalid or has expired." }, { status: 404 });
   }

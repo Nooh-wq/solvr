@@ -8,7 +8,10 @@ import {
   tenantSignupSchema,
   verifyTenantSignupSchema,
 } from "@/lib/validation/signup";
-import { signTenantSignupToken, verifyTenantSignupToken, createSessionCookie } from "@/lib/session";
+// B7.2: cookie R/W (createSessionCookie) stays on Support per B6.0
+// Category B/C; token sign/verify goes through @/core/auth/tokens.
+import { createSessionCookie } from "@/lib/session";
+import { signPurposeToken, verifyPurposeToken } from "@/core/auth/tokens";
 import { createUserSession } from "@/lib/user-session";
 import { recordLoginActivity } from "@/lib/login-activity";
 import { sendLoginOtpEmail } from "@/lib/email/events";
@@ -84,7 +87,7 @@ export async function startTenantSignup(input: z.infer<typeof tenantSignupSchema
   const code = generateOtpCode();
   const codeHash = await bcrypt.hash(code, 10);
 
-  const otpToken = await signTenantSignupToken({
+  const otpToken = await signPurposeToken("tenant-signup", {
     tenantName: data.tenantName,
     slug: data.slug,
     adminName: data.adminName,
@@ -114,7 +117,7 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
   const parsed = verifyTenantSignupSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
 
-  const payload = await verifyTenantSignupToken(parsed.data.otpToken);
+  const payload = await verifyPurposeToken(parsed.data.otpToken, "tenant-signup");
   if (!payload) return { ok: false, error: "This signup session has expired — please start over." };
 
   const rl = await checkRateLimitWithIp(`tenant-signup-verify:${payload.adminEmail}`, 8, 15, 60_000);

@@ -1,5 +1,8 @@
 import Image from "next/image";
-import { verifyAnalyticsShareToken } from "@/lib/session";
+// B7.5: no cookie R/W here. Purpose literal stays "analytics_share"
+// (snake_case) per §7.16 — every live 30-day share link in customer
+// inboxes carries that exact claim.
+import { verifyPurposeToken } from "@/core/auth/tokens";
 import { getAnalyticsOverviewByTenant } from "@/actions/admin";
 import { withRls } from "@/lib/db";
 import { TrendChart, AxisBarChart, HeatmapChart } from "@/components/charts";
@@ -38,7 +41,7 @@ export default async function SharedAnalyticsPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const claims = await verifyAnalyticsShareToken(token);
+  const claims = await verifyPurposeToken(token, "analytics_share");
   if (!claims) {
     return (
       <div className="min-h-screen flex items-center justify-center px-6">

@@ -11,7 +11,8 @@ import { sendUserInviteEmail, sendRegistrationApprovedEmail, sendRegistrationRej
 import { contrastRatio } from "@/lib/color";
 import { notify } from "@/lib/notifications";
 import { uploadImage } from "@/lib/storage";
-import { signInviteToken } from "@/lib/session";
+// B7.4: no cookie R/W in this file — signInviteToken fully migrates.
+import { signPurposeToken } from "@/core/auth/tokens";
 import {
   inviteUserSchema,
   updateUserSchema,
@@ -483,7 +484,7 @@ export async function inviteUser(input: z.infer<typeof inviteUserSchema>): Promi
     }
   );
 
-  const inviteToken = await signInviteToken({ userId: subjectId, tenantId: session.tenantId });
+  const inviteToken = await signPurposeToken("invite", { userId: subjectId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
   await sendUserInviteEmail(data.email, acceptUrl, branding);
 
@@ -814,7 +815,7 @@ export async function rejectUser(input: z.infer<typeof userIdSchema>) {
 /**
  * Regenerates a fresh HMAC invite token and re-sends the accept-invite
  * email. Only valid for INVITED accounts (spec §4 / §3 matrix). The old
- * token stays valid until its own expiry — signInviteToken is stateless,
+ * token stays valid until its own expiry — signPurposeToken("invite", ...) is stateless,
  * so we can't invalidate a specific past JWT; both work until they expire.
  * That's fine: the invite URL only lets the recipient set their own
  * password + verify OTP, and this endpoint requires no prior state on the
@@ -844,7 +845,7 @@ export async function resendInvite(input: z.infer<typeof userIdSchema>): Promise
     }
   );
 
-  const inviteToken = await signInviteToken({ userId: targetId, tenantId: session.tenantId });
+  const inviteToken = await signPurposeToken("invite", { userId: targetId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
   await sendUserInviteEmail(targetEmail, acceptUrl, branding);
 
@@ -950,7 +951,7 @@ export async function reinviteUser(input: z.infer<typeof userIdSchema>): Promise
     }
   );
 
-  const inviteToken = await signInviteToken({ userId: targetId, tenantId: session.tenantId });
+  const inviteToken = await signPurposeToken("invite", { userId: targetId, tenantId: session.tenantId });
   const acceptUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/invite/accept?token=${encodeURIComponent(inviteToken)}`;
   await sendUserInviteEmail(targetEmail, acceptUrl, branding);
 

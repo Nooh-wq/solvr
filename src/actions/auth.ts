@@ -5,15 +5,12 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { withRls } from "@/lib/db";
-import {
-  createSessionCookie,
-  destroySessionCookie,
-  signPasswordResetToken,
-  verifyPasswordResetToken,
-  verifyInviteToken,
-  signOtpSessionToken,
-  verifyOtpSessionToken,
-} from "@/lib/session";
+// B7.2: cookie R/W stays on Support (createSessionCookie /
+// destroySessionCookie are Category B/C — cookie halves owned by
+// Support until §7.19 cross-app cookie domain resolves).
+// Token sign/verify goes through @/core/auth/tokens generic surface.
+import { createSessionCookie, destroySessionCookie } from "@/lib/session";
+import { signPurposeToken, verifyPurposeToken } from "@/core/auth/tokens";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import { passwordSchema } from "@/lib/validation/password";
@@ -131,7 +128,7 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
   });
 
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-  const otpToken = await signOtpSessionToken({ userId: result.userId, tenantId: tenant.id });
+  const otpToken = await signPurposeToken("otp-verify", { userId: result.userId, tenantId: tenant.id });
   return { ok: true, otpToken };
 }
 
@@ -152,7 +149,7 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
 
-  const payload = await verifyOtpSessionToken(data.otpToken);
+  const payload = await verifyPurposeToken(data.otpToken, "otp-verify");
   if (!payload) return { error: "This verification session has expired — please register again." };
 
   const rateLimit = await checkRateLimitWithIp(`register-otp-verify:${payload.userId}`, 8, 15, 60_000);
@@ -427,7 +424,7 @@ export async function requestPasswordReset(input: z.infer<typeof resetSchema>): 
   });
 
   if (subject && isActive) {
-    const token = await signPasswordResetToken({ userId: subject.id, tenantId: tenant.id });
+    const token = await signPurposeToken("password-reset", { userId: subject.id, tenantId: tenant.id });
     const resetUrl = `${siteUrl()}/auth/reset/confirm?token=${encodeURIComponent(token)}`;
     await sendPasswordResetEmail(subject.email, resetUrl, branding);
   }
@@ -453,7 +450,7 @@ export async function confirmPasswordReset(
   const rateLimit = await checkRateLimitWithIp(`reset-confirm:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
 
-  const payload = await verifyPasswordResetToken(data.token);
+  const payload = await verifyPurposeToken(data.token, "password-reset");
   if (!payload) return { error: "This reset link is invalid or has expired." };
 
   type TxResult = { failed: true; message: string } | { failed: false; role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN"; isStaff: boolean };
@@ -544,7 +541,7 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
   const rateLimit = await checkRateLimitWithIp(`invite-accept:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
 
-  const payload = await verifyInviteToken(data.token);
+  const payload = await verifyPurposeToken(data.token, "invite");
   if (!payload) return { error: "This invite link is invalid or has expired." };
 
   type TxResult =
@@ -610,7 +607,7 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
   if (result.failed) return { error: result.message };
 
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-  const otpToken = await signOtpSessionToken({ userId: payload.userId, tenantId: payload.tenantId });
+  const otpToken = await signPurposeToken("otp-verify", { userId: payload.userId, tenantId: payload.tenantId });
   return { ok: true, otpToken };
 }
 
@@ -619,7 +616,7 @@ type VerifyOtpResult = { error: string } | { ok: true; redirectTo: string };
 export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Promise<VerifyOtpResult> {
   const data = verifyOtpSchema.parse(input);
 
-  const payload = await verifyOtpSessionToken(data.otpToken);
+  const payload = await verifyPurposeToken(data.otpToken, "otp-verify");
   if (!payload) return { error: "This verification session has expired — please start over." };
 
   const rateLimit = await checkRateLimitWithIp(`otp-verify:${payload.userId}`, 8, 15, 60_000);
