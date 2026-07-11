@@ -330,6 +330,7 @@ export async function login(input: z.infer<typeof loginSchema>) {
       select: {
         passwordHash: true,
         mfaEnabledAt: true,
+        isBreakGlass: true,
       },
     });
     const lifecycle = isStaff
@@ -347,6 +348,17 @@ export async function login(input: z.infer<typeof loginSchema>) {
 
   const valid = await bcrypt.compare(data.password, lookup?.creds?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!lookup || !lookup.creds || !valid) return { error: "Invalid email or password." };
+
+  // M6.4 — tenant-wide SSO enforcement. When enforceSso is on, ONLY
+  // break-glass Super Admins can sign in via email/password. Every
+  // other credential-holder must go through SAML/OIDC. The gate must
+  // sit AFTER password verify so we don't leak "SSO is enforced" as an
+  // enumeration signal on invalid passwords.
+  if (tenant.enforceSso && !lookup.creds.isBreakGlass) {
+    return {
+      error: "This workspace requires SSO. Sign in with your organization's identity provider.",
+    };
+  }
 
   const status = lookup.lifecycle?.status;
   if (!status) return { error: "This account is not yet ready — please contact support." };

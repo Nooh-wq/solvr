@@ -122,6 +122,12 @@ model Tenant {
   // Break-glass invariant: the setter must have MFA enrolled themselves,
   // enforced in actions/adminSecurity.ts.
   enforceMfa   Boolean      @default(false)
+  // M6.4 — tenant-wide SSO enforcement. When true, email/password login
+  // is disabled for this tenant — only the IdP path works. Break-glass
+  // invariant: at least one Super Admin must be flagged as break-glass
+  // (their email/password auth stays active regardless of enforceSso).
+  // Prevents an IdP misconfiguration from locking the tenant out.
+  enforceSso   Boolean      @default(false)
   createdAt    DateTime     @default(now())
 
   branding                TenantBranding?
@@ -148,6 +154,8 @@ model Tenant {
   loginActivity           LoginActivity[]
   notificationPreferences NotificationPreference[]
   encryptionKey           TenantEncryptionKey?
+  identityProviders       TenantIdentityProvider[]
+  scimTokens              ScimToken[]
   digestQueue             DigestQueue[]
   dataExportRequests      DataExportRequest[]
   accountDeletionRequests AccountDeletionRequest[]
@@ -684,6 +692,56 @@ model Notification {
 //   - Dual-write with legacy `users` runs from Z1.8a through Z1.5. Legacy
 //     stays read-authoritative until Z1.5 removes it.
 
+// M6.2/M6.3 — one IdP per tenant per protocol (SAML or OIDC).
+// The `config` blob holds protocol-specific fields serialized as JSON:
+//
+//   SAML:  { entityId, ssoUrl, sloUrl?, cert (v2: envelope ciphertext),
+//            wantAssertionsSigned?, signatureAlgorithm? }
+//   OIDC:  { issuer, clientId, clientSecret (v2: envelope ciphertext),
+//            redirectUri, scopes? }
+//
+// groupMappings is a normalized JSON blob:
+//   [{ idpGroup: "stralis-admins", roleName: "Admin" }, ...]
+// See M6.7 for the mapping resolver semantics.
+//
+// breakGlassOnly: when true, the entire tenant can bypass this IdP
+// via email/password AFTER an SSO misconfiguration — used during
+// the "IdP unreachable, use break-glass" recovery path.
+model TenantIdentityProvider {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind           String   // "SAML" | "OIDC"
+  displayName    String   @default("Sign in with SSO")
+  isActive       Boolean  @default(true)
+  config         Json
+  groupMappings  Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, kind])
+  @@index([tenantId])
+  @@map("tenant_identity_providers")
+}
+
+// M6.5 — SCIM API tokens. Bearer-authed via the Authorization header.
+// `tokenHash` is bcrypt of the emitted token (the raw token is shown
+// exactly once on create, same UX as GitHub personal-access-tokens).
+// `revokedAt` non-null → hard-fail all requests from this token.
+model ScimToken {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tokenHash   String
+  name        String
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+
+  @@index([tenantId])
+  @@map("scim_tokens")
+}
+
 // M6.1.a — per-tenant DEK for envelope-encrypted secrets (mfaSecret today;
 // SAML certs and SCIM tokens once M6.2/M6.5 land). Wrapped with the app-
 // level KEK from MFA_SECRET_KEY. See src/core/auth/envelope-crypto.ts
@@ -721,6 +779,11 @@ model AuthCredential {
   mfaSecret               String?
   mfaEnabledAt            DateTime?
   mfaBackupCodesHash      String[]
+  // M6.4 — break-glass flag. When the tenant has enforceSso=true, every
+  // user must sign in via the IdP EXCEPT users with isBreakGlass=true.
+  // The invariant that enforceSso can only be turned on if at least one
+  // break-glass Super Admin exists lives in actions/tenantSecurity.ts.
+  isBreakGlass            Boolean   @default(false)
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 

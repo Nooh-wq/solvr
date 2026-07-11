@@ -49,6 +49,8 @@ const PUBLIC_PREFIXES = [
   "/guest",
   "/rate",
   "/reports/shared",
+  "/api/auth", // M6.2/M6.3 — SAML/OIDC SP endpoints (IdP-authenticated, not session)
+  "/api/scim", // M6.5/M6.6 — SCIM bearer-token authed
   "/api/webhooks",
   "/api/inngest",
   "/api/data-export",

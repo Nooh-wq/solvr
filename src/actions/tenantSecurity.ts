@@ -77,6 +77,137 @@ export async function setTenantMfaEnforcement(
   return { ok: true };
 }
 
+const setEnforceSsoSchema = z.object({ enabled: z.boolean() });
+
+/**
+ * M6.4 — tenant-wide SSO enforcement.
+ *
+ * Guardrails:
+ *   - Requires SUPER_ADMIN.
+ *   - Enabling requires at least one AuthCredential.isBreakGlass = true
+ *     Super Admin in the tenant. If a live SAML/OIDC misconfig later
+ *     locks everyone out, that break-glass account can still email/
+ *     password login and fix the IdP config.
+ *   - Enabling also requires at least one active identity provider
+ *     (SAML or OIDC), otherwise the tenant has no way to sign in at all.
+ *   - Disabling is unguarded (strictly de-restricting).
+ */
+export async function setTenantSsoEnforcement(
+  input: z.infer<typeof setEnforceSsoSchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const parsed = setEnforceSsoSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid input." };
+  const session = await requireSession({ minRole: "SUPER_ADMIN" });
+
+  if (parsed.data.enabled) {
+    const check = await withRls(
+      { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+      async (tx) => {
+        const breakGlassCount = await tx.authCredential.count({
+          where: {
+            tenantId: session.tenantId,
+            isBreakGlass: true,
+            subjectTeamMemberId: { not: null },
+          },
+        });
+        const activeIdp = await tx.tenantIdentityProvider.findFirst({
+          where: { tenantId: session.tenantId, isActive: true },
+          select: { id: true },
+        });
+        return { breakGlassCount, hasActiveIdp: !!activeIdp };
+      }
+    );
+    if (!check.hasActiveIdp) {
+      return {
+        ok: false,
+        error: "Configure and activate a SAML or OIDC identity provider first.",
+      };
+    }
+    if (check.breakGlassCount === 0) {
+      return {
+        ok: false,
+        error: "Flag at least one Super Admin as break-glass first — otherwise an IdP misconfiguration will lock this tenant out.",
+      };
+    }
+  }
+
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    (tx) =>
+      tx.tenant.update({
+        where: { id: session.tenantId },
+        data: { enforceSso: parsed.data.enabled },
+      })
+  );
+  return { ok: true };
+}
+
+const setBreakGlassSchema = z.object({
+  targetSubjectId: z.string().min(1),
+  isBreakGlass: z.boolean(),
+});
+
+/**
+ * Flags a specific Super Admin as break-glass. The break-glass user's
+ * email/password login stays valid even when the tenant enforces SSO —
+ * their credential path bypasses the enforceSso branch in login().
+ *
+ * Requires SUPER_ADMIN. Additional invariant: cannot un-flag the LAST
+ * break-glass account when enforceSso is on (that would strand the
+ * tenant on the next IdP misconfig).
+ */
+export async function setBreakGlass(
+  input: z.infer<typeof setBreakGlassSchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const parsed = setBreakGlassSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid input." };
+  const session = await requireSession({ minRole: "SUPER_ADMIN" });
+
+  return withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      // Target must be a Super Admin in this tenant.
+      const target = await tx.teamMember.findFirst({
+        where: { id: parsed.data.targetSubjectId, tenantId: session.tenantId },
+        include: { role: { select: { name: true } } },
+      });
+      if (!target || target.role.name !== "Super Admin") {
+        return { ok: false as const, error: "Break-glass can only be granted to Super Admins." };
+      }
+
+      if (!parsed.data.isBreakGlass) {
+        // Guard: can't un-flag the last one when enforceSso is on.
+        const tenant = await tx.tenant.findUnique({
+          where: { id: session.tenantId },
+          select: { enforceSso: true },
+        });
+        if (tenant?.enforceSso) {
+          const remaining = await tx.authCredential.count({
+            where: {
+              tenantId: session.tenantId,
+              isBreakGlass: true,
+              subjectTeamMemberId: { not: parsed.data.targetSubjectId },
+              AND: { subjectTeamMemberId: { not: null } },
+            },
+          });
+          if (remaining === 0) {
+            return {
+              ok: false as const,
+              error: "Cannot remove the last break-glass while SSO is enforced. Disable SSO enforcement first.",
+            };
+          }
+        }
+      }
+
+      await tx.authCredential.updateMany({
+        where: { tenantId: session.tenantId, subjectTeamMemberId: parsed.data.targetSubjectId },
+        data: { isBreakGlass: parsed.data.isBreakGlass },
+      });
+      return { ok: true as const };
+    }
+  );
+}
+
 /**
  * Reads the tenant's current security settings for the admin page.
  * Also returns whether the acting admin has MFA enrolled — the UI
@@ -85,16 +216,19 @@ export async function setTenantMfaEnforcement(
  */
 export async function getTenantSecuritySettings(): Promise<{
   enforceMfa: boolean;
+  enforceSso: boolean;
   callerHasMfa: boolean;
+  breakGlassCount: number;
+  activeIdpKinds: string[];
 }> {
   const session = await requireSession({ minRole: "SUPER_ADMIN" });
   return withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
-      const [tenant, cred] = await Promise.all([
+      const [tenant, cred, breakGlassCount, activeIdps] = await Promise.all([
         tx.tenant.findUnique({
           where: { id: session.tenantId },
-          select: { enforceMfa: true },
+          select: { enforceMfa: true, enforceSso: true },
         }),
         (async () => {
           const subjectField = roleToSubjectKind(session.role) === "END_USER"
@@ -105,10 +239,24 @@ export async function getTenantSecuritySettings(): Promise<{
             select: { mfaEnabledAt: true },
           });
         })(),
+        tx.authCredential.count({
+          where: {
+            tenantId: session.tenantId,
+            isBreakGlass: true,
+            subjectTeamMemberId: { not: null },
+          },
+        }),
+        tx.tenantIdentityProvider.findMany({
+          where: { tenantId: session.tenantId, isActive: true },
+          select: { kind: true },
+        }),
       ]);
       return {
         enforceMfa: tenant?.enforceMfa ?? false,
+        enforceSso: tenant?.enforceSso ?? false,
         callerHasMfa: !!cred?.mfaEnabledAt,
+        breakGlassCount,
+        activeIdpKinds: activeIdps.map((i) => i.kind),
       };
     }
   );
