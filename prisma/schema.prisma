@@ -119,49 +119,49 @@ model Tenant {
   customDomain String?      @unique
   createdAt    DateTime     @default(now())
 
-  branding             TenantBranding?
-  chatbotConfig        ChatbotConfig?
-  tickets              Ticket[]
-  categories           Category[]
-  kbArticles           KbArticle[]
-  chatConversations    ChatConversation[]
-  auditLogs            AuditLog[]
-  notifications        Notification[]
-  ticketGuests         TicketGuest[]
-  surveyResponses      SurveyResponse[]
-  savedViews           SavedView[]
-  cannedResponses      CannedResponse[]
-  macros               Macro[]
-  ticketViews          TicketView[]
-  authCredentials      AuthCredential[]
-  teamMemberLifecycles TeamMemberLifecycle[]
-  endUserLifecycles    EndUserLifecycle[]
-  subjectAvatars       SubjectAvatar[]
-  organizationSettings OrganizationSettings[]
-  subjectPreferences   SubjectPreference[]
-  userSessions         UserSession[]
-  loginActivity        LoginActivity[]
+  branding                TenantBranding?
+  chatbotConfig           ChatbotConfig?
+  tickets                 Ticket[]
+  categories              Category[]
+  kbArticles              KbArticle[]
+  chatConversations       ChatConversation[]
+  auditLogs               AuditLog[]
+  notifications           Notification[]
+  ticketGuests            TicketGuest[]
+  surveyResponses         SurveyResponse[]
+  savedViews              SavedView[]
+  cannedResponses         CannedResponse[]
+  macros                  Macro[]
+  ticketViews             TicketView[]
+  authCredentials         AuthCredential[]
+  teamMemberLifecycles    TeamMemberLifecycle[]
+  endUserLifecycles       EndUserLifecycle[]
+  subjectAvatars          SubjectAvatar[]
+  organizationSettings    OrganizationSettings[]
+  subjectPreferences      SubjectPreference[]
+  userSessions            UserSession[]
+  loginActivity           LoginActivity[]
   notificationPreferences NotificationPreference[]
-  digestQueue          DigestQueue[]
-  dataExportRequests   DataExportRequest[]
+  digestQueue             DigestQueue[]
+  dataExportRequests      DataExportRequest[]
   accountDeletionRequests AccountDeletionRequest[]
-  customFieldDefinitions CustomFieldDefinition[]
-  customFieldValues      CustomFieldValue[]
-  customFieldOptions     CustomFieldOption[]
-  ticketForms            TicketForm[]
-  rules                  Rule[]
-  ruleRunLogs            RuleRunLog[]
-  escalationPaths        EscalationPath[]
-  escalationLogs         EscalationLog[]
-  slaPolicies            SlaPolicy[]
-  businessCalendars      BusinessCalendar[]
-  ticketSlas             TicketSla[]
-  agentProfiles          AgentProfile[]
-  autoAssignmentLogs     AutoAssignmentLog[]
-  csatQueue              CsatQueue[]
-  csatSettings           CsatSettings?
-  savedReports           SavedReport[]
-  ticketDailyRollups     TicketDailyRollup[]
+  customFieldDefinitions  CustomFieldDefinition[]
+  customFieldValues       CustomFieldValue[]
+  customFieldOptions      CustomFieldOption[]
+  ticketForms             TicketForm[]
+  rules                   Rule[]
+  ruleRunLogs             RuleRunLog[]
+  escalationPaths         EscalationPath[]
+  escalationLogs          EscalationLog[]
+  slaPolicies             SlaPolicy[]
+  businessCalendars       BusinessCalendar[]
+  ticketSlas              TicketSla[]
+  agentProfiles           AgentProfile[]
+  autoAssignmentLogs      AutoAssignmentLog[]
+  csatQueue               CsatQueue[]
+  csatSettings            CsatSettings?
+  savedReports            SavedReport[]
+  ticketDailyRollups      TicketDailyRollup[]
 
   @@map("tenants")
 }
@@ -295,29 +295,29 @@ model Ticket {
 // the same link overwrites the existing row rather than erroring, so
 // ticketId is unique instead of having its own separate id-based history.
 model SurveyResponse {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId  String   @unique
-  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  id                      String                 @id @default(cuid())
+  tenantId                String
+  tenant                  Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId                String                 @unique
+  ticket                  Ticket                 @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   // M5.4 — CSAT rows keep 1..5; NPS rows carry 0..10 in the same
   // column. Averages downstream just take the mean and the type
   // column distinguishes the scale. Splitting into two columns
   // would fork every downstream avg query — not worth it.
-  rating    Int
-  comment   String?
+  rating                  Int
+  comment                 String?
   // M5.4 — kind of survey this row represents. Determines the
   // rating scale (1..5 for CSAT, 0..10 for NPS) and the label
   // shown on analytics + moderation surfaces.
-  surveyType    SurveyType         @default(CSAT)
+  surveyType              SurveyType             @default(CSAT)
   // M5.3 — moderation state so admins can hide abusive/erroneous
   // comments without dropping the rating (the numeric score still
   // counts). Rows default VISIBLE; a moderator flips to FLAGGED
   // or HIDDEN via /admin/csat.
-  moderationStatus SurveyModerationStatus @default(VISIBLE)
+  moderationStatus        SurveyModerationStatus @default(VISIBLE)
   moderatedByTeamMemberId String?
-  moderatedAt   DateTime?
-  createdAt DateTime @default(now())
+  moderatedAt             DateTime?
+  createdAt               DateTime               @default(now())
 
   @@index([tenantId])
   @@index([tenantId, moderationStatus, createdAt])
@@ -346,20 +346,20 @@ enum SurveyModerationStatus {
 // `sentAt`. Deferral lets the client's resolution notification
 // land first (spec §3), and gives admins a configurable delay.
 model CsatQueue {
-  id            String    @id @default(cuid())
+  id            String     @id @default(cuid())
   tenantId      String
-  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ticketId      String
-  ticket        Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticket        Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   surveyType    SurveyType @default(CSAT)
-  scheduledFor  DateTime  @db.Timestamptz(3)
-  sentAt        DateTime? @db.Timestamptz(3)
+  scheduledFor  DateTime   @db.Timestamptz(3)
+  sentAt        DateTime?  @db.Timestamptz(3)
   // Set when send fails and we give up — kept to explain the
   // absence in the admin surface. Retry loop is out of scope; a
   // failed row can be manually re-queued.
-  failedAt      DateTime? @db.Timestamptz(3)
+  failedAt      DateTime?  @db.Timestamptz(3)
   failureReason String?
-  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
 
   // A ticket can accumulate multiple queue rows (e.g. re-resolved
   // after reopen). Uniqueness would drop the second one silently
@@ -375,19 +375,19 @@ model CsatQueue {
 // is presentation and this is workflow; keeping them separate keeps
 // each surface's schema honest.
 model CsatSettings {
-  tenantId       String    @id
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  enabled        Boolean   @default(true)
-  surveyType     SurveyType @default(CSAT)
+  tenantId     String     @id
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  enabled      Boolean    @default(true)
+  surveyType   SurveyType @default(CSAT)
   // Minutes to wait between ticket RESOLVED and the CSAT email.
   // Default 60 (1 hour) per spec §3 "let the resolution notification
   // land first". 0 = send immediately (opt-in for tenants who don't
   // want the delay).
-  delayMinutes   Int       @default(60)
-  emailSubject   String?
-  emailBody      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  delayMinutes Int        @default(60)
+  emailSubject String?
+  emailBody    String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@map("csat_settings")
 }
@@ -400,25 +400,25 @@ model CsatSettings {
 // portable, and eventually swappable to a different query layer (never
 // raw SQL, per Z6 §3 "do NOT store view filter definitions as raw SQL").
 model SavedView {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Owner of a personal view. NULL is reserved for Z6.5 shared views —
   // enforced today via app-layer checks that reject NULL on create.
-  ownerTeamMemberId   String?
-  name                String
+  ownerTeamMemberId String?
+  name              String
   // Structured filter JSON: { status?, priority?, categoryId?,
   // assignedToId? ("me" | "unassigned" | teamMemberId), search? }.
   // Kept as Json rather than columnized so new filter fields can land
   // without a migration on this table.
-  filters             Json     @default("{}")
+  filters           Json     @default("{}")
   // Sort JSON: { key: "updatedAt" | "createdAt" | "priority", dir: "asc" | "desc" }.
-  sort                Json     @default("{\"key\":\"updatedAt\",\"dir\":\"desc\"}")
+  sort              Json     @default("{\"key\":\"updatedAt\",\"dir\":\"desc\"}")
   // Marks this view as the agent's default (opens on /agent). Only one
   // per owner is allowed — enforced at the app layer in setDefaultView().
-  isDefault           Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  isDefault         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([tenantId, ownerTeamMemberId])
   @@map("saved_views")
@@ -679,22 +679,22 @@ model Notification {
 //     stays read-authoritative until Z1.5 removes it.
 
 model AuthCredential {
-  id                  String    @id @default(cuid())
-  tenantId            String
-  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  subjectEndUserId    String?
-  subjectTeamMemberId String?
-  passwordHash        String
-  passwordChangedAt   DateTime?
+  id                      String    @id @default(cuid())
+  tenantId                String
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectEndUserId        String?
+  subjectTeamMemberId     String?
+  passwordHash            String
+  passwordChangedAt       DateTime?
   // M21.2 — email-change flow. `pendingEmail` is the address the confirmation
   // link resolves to; cleared on confirm (or by a fresh request superseding it).
   // Held Support-side because the wrapper email column stays authoritative
   // for identity; nothing outside this flow reads pendingEmail.
   pendingEmail            String?
   pendingEmailRequestedAt DateTime?
-  mfaSecret           String?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  mfaSecret               String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   @@index([tenantId, subjectEndUserId])
   @@index([tenantId, subjectTeamMemberId])
@@ -879,15 +879,15 @@ model DigestQueue {
 // is enforced at read time — the row lingers past that for
 // audit/history but the download won't work.
 model DataExportRequest {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subjectId String
-  status    String   @default("PENDING")
+  status    String    @default("PENDING")
   payload   Json?
   expiresAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([tenantId, subjectId])
   @@map("data_export_requests")
@@ -1439,27 +1439,27 @@ enum TriggerEventType {
 }
 
 model Rule {
-  id              String            @id @default(cuid())
-  tenantId        String
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  kind            RuleKind
-  name            String
-  description     String?
-  active          Boolean           @default(true)
+  id            String            @id @default(cuid())
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind          RuleKind
+  name          String
+  description   String?
+  active        Boolean           @default(true)
   // TRIGGER-only: which event fires this rule. NULL for AUTOMATION.
-  triggerEvent    TriggerEventType?
+  triggerEvent  TriggerEventType?
   // AUTOMATION-only: interval hours (simple cadence — cron would be
   // more flexible but harder to reason about for the DoD's
   // "batch-processed, no ticket touched more than once per run").
-  intervalHours   Int?
+  intervalHours Int?
   // Shape: { match: "all" | "any", conditions: [{ field, op, value }] }
-  conditions      Json
+  conditions    Json
   // Shape: [{ type, ...params }] — see src/lib/rule-schema.ts
-  actions         Json
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  lastRunAt       DateTime?
-  runLogs         RuleRunLog[]
+  actions       Json
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  lastRunAt     DateTime?
+  runLogs       RuleRunLog[]
 
   @@index([tenantId, kind, active])
   @@index([tenantId, kind, triggerEvent])
@@ -1467,17 +1467,17 @@ model Rule {
 }
 
 model RuleRunLog {
-  id            String   @id @default(cuid())
-  tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ruleId        String
-  rule          Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  ticketId      String?
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ruleId         String
+  rule           Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ticketId       String?
   // "matched" | "skipped_conditions" | "skipped_cap" | "action_failed"
-  outcome       String
-  ranActionCount Int     @default(0)
-  errorMessage  String?
-  createdAt     DateTime @default(now())
+  outcome        String
+  ranActionCount Int      @default(0)
+  errorMessage   String?
+  createdAt      DateTime @default(now())
 
   @@index([tenantId, ruleId, createdAt])
   @@map("rule_run_logs")
@@ -1496,9 +1496,9 @@ enum EscalationStatus {
 }
 
 model EscalationPath {
-  id             String              @id @default(cuid())
+  id             String             @id @default(cuid())
   tenantId       String
-  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   label          String
   // Heroicon key, e.g. "alertTriangle" — free-form so a future icon
   // set swap doesn't need a schema migration.
@@ -1506,7 +1506,7 @@ model EscalationPath {
   // Category ids that reveal this button. Empty array = show on
   // every ticket. Stored as Json because Prisma+Postgres arrays of
   // FK strings are noisy to declare and this is a small opaque list.
-  categoryIds    Json                @default("[]")
+  categoryIds    Json               @default("[]")
   destKind       EscalationDestKind
   // Shape depends on destKind:
   //   TEAM:        { groupId, alsoSetPriority?, alsoAddTag? }
@@ -1514,9 +1514,9 @@ model EscalationPath {
   //   EMAIL:       { toEmails: string[], subject?, template? }
   //   INTEGRATION: { kind: "jira"|"github"|"linear", ... } — disabled until M19
   destConfig     Json
-  active         Boolean             @default(true)
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
   escalationLogs EscalationLog[]
 
   @@index([tenantId, active])
@@ -1524,16 +1524,16 @@ model EscalationPath {
 }
 
 model EscalationLog {
-  id                String            @id @default(cuid())
+  id                String           @id @default(cuid())
   tenantId          String
-  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   escalationPathId  String
-  escalationPath    EscalationPath    @relation(fields: [escalationPathId], references: [id], onDelete: Cascade)
+  escalationPath    EscalationPath   @relation(fields: [escalationPathId], references: [id], onDelete: Cascade)
   ticketId          String
   actorTeamMemberId String?
   status            EscalationStatus
   errorMessage      String?
-  createdAt         DateTime          @default(now())
+  createdAt         DateTime         @default(now())
 
   @@index([tenantId, ticketId, createdAt])
   @@map("escalation_logs")
@@ -1549,18 +1549,18 @@ model EscalationLog {
 // fallback used when no org override matches.
 
 model SlaPolicy {
-  id          String      @id @default(cuid())
+  id          String   @id @default(cuid())
   tenantId    String
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   description String?
-  targets     Json        // { URGENT: {firstResponseMins, resolutionMins}, ... }
-  isDefault   Boolean     @default(false)
-  active      Boolean     @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  targets     Json // { URGENT: {firstResponseMins, resolutionMins}, ... }
+  isDefault   Boolean  @default(false)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  ticketSlas  TicketSla[]
+  ticketSlas TicketSla[]
 
   @@index([tenantId, active])
   @@map("sla_policies")
@@ -1578,7 +1578,7 @@ model BusinessCalendar {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   timezone    String   @default("UTC") // IANA
-  weeklyHours Json     // per-day time ranges, see above
+  weeklyHours Json // per-day time ranges, see above
   holidays    Json     @default("[]")
   isDefault   Boolean  @default(false)
   createdAt   DateTime @default(now())
@@ -1603,30 +1603,30 @@ enum SlaKind {
 // resolvedAt (RESOLUTION) at write time when both are known.
 
 model TicketSla {
-  id              String    @id @default(cuid())
-  tenantId        String
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId        String
-  ticket          Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  slaPolicyId     String
-  slaPolicy       SlaPolicy @relation(fields: [slaPolicyId], references: [id], onDelete: Cascade)
-  kind            SlaKind
-  targetMins      Int
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId       String
+  ticket         Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  slaPolicyId    String
+  slaPolicy      SlaPolicy @relation(fields: [slaPolicyId], references: [id], onDelete: Cascade)
+  kind           SlaKind
+  targetMins     Int
   // @db.Timestamptz forces Postgres to store an actual instant with
   // timezone info instead of a naive `timestamp`. Prisma reads/writes
   // naive `timestamp` columns through the client's system tz — on a
   // process running in a non-UTC tz, that shifts every Date by the
   // offset, breaking the walker's dueAt math. `timestamptz` bypasses
   // that entirely.
-  startedAt       DateTime  @db.Timestamptz(3)
-  dueAt           DateTime  @db.Timestamptz(3)
-  pausedMs        Int       @default(0)
-  pauseStartedAt  DateTime? @db.Timestamptz(3)
-  warnedAt        DateTime? @db.Timestamptz(3)
-  breachedAt      DateTime? @db.Timestamptz(3)
-  satisfiedAt     DateTime? @db.Timestamptz(3)
-  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+  startedAt      DateTime  @db.Timestamptz(3)
+  dueAt          DateTime  @db.Timestamptz(3)
+  pausedMs       Int       @default(0)
+  pauseStartedAt DateTime? @db.Timestamptz(3)
+  warnedAt       DateTime? @db.Timestamptz(3)
+  breachedAt     DateTime? @db.Timestamptz(3)
+  satisfiedAt    DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
 
   @@unique([ticketId, kind])
   // The sla.tick cron filters on (tenantId, dueAt window, satisfiedAt
@@ -1635,7 +1635,6 @@ model TicketSla {
   @@index([tenantId, dueAt, satisfiedAt, breachedAt])
   @@map("ticket_slas")
 }
-
 
 // ===========================================================================
 // M3 — Routing & Assignment Engine
@@ -1672,21 +1671,20 @@ model AgentProfile {
 // within the cap window. Manual assignments (source=MANUAL) reset the
 // window.
 model AutoAssignmentLog {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId       String
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId     String
   // Picked assignee. Null on cap-halt (recorded for audit).
-  teamMemberId   String?
-  strategy       String   // "ROUND_ROBIN" | "LOAD_BASED" | "SKILLS_BASED"
-  source         String   // "ESCALATION" | "RULE" | "MANUAL"
-  cappedOut      Boolean  @default(false)
-  createdAt      DateTime @default(now())
+  teamMemberId String?
+  strategy     String // "ROUND_ROBIN" | "LOAD_BASED" | "SKILLS_BASED"
+  source       String // "ESCALATION" | "RULE" | "MANUAL"
+  cappedOut    Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
   @@index([tenantId, ticketId, createdAt])
   @@map("auto_assignment_logs")
 }
-
 
 // M13.7 — saved analytics reports. filters mirrors the AnalyticsFilter
 // shape; runNow renders a CSV export, and the (optional) schedule drives
@@ -1698,24 +1696,24 @@ model AutoAssignmentLog {
 // this enum, and computing nextRunAt from an enum is a two-line function
 // vs shipping a cron parser dependency.
 model SavedReport {
-  id                     String                  @id @default(cuid())
-  tenantId               String
-  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name                   String
-  description            String?
-  filters                Json                    @default("{}")
+  id                    String               @id @default(cuid())
+  tenantId              String
+  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                  String
+  description           String?
+  filters               Json                 @default("{}")
   // Recipients for a scheduled send. Empty array = on-demand only.
-  recipientEmails        String[]                @default([])
-  scheduleFrequency      SavedReportFrequency    @default(NONE)
+  recipientEmails       String[]             @default([])
+  scheduleFrequency     SavedReportFrequency @default(NONE)
   // 0..23 hour-of-day the cron dispatches at. Ignored when frequency=NONE.
-  scheduleHour           Int                     @default(9)
+  scheduleHour          Int                  @default(9)
   // Absolute instant of the next scheduled dispatch. Recomputed on save
   // and on every successful send. Cron reads this to pick due rows.
-  nextRunAt              DateTime?
-  lastRunAt              DateTime?
-  createdByTeamMemberId  String?
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
+  nextRunAt             DateTime?
+  lastRunAt             DateTime?
+  createdByTeamMemberId String?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 
   @@index([tenantId, createdAt])
   @@index([nextRunAt])
@@ -1741,18 +1739,18 @@ enum SavedReportFrequency {
 // which isn't worth it — the trend chart only ever shows the plain
 // daily totals; every other widget already has fast enough live paths.
 model TicketDailyRollup {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  date                DateTime @db.Date
-  createdCount        Int      @default(0)
-  resolvedCount       Int      @default(0)
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  date            DateTime @db.Date
+  createdCount    Int      @default(0)
+  resolvedCount   Int      @default(0)
   // Sum of (firstReplyAt - createdAt) in milliseconds for all tickets
   // created on this day that received a first reply — divided by
   // firstReplyCount at read time gives the daily avg first response.
-  firstReplyCount     Int      @default(0)
-  firstReplySumMs     BigInt   @default(0)
-  updatedAt           DateTime @updatedAt
+  firstReplyCount Int      @default(0)
+  firstReplySumMs BigInt   @default(0)
+  updatedAt       DateTime @updatedAt
 
   @@unique([tenantId, date])
   @@index([tenantId, date])
