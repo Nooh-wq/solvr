@@ -156,6 +156,9 @@ model Tenant {
   encryptionKey           TenantEncryptionKey?
   identityProviders       TenantIdentityProvider[]
   scimTokens              ScimToken[]
+  apiKeys                 ApiKey[]
+  webhookSubscriptions    WebhookSubscription[]
+  apiUsageLogs            ApiUsageLog[]
   digestQueue             DigestQueue[]
   dataExportRequests      DataExportRequest[]
   accountDeletionRequests AccountDeletionRequest[]
@@ -740,6 +743,84 @@ model ScimToken {
 
   @@index([tenantId])
   @@map("scim_tokens")
+}
+
+// M7.1 — generic API keys for the public v1 API. Same primitive as
+// ScimToken (bcrypt-hashed bearer, per-tenant, revocable) but with
+// scopes + creator attribution + kind so a fired employee's key stops
+// working immediately without a per-request role fetch.
+//
+// scopes: JSON array of kebab-case strings ("tickets:read", "users:write").
+//   See src/lib/api/scopes.ts for the canonical catalog.
+// createdBySubjectId: the TeamMember whose permissions bounded the scope
+//   set at create time. On every request, we verify that subject is still
+//   ACTIVE — if their lifecycle flipped to SUSPENDED, every key they
+//   created stops working automatically.
+// prefix: first 8 chars of the raw token, plaintext, for UI display + a
+//   fast pre-filter in verifyApiKey (bcrypt-scanning every live key
+//   doesn't scale past ~50 keys/tenant; scanning by prefix is O(1)).
+model ApiKey {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                 String
+  prefix               String
+  tokenHash            String
+  scopes               Json      @default("[]")
+  createdBySubjectId   String
+  createdAt            DateTime  @default(now())
+  lastUsedAt           DateTime?
+  revokedAt            DateTime?
+
+  @@index([tenantId, prefix])
+  @@index([tenantId, revokedAt])
+  @@map("api_keys")
+}
+
+// M7.4 — outbound webhook subscription. Each subscription targets one
+// external URL and a set of event types (kebab-case, e.g. "ticket.created",
+// "ticket.resolved"). The `secret` is HMAC-shared with the recipient;
+// stored envelope-encrypted (v2:) per M6.1.a.
+//
+// failCount tracks consecutive delivery failures; when it exceeds the
+// disable threshold (default 20 attempts over ~24h backoff window), the
+// subscription is marked disabled and the tenant is notified.
+model WebhookSubscription {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  url            String
+  events         Json      @default("[]")
+  secret         String    // envelope-encrypted
+  isActive       Boolean   @default(true)
+  failCount      Int       @default(0)
+  disabledAt     DateTime?
+  disabledReason String?
+  createdAt      DateTime  @default(now())
+  lastDeliveredAt DateTime?
+  createdBySubjectId String
+
+  @@index([tenantId, isActive])
+  @@map("webhook_subscriptions")
+}
+
+// M7.6 — per-request usage log. Kept in a hot append-only table; older
+// rows drained by the M13.gap3 daily rollup pattern (out-of-band; not
+// part of M7.6 initial ship). Cardinality: ~O(req_per_day × retention).
+model ApiUsageLog {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  apiKeyId     String?  // null for anonymous or invalid-key rejections
+  method       String
+  path         String
+  statusCode   Int
+  durationMs   Int
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, apiKeyId, createdAt])
+  @@map("api_usage_logs")
 }
 
 // M6.1.a — per-tenant DEK for envelope-encrypted secrets (mfaSecret today;

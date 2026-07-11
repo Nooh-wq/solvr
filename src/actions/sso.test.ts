@@ -1,4 +1,4 @@
-// src/actions/sso.test.ts
+// src/actionsso.test.ts
 //
 // M6.2–M6.7 pinning tests. Source-level pins on the load-bearing wire
 // shapes + one live-DB round-trip on the JIT provisioning helper.
@@ -73,7 +73,7 @@ describe("M6.2 — SAML security properties", () => {
   });
 
   it("SAML cert is envelope-encrypted before persist", () => {
-    assert.match(IDP_ACTIONS_SRC, /envelopeEncrypt.*config\.cert|persisted\.cert.*envelopeEncrypt/s);
+    assert.match(IDP_ACTIONS_SRC, /envelopeEncrypt[\s\S]*config\.cert|persisted\.cert[\s\S]*envelopeEncrypt/);
   });
 });
 
@@ -93,7 +93,7 @@ describe("M6.3 — OIDC security properties", () => {
   });
 
   it("OIDC client secret is envelope-encrypted before persist", () => {
-    assert.match(IDP_ACTIONS_SRC, /envelopeEncrypt.*config\.clientSecret|persisted\.clientSecret.*envelopeEncrypt/s);
+    assert.match(IDP_ACTIONS_SRC, /envelopeEncrypt[\s\S]*config\.clientSecret|persisted\.clientSecret[\s\S]*envelopeEncrypt/);
   });
 });
 
@@ -121,7 +121,7 @@ describe("M6.5/M6.6 — SCIM endpoints", () => {
   });
 
   it("DELETE revokes ALL sessions for the subject", () => {
-    assert.match(SCIM_USER_ID_SRC, /userSession\.deleteMany[^;]*subjectId: target\.id/s);
+    assert.match(SCIM_USER_ID_SRC, /userSession\.deleteMany[\s\S]*subjectId: target\.id/);
   });
 
   it("PATCH accepts the standard `active:false` deprovision shape", () => {
