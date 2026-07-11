@@ -117,6 +117,11 @@ model Tenant {
   type         TenantType   @default(CLIENT)
   status       TenantStatus @default(ACTIVE)
   customDomain String?      @unique
+  // M6.1.b — tenant-wide 2FA enforcement. When true, every user in
+  // this tenant must enroll TOTP before their session cookie is minted.
+  // Break-glass invariant: the setter must have MFA enrolled themselves,
+  // enforced in actions/adminSecurity.ts.
+  enforceMfa   Boolean      @default(false)
   createdAt    DateTime     @default(now())
 
   branding                TenantBranding?
@@ -142,6 +147,7 @@ model Tenant {
   userSessions            UserSession[]
   loginActivity           LoginActivity[]
   notificationPreferences NotificationPreference[]
+  encryptionKey           TenantEncryptionKey?
   digestQueue             DigestQueue[]
   dataExportRequests      DataExportRequest[]
   accountDeletionRequests AccountDeletionRequest[]
@@ -678,6 +684,19 @@ model Notification {
 //   - Dual-write with legacy `users` runs from Z1.8a through Z1.5. Legacy
 //     stays read-authoritative until Z1.5 removes it.
 
+// M6.1.a — per-tenant DEK for envelope-encrypted secrets (mfaSecret today;
+// SAML certs and SCIM tokens once M6.2/M6.5 land). Wrapped with the app-
+// level KEK from MFA_SECRET_KEY. See src/core/auth/envelope-crypto.ts
+// for the wire format and rotation model.
+model TenantEncryptionKey {
+  tenantId   String   @id
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  wrappedDek String
+  createdAt  DateTime @default(now())
+
+  @@map("tenant_encryption_keys")
+}
+
 model AuthCredential {
   id                      String    @id @default(cuid())
   tenantId                String
@@ -692,7 +711,16 @@ model AuthCredential {
   // for identity; nothing outside this flow reads pendingEmail.
   pendingEmail            String?
   pendingEmailRequestedAt DateTime?
+  // M6.1 — TOTP 2FA. `mfaSecret` holds the ciphertext produced by
+  // src/core/auth/mfa-crypto.ts (v1: AES-256-GCM with MFA_SECRET_KEY).
+  // Never plaintext. `mfaEnabledAt` gates login challenge — its
+  // presence, not `mfaSecret != null`, is what triggers the second-step
+  // prompt, so an enroll flow that starts and drops half-way cannot
+  // lock the user out. `mfaBackupCodesHash` holds up to 8 bcrypt-hashed
+  // one-time codes; each is spliced out on use.
   mfaSecret               String?
+  mfaEnabledAt            DateTime?
+  mfaBackupCodesHash      String[]
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 

@@ -306,6 +306,7 @@ describe("PURPOSE_TTL_SECONDS canonical durations", () => {
     // Readonly<Record<TokenPurpose, number>> declaration is a type
     // error at build time. This test is the runtime backstop.
     const purposes = Object.keys(PURPOSE_TTL_SECONDS);
-    assert.equal(purposes.length, 10);
+    // M6.1 added "mfa-challenge" (11th); M6.1.b added "mfa-enrollment" (12th).
+    assert.equal(purposes.length, 12);
   });
 });

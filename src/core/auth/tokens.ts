@@ -53,6 +53,10 @@ export const PURPOSE_TTL_SECONDS: Readonly<Record<TokenPurpose, number>> = {
   "tenant-signup": 60 * 15, // 15 min
   csat: 60 * 60 * 24 * 30, // 30 days
   analytics_share: 60 * 60 * 24 * 30, // 30 days
+  "mfa-challenge": 60 * 5, // 5 min — carries no session authority, just a
+  // "we already checked the password" handoff to the code-verify step
+  "mfa-enrollment": 60 * 15, // 15 min — user needs time to install an
+  // authenticator app if they don't already have one
 };
 
 // ---------------------------------------------------------------------------

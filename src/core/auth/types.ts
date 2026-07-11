@@ -189,7 +189,9 @@ export type TokenPurpose =
   | "otp-verify"
   | "tenant-signup"
   | "csat"
-  | "analytics_share";
+  | "analytics_share"
+  | "mfa-challenge"
+  | "mfa-enrollment";
 
 /**
  * Impersonation cookie payload. Shipped verbatim per Phase A tightening
@@ -259,6 +261,30 @@ export type AnalyticsShareTokenPayload = {
 };
 
 /**
+ * M6.1 — short-lived (5 min) MFA-challenge token. Minted by login() when
+ * a valid password lands on an account with mfaEnabledAt set; consumed by
+ * completeMfaLogin() with the user's TOTP code. Carries no session
+ * authority on its own — a stolen challenge token buys the attacker
+ * exactly the "we already knew the password" state.
+ */
+export type MfaChallengeTokenPayload = {
+  subjectId: string;
+  subjectKind: SubjectKind;
+  tenantId: string;
+};
+
+/**
+ * M6.1.b — short-lived (15 min) forced-enrollment token. Minted by login()
+ * when the tenant has enforceMfa=true AND the user has never enrolled
+ * TOTP. The user hits an enrollment page, completes setup with this
+ * token as auth, and only then receives a session cookie.
+ *
+ * Reuses the challenge payload shape — same claims, distinct purpose so
+ * cross-purpose confusion is blocked at the verify layer.
+ */
+export type MfaEnrollmentTokenPayload = MfaChallengeTokenPayload;
+
+/**
  * The per-purpose payload map. Adding a new `TokenPurpose` without a
  * corresponding entry here is a type error — this is what enforces
  * that the purpose union and the runtime verifier stay in lockstep.
@@ -278,6 +304,8 @@ export type PurposePayloads = {
   "tenant-signup": TenantSignupTokenPayload;
   csat: CsatTokenPayload;
   analytics_share: AnalyticsShareTokenPayload;
+  "mfa-challenge": MfaChallengeTokenPayload;
+  "mfa-enrollment": MfaEnrollmentTokenPayload;
 };
 
 /**
