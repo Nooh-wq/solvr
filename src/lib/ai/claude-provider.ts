@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AiProvider, GenerateInput } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals } from "./provider";
 
 const MODEL = "claude-sonnet-4-5";
 
@@ -61,5 +61,75 @@ export class ClaudeProvider implements AiProvider {
     } catch {
       return { category: null, priority: "MEDIUM" };
     }
+  }
+
+  async classifyMessage(input: ClassifyInput): Promise<ClassifySignals> {
+    // Build the taxonomy block for prompt injection. If the tenant has no
+    // intents configured, model returns intent=null and we degrade to
+    // sentiment/urgency/language only.
+    const taxonomy = input.intents
+      .map((i) => `  - ${i.slug} — ${i.label}: ${i.description}`)
+      .join("\n");
+    const allowedIntents = input.intents.length > 0
+      ? input.intents.map((i) => `"${i.slug}"`).join(" | ")
+      : "null";
+
+    const systemPrompt =
+      "You classify a single inbound customer support message into structured signals. " +
+      "Respond with EXACTLY one line of JSON, nothing else:\n" +
+      `{"intent": ${allowedIntents} | null, ` +
+      `"sentiment": "positive" | "neutral" | "negative" | "frustrated" | "angry", ` +
+      `"urgency": "low" | "medium" | "high" | "critical", ` +
+      `"language": "<BCP-47 tag like 'en' or 'es-419'>", ` +
+      `"confidence": <0.0..1.0 aggregate over all four dimensions>}\n\n` +
+      (taxonomy
+        ? `Allowed intents (choose one or null if none fit):\n${taxonomy}`
+        : "This tenant has no intent taxonomy configured — return intent: null.");
+
+    const response = await this.client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      system: systemPrompt,
+      messages: [{ role: "user", content: input.body }],
+    });
+    const block = response.content.find((b) => b.type === "text");
+    const text = block?.type === "text" ? block.text : "";
+    const tokensUsed = (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0);
+    try {
+      const parsed = JSON.parse(text.trim());
+      return {
+        intent: parsed.intent ?? null,
+        sentiment: parsed.sentiment ?? null,
+        urgency: parsed.urgency ?? null,
+        language: parsed.language ?? null,
+        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+        tokensUsed,
+      };
+    } catch {
+      return { intent: null, sentiment: null, urgency: null, language: null, confidence: 0, tokensUsed };
+    }
+  }
+
+  async translate(
+    body: string,
+    sourceLang: string | null,
+    targetLang: string
+  ): Promise<{ text: string; tokensUsed: number } | null> {
+    if (sourceLang === targetLang) return null;
+    const response = await this.client.messages.create({
+      model: MODEL,
+      max_tokens: 2048,
+      system:
+        `Translate the user's message ${sourceLang ? `from ${sourceLang} ` : ""}into ${targetLang}. ` +
+        "Preserve tone and meaning. Output only the translated text — no preamble, no quotes.",
+      messages: [{ role: "user", content: body }],
+    });
+    const block = response.content.find((b) => b.type === "text");
+    const translated = block?.type === "text" ? block.text.trim() : "";
+    if (!translated) return null;
+    return {
+      text: translated,
+      tokensUsed: (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0),
+    };
   }
 }

@@ -27,6 +27,12 @@ export const CONDITION_FIELDS = [
   "customField",
   "hoursSinceCreated",
   "hoursSinceLastReply",
+  // M9.5 — AI signals read from the LATEST inbound message on the ticket.
+  // The condition evaluator resolves these off Message table via ticketId.
+  "aiIntent",
+  "aiSentiment",
+  "aiUrgency",
+  "aiLanguage",
 ] as const;
 export type ConditionField = (typeof CONDITION_FIELDS)[number];
 
@@ -161,6 +167,9 @@ export const triggerEventSchema = z.enum([
   "SLA_WARNING",
   "SLA_BREACH",
   "TAG_ADDED",
+  // M9.5 — AI signals. Fired by classify-message after signals land.
+  "INTENT_DETECTED",
+  "SENTIMENT_DETECTED",
 ]);
 export type TriggerEvent = z.infer<typeof triggerEventSchema>;
 
@@ -210,6 +219,10 @@ export const CONDITION_FIELD_LABELS: Record<ConditionField, string> = {
   customField: "Custom field",
   hoursSinceCreated: "Hours since created",
   hoursSinceLastReply: "Hours since last reply",
+  aiIntent: "AI intent",
+  aiSentiment: "AI sentiment",
+  aiUrgency: "AI urgency",
+  aiLanguage: "AI language",
 };
 
 export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
@@ -232,6 +245,8 @@ export const TRIGGER_EVENT_LABELS: Record<TriggerEvent, string> = {
   PRIORITY_CHANGED: "Priority changed",
   SLA_WARNING: "SLA warning",
   SLA_BREACH: "SLA breached",
+  INTENT_DETECTED: "AI intent detected",
+  SENTIMENT_DETECTED: "AI sentiment detected",
   TAG_ADDED: "Tag added",
 };
 

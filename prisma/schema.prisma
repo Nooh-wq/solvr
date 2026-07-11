@@ -122,6 +122,22 @@ model Tenant {
   // Break-glass invariant: the setter must have MFA enrolled themselves,
   // enforced in actions/adminSecurity.ts.
   enforceMfa   Boolean      @default(false)
+  // M9 — AI Intelligence Layer per-tenant knobs.
+  //   aiEnabled: master switch. False → classification is skipped entirely.
+  //   aiConfidenceThreshold: signals below this render muted in the agent UI
+  //     (default 0.7 per spec §3).
+  //   aiMonthlyTokenCap: soft cap on classification tokens; once exceeded,
+  //     new messages hit cache-only until the monthly reset.
+  //   aiTokensUsedThisMonth / aiTokensMonthResetAt: usage counters.
+  //   aiAutoTranslate: M9.7. When true, non-tenant-language messages get a
+  //     translated copy stored on the Message row.
+  aiEnabled              Boolean   @default(true)
+  aiConfidenceThreshold  Float     @default(0.7)
+  aiMonthlyTokenCap      Int       @default(1000000)
+  aiTokensUsedThisMonth  Int       @default(0)
+  aiTokensMonthResetAt   DateTime  @default(now())
+  aiAutoTranslate        Boolean   @default(false)
+  aiPrimaryLanguage      String    @default("en")
   // M6.4 — tenant-wide SSO enforcement. When true, email/password login
   // is disabled for this tenant — only the IdP path works. Break-glass
   // invariant: at least one Super Admin must be flagged as break-glass
@@ -159,6 +175,8 @@ model Tenant {
   apiKeys                 ApiKey[]
   webhookSubscriptions    WebhookSubscription[]
   apiUsageLogs            ApiUsageLog[]
+  intentTaxonomy          IntentTaxonomy[]
+  aiClassificationCache   AiClassificationCache[]
   digestQueue             DigestQueue[]
   dataExportRequests      DataExportRequest[]
   accountDeletionRequests AccountDeletionRequest[]
@@ -524,12 +542,88 @@ model Message {
   isInternal         Boolean      @default(false)
   createdAt          DateTime     @default(now())
 
+  // M9 — AI classification signals. Populated by
+  // src/lib/inngest/functions/classify-message.ts on message create.
+  // Only inbound (customer / guest) messages get classified — outbound
+  // agent replies are skipped per M9 §3 (token spend).
+  //
+  //   aiIntent: matches a row from IntentTaxonomy.slug for this tenant.
+  //     Null when confidence is below the threshold OR classification
+  //     hasn't run yet.
+  //   aiSentiment: "positive" | "neutral" | "negative" | "frustrated" |
+  //     "angry". String not enum so the model can evolve without a
+  //     migration.
+  //   aiUrgency: "low" | "medium" | "high" | "critical".
+  //   aiLanguage: BCP-47 tag (e.g. "en", "es-419").
+  //   aiConfidence: 0.0–1.0 aggregate over all four dimensions. A single
+  //     scalar keeps the M9.4 muted-vs-solid rendering rule simple.
+  //   aiSignalsAt: when classification completed. Null → not yet run.
+  //   aiOverriddenBySubjectId: set when an agent corrected a signal via
+  //     the M9.4 override UI. Downstream (M9.5 rule engine, M9.6 routing)
+  //     treats overridden values as final — no re-classification.
+  //   aiTranslatedBody: M9.7. Populated when tenant.aiAutoTranslate is on
+  //     and the message is in a language different from aiPrimaryLanguage.
+  aiIntent                String?
+  aiSentiment             String?
+  aiUrgency               String?
+  aiLanguage              String?
+  aiConfidence            Float?
+  aiSignalsAt             DateTime?
+  aiOverriddenBySubjectId String?
+  aiTranslatedBody        String?
+
   attachments Attachment[]
 
   @@index([tenantId, ticketId])
   @@index([tenantId, senderEndUserId])
   @@index([tenantId, senderTeamMemberId])
+  @@index([tenantId, aiIntent])
+  @@index([tenantId, aiSentiment])
   @@map("messages")
+}
+
+// M9.2 — per-tenant intent taxonomy. Admin editable at /admin/ai/intents.
+// The taxonomy is injected into the classification prompt so results are
+// bounded to the tenant's actual product surface — a SaaS billing tool's
+// intents differ from a hardware helpdesk's.
+model IntentTaxonomy {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slug        String   // "login_issue", "billing", "how_to", "cancellation"
+  label       String   // "Login issue" (display)
+  description String   // Sent to the model as a hint
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, isActive])
+  @@map("intent_taxonomy")
+}
+
+// M9 — content-hash keyed classification cache. Same message body →
+// same signals, so we don't re-bill the LLM for a duplicate. Salted with
+// the tenant's taxonomy version (via the taxonomyDigest column) so a
+// tenant editing their taxonomy invalidates their cache without touching
+// other tenants.
+model AiClassificationCache {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contentHash     String   // sha256 of message body
+  taxonomyDigest  String   // sha256 of the tenant's active taxonomy slugs
+  intent          String?
+  sentiment       String?
+  urgency         String?
+  language        String?
+  confidence      Float
+  tokensUsed      Int
+  createdAt       DateTime @default(now())
+
+  @@unique([tenantId, contentHash, taxonomyDigest])
+  @@index([tenantId, createdAt])
+  @@map("ai_classification_cache")
 }
 
 model Attachment {
@@ -1608,6 +1702,8 @@ enum TriggerEventType {
   SLA_WARNING
   SLA_BREACH
   TAG_ADDED
+  INTENT_DETECTED
+  SENTIMENT_DETECTED
 }
 
 model Rule {

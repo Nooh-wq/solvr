@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import geoip from "geoip-lite";
+import { emitClassifyEvent } from "@/lib/ai/emit-classify";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { getClientIp } from "@/lib/rate-limit";
@@ -619,7 +620,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
   const session = await requireSession();
   const data = replySchema.parse(input);
 
-  const { ticket, assignedAgent, branding } = await withRls(
+  const { ticket, assignedAgent, branding, messageId } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({
@@ -681,9 +682,12 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
         });
       }
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { ticket: updatedTicket, assignedAgent, branding };
+      return { ticket: updatedTicket, assignedAgent, branding, messageId: message.id };
     }
   );
+
+  // M9 — classify inbound client message asynchronously.
+  await emitClassifyEvent(session.tenantId, messageId);
 
   if (assignedAgent) {
     const decision = await getEmailDecision(session.tenantId, assignedAgent.id, "ticketReply");

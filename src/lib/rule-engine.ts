@@ -51,7 +51,17 @@ function readField(
   ticket: Pick<
     Ticket,
     "status" | "priority" | "categoryId" | "assignedTeamMemberId" | "source" | "createdAt" | "firstReplyAt"
-  > & { requesterEmail?: string | null; tags?: string[] },
+  > & {
+    requesterEmail?: string | null;
+    tags?: string[];
+    // M9.5 — AI signals resolved from the ticket's latest inbound message
+    // by the caller (via loadTicketForRule below). Optional so existing
+    // callers stay compatible.
+    aiIntent?: string | null;
+    aiSentiment?: string | null;
+    aiUrgency?: string | null;
+    aiLanguage?: string | null;
+  },
   field: string,
   now: Date
 ): string | number | string[] | null | undefined {
@@ -76,6 +86,16 @@ function readField(
       return ticket.firstReplyAt
         ? (now.getTime() - ticket.firstReplyAt.getTime()) / (1000 * 60 * 60)
         : null;
+    // M9.5 — AI signal reads. Caller is responsible for populating these
+    // from the latest inbound message before evaluating conditions.
+    case "aiIntent":
+      return ticket.aiIntent ?? null;
+    case "aiSentiment":
+      return ticket.aiSentiment ?? null;
+    case "aiUrgency":
+      return ticket.aiUrgency ?? null;
+    case "aiLanguage":
+      return ticket.aiLanguage ?? null;
     default:
       return undefined;
   }
@@ -465,9 +485,29 @@ export async function runRulesForEvent(params: {
       });
       if (!ticket) return;
 
+      // M9.5 — attach the latest inbound message's AI signals to the
+      // ticket object so readField() can resolve aiIntent / aiSentiment /
+      // aiUrgency / aiLanguage conditions.
+      const latestSignals = await tx.message.findFirst({
+        where: {
+          tenantId: session.tenantId,
+          ticketId,
+          senderRole: { in: ["CLIENT", "GUEST"] },
+          aiSignalsAt: { not: null },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          aiIntent: true,
+          aiSentiment: true,
+          aiUrgency: true,
+          aiLanguage: true,
+        },
+      });
+      const ticketWithSignals = { ...ticket, ...(latestSignals ?? {}) };
+
       for (const rule of rules) {
         try {
-          const matched = evaluateConditions(rule.conditions, ticket);
+          const matched = evaluateConditions(rule.conditions, ticketWithSignals);
           if (!matched) {
             await tx.ruleRunLog.create({
               data: {

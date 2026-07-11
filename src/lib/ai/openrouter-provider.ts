@@ -1,4 +1,4 @@
-import type { AiProvider, GenerateInput } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals } from "./provider";
 
 const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -83,5 +83,102 @@ export class OpenRouterProvider implements AiProvider {
     } catch {
       return { category: null, priority: "MEDIUM" };
     }
+  }
+
+  async classifyMessage(input: ClassifyInput): Promise<ClassifySignals> {
+    const taxonomy = input.intents
+      .map((i) => `  - ${i.slug} — ${i.label}: ${i.description}`)
+      .join("\n");
+    const allowedIntents = input.intents.length > 0
+      ? input.intents.map((i) => `"${i.slug}"`).join(" | ")
+      : "null";
+    const systemPrompt =
+      "You classify a single inbound customer support message into structured signals. " +
+      "Respond with EXACTLY one line of JSON, nothing else:\n" +
+      `{"intent": ${allowedIntents} | null, ` +
+      `"sentiment": "positive" | "neutral" | "negative" | "frustrated" | "angry", ` +
+      `"urgency": "low" | "medium" | "high" | "critical", ` +
+      `"language": "<BCP-47 tag like 'en' or 'es-419'>", ` +
+      `"confidence": <0.0..1.0 aggregate over all four dimensions>}\n\n` +
+      (taxonomy
+        ? `Allowed intents (choose one or null if none fit):\n${taxonomy}`
+        : "This tenant has no intent taxonomy configured — return intent: null.");
+
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+        "X-Title": "Stralis Ticketing System",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: input.body },
+        ],
+        max_tokens: 200,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`OpenRouter classify failed (${response.status}): ${body.slice(0, 300)}`);
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content ?? "";
+    const tokensUsed = (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0);
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text.trim());
+      return {
+        intent: parsed.intent ?? null,
+        sentiment: parsed.sentiment ?? null,
+        urgency: parsed.urgency ?? null,
+        language: parsed.language ?? null,
+        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
+        tokensUsed,
+      };
+    } catch {
+      return { intent: null, sentiment: null, urgency: null, language: null, confidence: 0, tokensUsed };
+    }
+  }
+
+  async translate(
+    body: string,
+    sourceLang: string | null,
+    targetLang: string
+  ): Promise<{ text: string; tokensUsed: number } | null> {
+    if (sourceLang === targetLang) return null;
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+        "X-Title": "Stralis Ticketing System",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              `Translate the user's message ${sourceLang ? `from ${sourceLang} ` : ""}into ${targetLang}. ` +
+              "Preserve tone and meaning. Output only the translated text — no preamble, no quotes.",
+          },
+          { role: "user", content: body },
+        ],
+        max_tokens: 2048,
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = (data.choices?.[0]?.message?.content ?? "").trim();
+    if (!text) return null;
+    return {
+      text,
+      tokensUsed: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
+    };
   }
 }
