@@ -71,7 +71,8 @@ begin
     'qa_rubrics','qa_scores',
     'service_catalog_items','approval_requests','assets','asset_links',
     'agent_presence',
-    'channel_configs'
+    'channel_configs',
+    'help_centers','community_posts','community_replies','community_upvotes'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -327,6 +328,23 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M14 — help_centers + community_* — strict tenant isolation. Public
+-- read paths (marketing help center) call the read actions under a
+-- SUPER_ADMIN system context scoped by the resolved help-center's
+-- tenantId; the middleware fails closed on domain mismatch (spec §3).
+drop policy if exists tenant_isolation on help_centers;
+create policy tenant_isolation on help_centers
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_posts;
+create policy tenant_isolation on community_posts
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_replies;
+create policy tenant_isolation on community_replies
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_upvotes;
+create policy tenant_isolation on community_upvotes
   using ("tenantId" = app_current_tenant_id());
 
 -- M12 — channel_configs: strict tenant isolation. Provider

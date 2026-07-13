@@ -168,6 +168,8 @@ model Tenant {
   assets                  Asset[]
   agentPresence           AgentPresence[]
   channelConfigs          ChannelConfig[]
+  helpCenters             HelpCenter[]
+  communityPosts          CommunityPost[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -1735,13 +1737,131 @@ model KbArticle {
   // reviewed" action on a stale-flagged article. Distinct from updatedAt
   // (which any edit bumps) so freshness is tracked by intent, not touch.
   reviewedAt  DateTime?
+  // M14.1 — which help center this article belongs to. Nullable for
+  // back-compat with existing rows written before M14; new admin
+  // writes prompt for it when the tenant has ≥ 1 HelpCenter. Retrieval
+  // for the chatbot / RAG can now filter by helpCenterId so
+  // Product-A's bot only sees Product-A's articles.
+  helpCenterId String?
+  helpCenter  HelpCenter? @relation(fields: [helpCenterId], references: [id], onDelete: SetNull)
+  // URL slug within the help center. Optional — new articles get one
+  // auto-generated from the title if not provided. Not globally unique;
+  // uniqueness is enforced per (tenantId, helpCenterId, slug).
+  slug        String?
   updatedAt   DateTime  @updatedAt
   createdAt   DateTime  @default(now())
   chunks      KbChunk[]
   suggestions KbSuggestion[]
 
   @@index([tenantId])
+  @@index([tenantId, helpCenterId, isPublished])
+  @@unique([tenantId, helpCenterId, slug])
   @@map("kb_articles")
+}
+
+// M14.1 — one HelpCenter per branded product surface. Multiple per
+// tenant. `slug` participates in the path-based URL
+// (/help/<slug>) as the default; a custom domain overrides.
+// customDomain, when set + verified, is the sole way a request maps
+// to this HelpCenter — the middleware fails closed if the domain
+// isn't recognised, so tenant A's help center can never serve
+// tenant B's articles (spec §3).
+model HelpCenter {
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  tenant                      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slug                        String
+  name                        String
+  description                 String?
+  customDomain                String?  @unique
+  isActive                    Boolean  @default(true)
+  // M14.3 — Community forum on/off + default moderation setting for
+  // new posts. Spec §3 pin: moderation defaults ON.
+  communityEnabled            Boolean  @default(false)
+  communityModerationDefault  Boolean  @default(true)
+  // M14.4 — thresholds for the "solved + upvoted → M10 suggestion"
+  // feed. minUpvotes lets a tenant tune what "helpful enough" means.
+  communityUpvoteThreshold    Int      @default(3)
+  brandingJson                Json?    // logoUrl, primaryColor, etc.
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  articles                    KbArticle[]
+  communityPosts              CommunityPost[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId, isActive])
+  @@map("help_centers")
+}
+
+// M14.3 — community Q&A post. Kept intentionally minimal (spec §3:
+// "Do NOT ship a full forum framework"). Status flow:
+//   PENDING → APPROVED (moderator approves; visible publicly)
+//   PENDING → REJECTED (moderator rejects; hidden)
+//   APPROVED → SOLVED (author or moderator marks a reply as best answer)
+model CommunityPost {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  helpCenterId   String
+  helpCenter     HelpCenter @relation(fields: [helpCenterId], references: [id], onDelete: Cascade)
+  authorEndUserId String
+  title          String
+  body           String
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED | SOLVED
+  upvoteCount    Int      @default(0)
+  bestReplyId    String?  // set on SOLVED
+  // Set when the post got fed into KbSuggestion (M14.4). Prevents
+  // re-feeding the same solved post.
+  feedIntoKbSuggestionAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  replies        CommunityReply[]
+  upvotes        CommunityUpvote[]
+
+  @@index([tenantId, helpCenterId, status])
+  @@index([tenantId, status, createdAt])
+  @@map("community_posts")
+}
+
+model CommunityReply {
+  id             String   @id @default(cuid())
+  tenantId       String
+  postId         String
+  post           CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorEndUserId String
+  body           String
+  isBestAnswer   Boolean  @default(false)
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  upvoteCount    Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  upvotes        CommunityUpvote[]
+
+  @@index([tenantId, postId, status])
+  @@map("community_replies")
+}
+
+// One row per (voter, target). Vote target is polymorphic-ish — a
+// vote points at either a post OR a reply; the caller enforces
+// exactly-one at write time.
+model CommunityUpvote {
+  id        String   @id @default(cuid())
+  tenantId  String
+  postId    String?
+  post      CommunityPost? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  replyId   String?
+  reply     CommunityReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  voterEndUserId String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, postId, voterEndUserId])
+  @@unique([tenantId, replyId, voterEndUserId])
+  @@index([tenantId, postId])
+  @@index([tenantId, replyId])
+  @@map("community_upvotes")
 }
 
 // M10 — self-learning KB. The nightly clustering job files drafts
