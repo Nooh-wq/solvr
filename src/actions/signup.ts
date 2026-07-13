@@ -94,6 +94,10 @@ export async function startTenantSignup(input: z.infer<typeof tenantSignupSchema
     adminEmail: data.adminEmail,
     passwordHash,
     codeHash,
+    // M15.6 — carried through the OTP token so tenant creation lands
+    // in the requested preset atomically. Legacy tokens minted before
+    // this field is present are read as CUSTOMER at verify time.
+    serviceMode: data.serviceMode,
   });
 
   // No branding row exists yet — email uses the host tenant's default
@@ -146,12 +150,15 @@ export async function verifyTenantSignup(input: z.infer<typeof verifyTenantSignu
         (await tx.endUser.findFirst({ where: { email: payload.adminEmail } }));
       if (emailTaken) throw new Error("EMAIL_TAKEN");
 
+      const requestedMode =
+        (payload as { serviceMode?: string }).serviceMode === "EMPLOYEE" ? "EMPLOYEE" : "CUSTOMER";
       const tenant = await tx.tenant.create({
         data: {
           name: payload.tenantName,
           slug: payload.slug,
           type: "CLIENT",
           status: "TRIAL",
+          serviceMode: requestedMode,
           branding: { create: { productName: payload.tenantName } },
           chatbotConfig: { create: {} },
         },

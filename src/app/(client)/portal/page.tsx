@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { listMyTickets } from "@/actions/tickets";
+import { getTenantServiceMode } from "@/actions/serviceMode";
+import { listActiveCatalogItems } from "@/actions/serviceCatalog";
+import { countPendingApprovalsForMe } from "@/actions/approvalRequests";
+import { labelsFor } from "@/lib/service-mode/labels";
 import { StatusBadge, PriorityLabel } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { TicketStatus } from "@/generated/prisma";
@@ -20,16 +24,60 @@ export default async function PortalTicketsPage({
 }) {
   const sp = await searchParams;
   const status = (sp.status as TicketStatus | undefined) ?? undefined;
-  const tickets = await listMyTickets({ status });
+  const [tickets, mode] = await Promise.all([
+    listMyTickets({ status }),
+    getTenantServiceMode(),
+  ]);
+  const L = labelsFor(mode);
+  const isEmployee = mode === "EMPLOYEE";
+  const [catalog, pendingApprovals] = isEmployee
+    ? await Promise.all([
+        listActiveCatalogItems(),
+        countPendingApprovalsForMe().catch(() => 0),
+      ])
+    : [[] as Awaited<ReturnType<typeof listActiveCatalogItems>>, 0];
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Your tickets</h1>
-        <Link href="/portal/new">
-          <Button>New ticket</Button>
-        </Link>
+        <h1 className="text-2xl font-bold">Your {L.ticket_plural.toLowerCase()}</h1>
+        <div className="flex items-center gap-2">
+          {isEmployee && pendingApprovals > 0 ? (
+            <Link
+              href="/portal/approvals"
+              className="inline-flex items-center gap-2 text-[13px] font-medium text-[var(--color-primary)] hover:underline"
+            >
+              Approvals
+              <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[var(--color-primary)] text-white text-[11px] font-semibold">
+                {pendingApprovals}
+              </span>
+            </Link>
+          ) : null}
+          <Link href={isEmployee ? "/portal/catalog" : "/portal/new"}>
+            <Button>{L.portal_new_cta}</Button>
+          </Link>
+        </div>
       </div>
+
+      {isEmployee && catalog.length > 0 ? (
+        <section className="mb-8">
+          <div className="text-[12px] uppercase-label text-[var(--color-neutral-700)] mb-3">
+            {L.catalog}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {catalog.slice(0, 8).map((it) => (
+              <Link
+                key={it.id}
+                href={`/portal/catalog/${it.id}`}
+                className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-4 hover:border-[var(--color-primary)] transition-colors cursor-pointer"
+              >
+                <div className="text-2xl mb-1">{it.iconEmoji ?? "📋"}</div>
+                <div className="text-[13px] font-semibold">{it.name}</div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="flex gap-2 mb-5 overflow-x-auto">
         {FILTERS.map((f) => (

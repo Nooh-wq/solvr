@@ -250,6 +250,12 @@ export type TenantSignupTokenPayload = {
   passwordHash: string;
   /** bcrypt hash of the 6-digit OTP. */
   codeHash: string;
+  /**
+   * M15.6 — Employee vs Customer preset chosen at signup start.
+   * Optional so tokens minted before this field was added still verify
+   * (fallback to "CUSTOMER" at consumption).
+   */
+  serviceMode?: "CUSTOMER" | "EMPLOYEE";
 };
 
 /** CSAT rating link, emailed on ticket → RESOLVED transition. */

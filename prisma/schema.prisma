@@ -144,6 +144,13 @@ model Tenant {
   // (their email/password auth stays active regardless of enforceSso).
   // Prevents an IdP misconfiguration from locking the tenant out.
   enforceSso   Boolean      @default(false)
+  // M15.1 — Service Mode. CUSTOMER (default) keeps the existing
+  // support terminology + client portal. EMPLOYEE swaps labels
+  // (ticket→request, customer→employee, category→service catalog)
+  // and re-orders the portal to lead with the Service Catalog. The
+  // toggle is reversible — no schema changes are gated on this value,
+  // only presentation.
+  serviceMode  String       @default("CUSTOMER") // CUSTOMER | EMPLOYEE
   createdAt    DateTime     @default(now())
 
   branding                TenantBranding?
@@ -156,6 +163,9 @@ model Tenant {
   aiActionLogs            AiActionLog[]
   qaRubrics               QaRubric[]
   qaScores                QaScore[]
+  serviceCatalogItems     ServiceCatalogItem[]
+  approvalRequests        ApprovalRequest[]
+  assets                  Asset[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -779,6 +789,125 @@ model QaScore {
   @@index([tenantId, ticketId])
   @@index([tenantId, createdAt])
   @@map("qa_scores")
+}
+
+// ---------------------------------------------------------------------------
+// M15 — Employee Service Suite. Same engine, new preset. Nothing here
+// forks the existing ticket engine — a Service Catalog request creates
+// a normal Ticket row and (optionally) links an ApprovalRequest to it.
+// ---------------------------------------------------------------------------
+
+// M15.2 — a predefined request type. e.g. "New laptop", "Access request",
+// "Onboard hire". Each item points at a set of Z2 CustomFieldDefinition
+// ids (formFieldDefIds) so the portal form renders dynamically — the
+// values persist as ordinary CustomFieldValue rows against the created
+// ticket.
+model ServiceCatalogItem {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  description        String
+  // Emoji shown on the portal catalog card. UI-only, no fallback logic.
+  iconEmoji          String?
+  isActive           Boolean  @default(true)
+  // If true, request creation queues an ApprovalRequest before the
+  // ticket becomes actionable by the fulfilment group. Multi-step
+  // support lives in ApprovalRequest.currentStep / approvers.
+  requiresApproval   Boolean  @default(false)
+  // JSON-encoded string[] of subject ids (team-member ids) for the
+  // approver step list. Empty when requiresApproval=false. Order
+  // matters — step N+1 is only asked after step N approves.
+  approverSubjectIds Json     @default("[]")
+  // Escalation policy: expire pending approval after N hours.
+  approvalTimeoutHours Int    @default(72)
+  // Ordered list of CustomFieldDefinition ids to render on the request
+  // form. Fields must be scope=TICKET or scope=USER; other scopes are
+  // rejected at admin edit time.
+  formFieldDefIds    Json     @default("[]")
+  // Auto-route submitted requests into this group (M3 routing).
+  routingGroupId     String?
+  // Sort order on the portal catalog grid.
+  position           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  approvalRequests   ApprovalRequest[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive, position])
+  @@map("service_catalog_items")
+}
+
+// M15.3 — generalized multi-step approval. Replaces the ad-hoc
+// registration-approval gate. State machine:
+//   PENDING → APPROVED | REJECTED | EXPIRED
+// Multi-step: `approvers` is a JSON string[] of subject ids in order.
+// currentStep tracks position; only approvers[currentStep] may act.
+// On APPROVED at the final step, status flips APPROVED and the linked
+// ticket is unlocked for fulfilment via runRulesForEvent on the
+// APPROVAL_APPROVED event (M1 hook).
+model ApprovalRequest {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId              String
+  catalogItemId         String?
+  catalogItem           ServiceCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  status                String   @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED
+  approverSubjectIds    Json     // string[] — ordered
+  currentStep           Int      @default(0)
+  totalSteps            Int
+  decisionsJson         Json     @default("[]") // Array<{step: number, subjectId: string, decision: APPROVED|REJECTED, note?: string, at: string}>
+  expiresAt             DateTime
+  decidedAt             DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([tenantId, ticketId])
+  @@index([tenantId, status])
+  @@index([tenantId, expiresAt])
+  @@map("approval_requests")
+}
+
+// M15.4 — asset registry. Kept lightweight: tenant-scoped ownership
+// (single subject at a time via wrapper dual-FK). AssetLink is the
+// many:many with tickets — one asset can be referenced by multiple
+// support tickets over its lifetime.
+model Asset {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assetTag             String   // e.g. "LAP-00123" — tenant-controlled label
+  name                 String
+  kind                 String   @default("OTHER") // LAPTOP | MONITOR | LICENSE | ACCESS | OTHER
+  status               String   @default("IN_STOCK") // IN_STOCK | ASSIGNED | RETIRED
+  serialNumber         String?
+  notes                String?
+  // Dual-FK ownership. Exactly one of these is set when status=ASSIGNED.
+  assignedEndUserId    String?
+  assignedTeamMemberId String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  links                AssetLink[]
+
+  @@unique([tenantId, assetTag])
+  @@index([tenantId, status])
+  @@map("assets")
+}
+
+model AssetLink {
+  id        String   @id @default(cuid())
+  tenantId  String
+  assetId   String
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  ticketId  String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, assetId, ticketId])
+  @@index([tenantId, ticketId])
+  @@map("asset_links")
 }
 
 model Attachment {

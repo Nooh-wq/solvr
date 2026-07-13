@@ -13,6 +13,7 @@ import { deliverWebhook } from "@/lib/inngest/functions/deliver-webhook";
 import { classifyMessageFn } from "@/lib/inngest/functions/classify-message";
 import { clusterKbSuggestions } from "@/lib/inngest/functions/cluster-kb-suggestions";
 import { scoreReplyFn } from "@/lib/inngest/functions/score-reply";
+import { expireApprovals } from "@/lib/inngest/functions/expire-approvals";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -30,5 +31,6 @@ export const { GET, POST, PUT } = serve({
     classifyMessageFn,
     clusterKbSuggestions,
     scoreReplyFn,
+    expireApprovals,
   ],
 });

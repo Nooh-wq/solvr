@@ -68,7 +68,8 @@ begin
     'ticket_guests','login_otps','survey_responses',
     'kb_suggestions',
     'ai_tools','ai_action_logs',
-    'qa_rubrics','qa_scores'
+    'qa_rubrics','qa_scores',
+    'service_catalog_items','approval_requests','assets','asset_links'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -324,6 +325,22 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M15 — Employee Service Suite tables. Strict tenant isolation on
+-- every one. Approval decisions + asset writes go through server
+-- actions that already gate on the caller's role; RLS is the backstop.
+drop policy if exists tenant_isolation on service_catalog_items;
+create policy tenant_isolation on service_catalog_items
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on approval_requests;
+create policy tenant_isolation on approval_requests
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on assets;
+create policy tenant_isolation on assets
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on asset_links;
+create policy tenant_isolation on asset_links
   using ("tenantId" = app_current_tenant_id());
 
 -- M11 — qa_rubrics + qa_scores: strict tenant isolation. Coaching
