@@ -1,4 +1,4 @@
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal, QaScoreInput, QaScoreResult } from "./provider";
 
 const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -289,6 +289,68 @@ export class OpenRouterProvider implements AiProvider {
       };
     } catch {
       return { toolCall: null, message: text, tokensUsed };
+    }
+  }
+
+  async scoreReply(input: QaScoreInput): Promise<QaScoreResult> {
+    const rubricBlock = input.dimensions
+      .map((d) => `  - ${d.key} (${d.label}): ${d.description}`)
+      .join("\n");
+    const keysUnion = input.dimensions.map((d) => `"${d.key}"`).join(" | ");
+    const systemPrompt =
+      "You are a support-quality auditor. Score ONE reply against the tenant's rubric. " +
+      "Each dimension gets a number 0-5 (0 = totally missing, 5 = excellent) plus a short " +
+      "rationale (max 2 sentences). Ground your scoring in what's actually in the reply — " +
+      "never invent facts about the reply that aren't there. Respond with EXACTLY one JSON " +
+      "object, nothing else:\n" +
+      `{"scores": { ${keysUnion}: {"score": 0..5, "rationale": "<short>"}, ... }}\n\n` +
+      `Rubric dimensions:\n${rubricBlock}`;
+
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+        "X-Title": "Stralis Ticketing System",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Thread context:\n${input.threadExcerpt}\n\nReply to score:\n${input.replyBody}`,
+          },
+        ],
+        max_tokens: 1000,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`OpenRouter scoreReply failed (${response.status}): ${body.slice(0, 300)}`);
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content ?? "";
+    const tokensUsed = (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0);
+    try {
+      const match = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : text.trim());
+      const scores = parsed?.scores;
+      if (!scores || typeof scores !== "object") {
+        return { dimensions: input.dimensions.map((d) => ({ key: d.key, score: 0, rationale: "" })), tokensUsed };
+      }
+      return {
+        dimensions: input.dimensions.map((d) => {
+          const row = (scores as Record<string, { score?: unknown; rationale?: unknown }>)[d.key];
+          const s = typeof row?.score === "number" && row.score >= 0 && row.score <= 5 ? row.score : 0;
+          const r = typeof row?.rationale === "string" ? row.rationale.slice(0, 400) : "";
+          return { key: d.key, score: s, rationale: r };
+        }),
+        tokensUsed,
+      };
+    } catch {
+      return { dimensions: input.dimensions.map((d) => ({ key: d.key, score: 0, rationale: "" })), tokensUsed };
     }
   }
 }

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal, QaScoreInput, QaScoreResult } from "./provider";
 
 const MODEL = "claude-sonnet-4-5";
 
@@ -200,6 +200,59 @@ export class ClaudeProvider implements AiProvider {
     const text = block?.type === "text" ? block.text : "";
     const tokensUsed = (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0);
     return parseToolProposal(text, tokensUsed);
+  }
+
+  async scoreReply(input: QaScoreInput): Promise<QaScoreResult> {
+    const rubricBlock = input.dimensions
+      .map((d) => `  - ${d.key} (${d.label}): ${d.description}`)
+      .join("\n");
+    const keysUnion = input.dimensions.map((d) => `"${d.key}"`).join(" | ");
+    const systemPrompt =
+      "You are a support-quality auditor. Score ONE reply against the tenant's rubric. " +
+      "Each dimension gets a number 0-5 (0 = totally missing, 5 = excellent) plus a short " +
+      "rationale (max 2 sentences). Ground your scoring in what's actually in the reply — " +
+      "never invent facts about the reply that aren't there. Respond with EXACTLY one JSON " +
+      "object, nothing else:\n" +
+      `{"scores": { ${keysUnion}: {"score": 0..5, "rationale": "<short>"}, ... }}\n\n` +
+      `Rubric dimensions:\n${rubricBlock}`;
+
+    const response = await this.client.messages.create({
+      model: MODEL,
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: `Thread context:\n${input.threadExcerpt}\n\nReply to score:\n${input.replyBody}`,
+        },
+      ],
+    });
+    const block = response.content.find((b) => b.type === "text");
+    const text = block?.type === "text" ? block.text : "";
+    const tokensUsed = (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0);
+    return parseQaScore(text, input.dimensions, tokensUsed);
+  }
+}
+
+function parseQaScore(text: string, dims: QaScoreInput["dimensions"], tokensUsed: number): QaScoreResult {
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : text.trim());
+    const scores = parsed?.scores;
+    if (!scores || typeof scores !== "object") {
+      return { dimensions: dims.map((d) => ({ key: d.key, score: 0, rationale: "" })), tokensUsed };
+    }
+    return {
+      dimensions: dims.map((d) => {
+        const row = (scores as Record<string, { score?: unknown; rationale?: unknown }>)[d.key];
+        const s = typeof row?.score === "number" && row.score >= 0 && row.score <= 5 ? row.score : 0;
+        const r = typeof row?.rationale === "string" ? row.rationale.slice(0, 400) : "";
+        return { key: d.key, score: s, rationale: r };
+      }),
+      tokensUsed,
+    };
+  } catch {
+    return { dimensions: dims.map((d) => ({ key: d.key, score: 0, rationale: "" })), tokensUsed };
   }
 }
 

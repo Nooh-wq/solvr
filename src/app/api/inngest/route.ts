@@ -12,6 +12,7 @@ import { sendReportSchedules } from "@/lib/inngest/functions/send-report-schedul
 import { deliverWebhook } from "@/lib/inngest/functions/deliver-webhook";
 import { classifyMessageFn } from "@/lib/inngest/functions/classify-message";
 import { clusterKbSuggestions } from "@/lib/inngest/functions/cluster-kb-suggestions";
+import { scoreReplyFn } from "@/lib/inngest/functions/score-reply";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -28,5 +29,6 @@ export const { GET, POST, PUT } = serve({
     deliverWebhook,
     classifyMessageFn,
     clusterKbSuggestions,
+    scoreReplyFn,
   ],
 });

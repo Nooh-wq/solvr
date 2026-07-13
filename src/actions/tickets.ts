@@ -739,7 +739,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
     throw new Error("LIGHT_AGENT_NO_PUBLIC_REPLY");
   }
 
-  const { ticket, client, branding } = await withRls(
+  const { ticket, client, branding, messageId } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
@@ -796,9 +796,21 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         });
       }
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { ticket, client, branding };
+      return { ticket, client, branding, messageId: message.id };
     }
   );
+
+  // M11 — non-blocking QA scoring on public replies only (spec §3:
+  // don't run QA on internal notes). Fire-and-forget; queue outage is
+  // never fatal to the reply.
+  if (!data.isInternal) {
+    try {
+      const { emitScoreReplyEvent } = await import("@/lib/ai/emit-score");
+      await emitScoreReplyEvent(session.tenantId, messageId);
+    } catch {
+      // Non-fatal.
+    }
+  }
 
   if (!data.isInternal) {
     const decision = await getEmailDecision(session.tenantId, client.id, "ticketReply");

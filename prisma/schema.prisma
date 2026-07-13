@@ -154,6 +154,8 @@ model Tenant {
   kbSuggestions           KbSuggestion[]
   aiTools                 AiTool[]
   aiActionLogs            AiActionLog[]
+  qaRubrics               QaRubric[]
+  qaScores                QaScore[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -708,6 +710,75 @@ model AiActionLog {
   @@index([tenantId, ticketId])
   @@index([tenantId, createdAt])
   @@map("ai_action_logs")
+}
+
+// M11 — AI Quality Assurance. One active rubric per tenant; the
+// scorer reads the currently-active row and grades every sent reply
+// against it. dimensions is JSON so admins can add/remove axes
+// without a schema migration — the shape is:
+//   [
+//     { key: "helpfulness", label: "Helpfulness", description: "...",
+//       weight: 0.35, flagBelow: 3.0 },
+//     ...
+//   ]
+// weight sums are not enforced — the scorer computes `overall` as a
+// weight-normalised weighted mean, so any weights work.
+model QaRubric {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  dimensions   Json     // array of { key, label, description, weight, flagBelow }
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  qaScores     QaScore[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@map("qa_rubrics")
+}
+
+// M11 — one QaScore per SENT message (spec §3: never score
+// AI-drafted-but-not-sent messages). Uniqueness on messageId prevents
+// double-scoring in the face of retry. senderRole is denormalised so
+// dashboards + coaching views don't have to fan out to Message.
+// isFlagged is derived at insert time from each dimension's flagBelow.
+model QaScore {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rubricId              String
+  rubric                QaRubric @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  messageId             String   @unique
+  ticketId              String
+  // Denormalised — agent-side dashboards read these directly. Nullable
+  // authorTeamMemberId covers BOT/SYSTEM/client-originated replies
+  // (which are still scorable — the tenant may want to grade its own
+  // AI). authorEndUserId set for CLIENT replies (rare — most tenants
+  // score only outbound).
+  authorTeamMemberId    String?
+  authorEndUserId       String?
+  senderRole            String   // AGENT | ADMIN | BOT | SYSTEM | CLIENT | GUEST
+  // Per-dimension { helpfulness: {score: 4.2, rationale: "..."}, ... }
+  // Rationales are internal-only — never surfaced to end users
+  // (spec §3 "Do NOT display QA scores to end users").
+  scoresJson            Json
+  overall               Float
+  isFlagged             Boolean  @default(false)
+  flaggedReasons        Json?    // string[] of dimension keys that tripped flagBelow
+  reviewStatus          String   @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBySubjectId   String?
+  reviewedAt            DateTime?
+  tokensUsed            Int      @default(0)
+  createdAt             DateTime @default(now())
+
+  @@index([tenantId, isFlagged, reviewStatus])
+  @@index([tenantId, authorTeamMemberId, createdAt])
+  @@index([tenantId, ticketId])
+  @@index([tenantId, createdAt])
+  @@map("qa_scores")
 }
 
 model Attachment {

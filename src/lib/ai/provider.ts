@@ -106,6 +106,41 @@ export type ToolProposal = {
   tokensUsed: number;
 };
 
+// M11 — QA scoring. The tenant's rubric declares the axes; the
+// provider grades ONE reply against ALL of them in a single call.
+// Spec §3 pin: "Do NOT let the rubric prompt leak to Sentry" — the
+// scorer catches its own errors and never re-throws with the rubric
+// or reply body attached.
+export type QaDimensionSpec = {
+  key: string;
+  label: string;
+  description: string;
+  weight: number;
+  flagBelow: number;
+};
+
+export type QaScoreInput = {
+  dimensions: QaDimensionSpec[];
+  // A short slice of the surrounding thread (client's most recent
+  // question + a couple prior turns) so the model can grade in context
+  // rather than in isolation. Never includes tenant credentials.
+  threadExcerpt: string;
+  // The reply body the human/AI sent. Scored as-is — spec §3 forbids
+  // scoring drafts that were never sent.
+  replyBody: string;
+};
+
+export type QaDimensionResult = {
+  key: string;
+  score: number;    // 0..5, per dimension
+  rationale: string;
+};
+
+export type QaScoreResult = {
+  dimensions: QaDimensionResult[];
+  tokensUsed: number;
+};
+
 export interface AiProvider {
   /** True when the provider has real credentials — callers use this to degrade gracefully instead of erroring. */
   readonly isConfigured: boolean;
@@ -143,6 +178,13 @@ export interface AiProvider {
    * The executor is the authority on whether the proposal is safe to run.
    */
   proposeToolCall(input: ToolProposalInput): Promise<ToolProposal>;
+  /**
+   * M11 — score ONE reply against the tenant's rubric. Returns
+   * per-dimension scores + brief rationales + token cost. On failure,
+   * throws — the async scorer catches and simply writes no QaScore
+   * row (spec §3: never log the rubric prompt to Sentry).
+   */
+  scoreReply(input: QaScoreInput): Promise<QaScoreResult>;
 }
 
 /** No-op provider used when ANTHROPIC_API_KEY isn't set — every method throws NOT_CONFIGURED so call sites can catch and degrade (mirrors the email provider's pattern). */
@@ -179,6 +221,10 @@ export class UnconfiguredAiProvider implements AiProvider {
     throw new Error("NOT_CONFIGURED");
   }
   async proposeToolCall(_input: ToolProposalInput): Promise<ToolProposal> {
+    void _input;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async scoreReply(_input: QaScoreInput): Promise<QaScoreResult> {
     void _input;
     throw new Error("NOT_CONFIGURED");
   }

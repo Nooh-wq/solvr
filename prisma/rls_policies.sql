@@ -67,7 +67,8 @@ begin
     'chatbot_configs','chat_conversations','chat_messages','notifications',
     'ticket_guests','login_otps','survey_responses',
     'kb_suggestions',
-    'ai_tools','ai_action_logs'
+    'ai_tools','ai_action_logs',
+    'qa_rubrics','qa_scores'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -323,6 +324,20 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M11 — qa_rubrics + qa_scores: strict tenant isolation. Coaching
+-- and flagged-queue queries run under the caller's RLS context; the
+-- Inngest scorer writes qa_scores under SUPER_ADMIN system context
+-- (same fan-out pattern as classify-message + cluster-kb-suggestions).
+-- Spec §3 pin: "Do NOT display QA scores to end users" — enforced in
+-- the app layer since RLS is not role-selective here (CLIENTs simply
+-- have no route that queries qa_scores).
+drop policy if exists tenant_isolation on qa_rubrics;
+create policy tenant_isolation on qa_rubrics
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on qa_scores;
+create policy tenant_isolation on qa_scores
   using ("tenantId" = app_current_tenant_id());
 
 -- M8 — ai_tools + ai_action_logs: strict tenant isolation. Server
