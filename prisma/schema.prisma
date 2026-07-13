@@ -166,6 +166,7 @@ model Tenant {
   serviceCatalogItems     ServiceCatalogItem[]
   approvalRequests        ApprovalRequest[]
   assets                  Asset[]
+  agentPresence           AgentPresence[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -908,6 +909,26 @@ model AssetLink {
   @@unique([tenantId, assetId, ticketId])
   @@index([tenantId, ticketId])
   @@map("asset_links")
+}
+
+// M4.1 — real-time agent presence. Distinct from M3's AgentProfile
+// (skills + capacity — semi-static routing metadata) because presence
+// is high-churn (heartbeat every ~30s) and separating them keeps
+// AgentProfile writes at a normal cadence. lastHeartbeatAt is bumped
+// by the workspace's heartbeat action; the sweep cron flips stale
+// rows to OFFLINE.
+model AgentPresence {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  teamMemberId      String
+  status            String   @default("OFFLINE") // ONLINE | AWAY | OFFLINE
+  lastHeartbeatAt   DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, teamMemberId])
+  @@index([tenantId, status])
+  @@map("agent_presence")
 }
 
 model Attachment {
@@ -1752,15 +1773,35 @@ model ChatConversation {
   // Dual-FK subject (wrapper). Raw scalars.
   endUserId    String?
   teamMemberId String?
-  status       String        @default("active") // active | escalated | closed
+  // status now includes M4 states:
+  //   active     — client is chatting with the bot (default).
+  //   waiting    — client requested live agent; not yet picked up.
+  //   live       — agent joined and is chatting.
+  //   escalated  — converted to a Ticket (M4.5 / existing path).
+  //   closed     — client or agent ended the conversation.
+  status       String        @default("active")
   ticketId     String?
   ticket       Ticket?       @relation(fields: [ticketId], references: [id])
+  // M4.3 — the team member currently owning the conversation. Set by
+  // pickUpLiveChat; nullable so multiple agents can pass it around.
+  assignedTeamMemberId String?
+  // M4.3 — set when the client asked to speak with a human; unset back
+  // to null on convert-to-ticket.
+  handoffRequestedAt   DateTime?
+  handoffPickedUpAt    DateTime?
+  // M4.2 — typing timestamps. Each side polls the other's last-update
+  // and renders "…typing" when the delta is < a few seconds. Never
+  // persistent state — no long-lived row on typing.
+  clientTypingAt       DateTime?
+  agentTypingAt        DateTime?
   createdAt    DateTime      @default(now())
   messages     ChatMessage[]
 
   @@index([tenantId])
   @@index([tenantId, endUserId])
   @@index([tenantId, teamMemberId])
+  @@index([tenantId, status])
+  @@index([tenantId, assignedTeamMemberId])
   @@map("chat_conversations")
 }
 

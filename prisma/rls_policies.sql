@@ -69,7 +69,8 @@ begin
     'kb_suggestions',
     'ai_tools','ai_action_logs',
     'qa_rubrics','qa_scores',
-    'service_catalog_items','approval_requests','assets','asset_links'
+    'service_catalog_items','approval_requests','assets','asset_links',
+    'agent_presence'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -325,6 +326,14 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M4.1 — agent_presence: strict tenant isolation (spec §3 "Do NOT
+-- broadcast presence cross-tenant"). Heartbeats update rows scoped to
+-- the caller's tenant via withRls; the sweep cron writes under
+-- SUPER_ADMIN system context per tenant.
+drop policy if exists tenant_isolation on agent_presence;
+create policy tenant_isolation on agent_presence
   using ("tenantId" = app_current_tenant_id());
 
 -- M15 — Employee Service Suite tables. Strict tenant isolation on

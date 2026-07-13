@@ -3,6 +3,7 @@
 import { useState, useTransition, useRef, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { sendChatMessage, escalateChatToTicket } from "@/actions/chat";
+import { requestLiveAgent } from "@/actions/liveChat";
 import { Button } from "@/components/ui/button";
 import { ChatIcon, CloseIcon } from "@/components/icons";
 import { useToast } from "@/components/ui/toast";
@@ -57,6 +58,38 @@ export function ChatWidget() {
       toast({ title: "Ticket created from chat", variant: "success" });
       router.push("/portal");
       router.refresh();
+    });
+  }
+
+  /** M4.3 — "Talk to a person" handoff. If no agent is ONLINE, the
+   * server falls through to escalateChatToTicket (M4.4 offline
+   * fallback), so the client always ends up with either a live agent
+   * or a filed ticket — never a "please wait" dead-end. */
+  function talkToAgent() {
+    if (!conversationId) return;
+    startTransition(async () => {
+      try {
+        const r = await requestLiveAgent({ conversationId });
+        if (r.kind === "offline-ticket") {
+          toast({
+            title: "No agents online — created a ticket instead",
+            variant: "info",
+          });
+          router.push("/portal");
+        } else if (r.kind === "waiting") {
+          toast({
+            title: "Waiting for an agent…",
+            description: "You'll see their reply here.",
+            variant: "info",
+          });
+          setMessages((m) => [
+            ...m,
+            { role: "BOT", body: "You're now in the queue for a human agent. Someone will be with you shortly." },
+          ]);
+        }
+      } catch {
+        toast({ title: "Couldn't request a human", variant: "error" });
+      }
     });
   }
 
@@ -116,9 +149,14 @@ export function ChatWidget() {
 
       <div className="border-t border-black/5 dark:border-white/10 p-2 space-y-2">
         {conversationId && (
-          <Button variant="secondary" size="sm" className="w-full" onClick={escalate} disabled={pending}>
-            Create a ticket from this chat
-          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" size="sm" onClick={talkToAgent} disabled={pending}>
+              Talk to a person
+            </Button>
+            <Button variant="secondary" size="sm" onClick={escalate} disabled={pending}>
+              Create a ticket
+            </Button>
+          </div>
         )}
         <div className="flex gap-2">
           <input
