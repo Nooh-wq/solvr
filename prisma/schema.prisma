@@ -167,6 +167,7 @@ model Tenant {
   approvalRequests        ApprovalRequest[]
   assets                  Asset[]
   agentPresence           AgentPresence[]
+  channelConfigs          ChannelConfig[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -909,6 +910,39 @@ model AssetLink {
   @@unique([tenantId, assetId, ticketId])
   @@index([tenantId, ticketId])
   @@map("asset_links")
+}
+
+// M12 — omnichannel connector config. One row per (tenant, channel).
+// Channel-specific credentials (Twilio auth token, Meta app secret,
+// signing secret) are envelope-encrypted using the per-tenant DEK
+// helper from M6.1 (@/core/auth/envelope-crypto). The `phoneOrHandle`
+// column is the human-readable "who you are on this channel" — e.g.
+// a Twilio number for SMS/WhatsApp, a Facebook page id for Messenger.
+model ChannelConfig {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel       String   // SMS | WHATSAPP | MESSENGER | INSTAGRAM
+  phoneOrHandle String   // "+15551234567" / page id / handle
+  isActive      Boolean  @default(true)
+  // Envelope-encrypted credentials JSON blob. Never surfaces upstream.
+  // Shape depends on channel — see src/lib/channels/registry.ts. Wire
+  // format is the same "v2:iv:ciphertext:tag" produced by
+  // envelopeEncrypt.
+  credsEnc      String
+  // Public webhook slug embedded in the inbound URL. Random per-row so
+  // rotation is a straight replace + updated provider webhook URL.
+  webhookSlug   String   @unique
+  // Last provider-reported delivery event. Used by the admin UI for
+  // an "is this working?" indicator. Doesn't drive routing.
+  lastInboundAt  DateTime?
+  lastOutboundAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tenantId, channel])
+  @@index([tenantId, isActive])
+  @@map("channel_configs")
 }
 
 // M4.1 — real-time agent presence. Distinct from M3's AgentProfile

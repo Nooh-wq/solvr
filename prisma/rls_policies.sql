@@ -70,7 +70,8 @@ begin
     'ai_tools','ai_action_logs',
     'qa_rubrics','qa_scores',
     'service_catalog_items','approval_requests','assets','asset_links',
-    'agent_presence'
+    'agent_presence',
+    'channel_configs'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -326,6 +327,14 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M12 — channel_configs: strict tenant isolation. Provider
+-- credentials are envelope-encrypted at write time (M6.1), so even a
+-- successful cross-tenant read would return ciphertext; RLS is still
+-- the outer boundary.
+drop policy if exists tenant_isolation on channel_configs;
+create policy tenant_isolation on channel_configs
   using ("tenantId" = app_current_tenant_id());
 
 -- M4.1 — agent_presence: strict tenant isolation (spec §3 "Do NOT

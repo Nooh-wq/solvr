@@ -863,6 +863,28 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
     }
   }
 
+  // M12 — omnichannel outbound. When the ticket's source is a
+  // registered channel (SMS/WhatsApp/Messenger/Instagram), fan the
+  // reply body back out through the connector. Fire-and-forget: never
+  // fails the agent's reply.
+  if (!data.isInternal) {
+    try {
+      const { channelForTicketSource, dispatchOutbound, externalIdFromEndUserEmail } =
+        await import("@/lib/channels/dispatch");
+      const channel = channelForTicketSource(ticket.source);
+      if (channel && client?.email) {
+        await dispatchOutbound({
+          tenantId: session.tenantId,
+          ticketSource: ticket.source,
+          toExternalId: externalIdFromEndUserEmail(client.email),
+          body: data.body,
+        });
+      }
+    } catch {
+      // Non-fatal — spec §3 pin, never log body / provider errors.
+    }
+  }
+
   revalidatePath(`/agent/tickets/${ticket.id}`);
   return { ok: true };
 }
