@@ -190,6 +190,7 @@ export type TokenPurpose =
   | "tenant-signup"
   | "csat"
   | "analytics_share"
+  | "org_analytics_share"
   | "mfa-challenge"
   | "mfa-enrollment";
 
@@ -261,6 +262,19 @@ export type AnalyticsShareTokenPayload = {
 };
 
 /**
+ * Z10.4 — per-organization dashboard share link. Distinct purpose from
+ * `analytics_share` so a broader analytics token can never be
+ * substituted (spec §3: "Signed link carries the organizationId in
+ * the JWT; server verifies against the ticket data"). The verifier
+ * always scopes queries to the token's organizationId, ignoring any
+ * ?organizationId= in the URL.
+ */
+export type OrgAnalyticsShareTokenPayload = {
+  tenantId: string;
+  organizationId: string;
+};
+
+/**
  * M6.1 — short-lived (5 min) MFA-challenge token. Minted by login() when
  * a valid password lands on an account with mfaEnabledAt set; consumed by
  * completeMfaLogin() with the user's TOTP code. Carries no session
@@ -304,6 +318,7 @@ export type PurposePayloads = {
   "tenant-signup": TenantSignupTokenPayload;
   csat: CsatTokenPayload;
   analytics_share: AnalyticsShareTokenPayload;
+  org_analytics_share: OrgAnalyticsShareTokenPayload;
   "mfa-challenge": MfaChallengeTokenPayload;
   "mfa-enrollment": MfaEnrollmentTokenPayload;
 };

@@ -20,6 +20,17 @@ type Filter = {
   organizationId?: string;
   groupId?: string;
   tag?: string;
+  customFieldDefinitionId?: string;
+  customFieldValue?: string;
+  groupBy?: string;
+};
+
+export type CustomFieldDef = {
+  id: string;
+  scope: string;   // TICKET | USER
+  key: string;
+  label: string;
+  type: string;
 };
 
 /** Drives the analytics page's filters entirely via the URL — every change
@@ -37,6 +48,9 @@ export function FilterBar({
   organizations,
   groups,
   tags,
+  customFieldDefinitions = [],
+  showGroupBy = true,
+  hideOrganization = false,
 }: {
   current: Filter;
   categories: { id: string; name: string }[];
@@ -44,6 +58,9 @@ export function FilterBar({
   organizations: { id: string; name: string }[];
   groups: { id: string; name: string }[];
   tags: { name: string }[];
+  customFieldDefinitions?: CustomFieldDef[];
+  showGroupBy?: boolean;
+  hideOrganization?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -51,8 +68,13 @@ export function FilterBar({
 
   function setParam(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString());
-    if (!value || value === "ALL") params.delete(key);
-    else params.set(key, value);
+    if (!value || value === "ALL") {
+      params.delete(key);
+      // Clearing the CF definition also clears the value — a stray
+      // value with no key would filter nothing on the server anyway,
+      // but the UI stays coherent.
+      if (key === "customFieldDefinitionId") params.delete("customFieldValue");
+    } else params.set(key, value);
     router.push(`${pathname}?${params.toString()}`);
   }
 
@@ -116,16 +138,18 @@ export function FilterBar({
         className={SELECT_WIDTH}
       />
 
-      <DropdownSelect
-        value={current.organizationId ?? "ALL"}
-        onChange={(v) => setParam("organizationId", v)}
-        options={[
-          { value: "ALL", label: "All organizations" },
-          ...organizations.map((o) => ({ value: o.id, label: o.name })),
-        ]}
-        ariaLabel="Organization"
-        className={SELECT_WIDTH}
-      />
+      {hideOrganization ? null : (
+        <DropdownSelect
+          value={current.organizationId ?? "ALL"}
+          onChange={(v) => setParam("organizationId", v)}
+          options={[
+            { value: "ALL", label: "All organizations" },
+            ...organizations.map((o) => ({ value: o.id, label: o.name })),
+          ]}
+          ariaLabel="Organization"
+          className={SELECT_WIDTH}
+        />
+      )}
 
       <DropdownSelect
         value={current.groupId ?? "ALL"}
@@ -148,6 +172,57 @@ export function FilterBar({
         ariaLabel="Tag"
         className={SELECT_WIDTH}
       />
+
+      {/* Z10.1 — custom-field filter. Two-part: pick the definition
+          (User CF or Ticket CF), then supply the value. Value input is
+          a plain text field because CF values are stored polymorphic
+          (text / number / option label) and the server matches by
+          string equality — that's the same shape M13's
+          customFieldValue filter already accepts. */}
+      {customFieldDefinitions.length > 0 ? (
+        <>
+          <DropdownSelect
+            value={current.customFieldDefinitionId ?? "ALL"}
+            onChange={(v) => setParam("customFieldDefinitionId", v)}
+            options={[
+              { value: "ALL", label: "All custom fields" },
+              ...customFieldDefinitions.map((d) => ({
+                value: d.id,
+                label: `${d.scope === "USER" ? "User" : "Ticket"} · ${d.label}`,
+              })),
+            ]}
+            ariaLabel="Custom field"
+            className="w-56"
+          />
+          {current.customFieldDefinitionId ? (
+            <input
+              type="text"
+              value={current.customFieldValue ?? ""}
+              onChange={(e) => setParam("customFieldValue", e.target.value)}
+              placeholder="Value"
+              aria-label="Custom field value"
+              className="h-9 rounded-md border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-3 text-sm w-40"
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {showGroupBy ? (
+        <DropdownSelect
+          value={current.groupBy ?? "ALL"}
+          onChange={(v) => setParam("groupBy", v)}
+          options={[
+            { value: "ALL", label: "Group by: default" },
+            { value: "category", label: "Group by: category" },
+            { value: "organization", label: "Group by: organization" },
+            { value: "group", label: "Group by: group" },
+            { value: "tag", label: "Group by: tag" },
+            { value: "agent", label: "Group by: agent" },
+          ]}
+          ariaLabel="Group by"
+          className="w-48"
+        />
+      ) : null}
     </div>
   );
 }

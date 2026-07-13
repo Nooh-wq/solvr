@@ -85,5 +85,12 @@ export const analyticsFilterSchema = z.object({
   // valueNumber (stringified) / dropdown-option label.
   customFieldDefinitionId: z.string().cuid().optional(),
   customFieldValue: z.string().min(1).max(200).optional(),
+  // Z10.2 — the primary breakdown chart's grouping dimension.
+  // Absent = tenant default ("category"); each accepted value swaps
+  // the "Tickets by …" widget to a different pivot without touching
+  // the rest of the dashboard.
+  groupBy: z
+    .enum(["category", "organization", "group", "tag", "agent"])
+    .optional(),
 });
 export type AnalyticsFilter = z.infer<typeof analyticsFilterSchema>;

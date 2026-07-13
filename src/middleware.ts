@@ -49,6 +49,7 @@ const PUBLIC_PREFIXES = [
   "/guest",
   "/rate",
   "/reports/shared",
+  "/share",       // Z10.4 — /share/org/[token] signed org dashboards
   "/api/auth", // M6.2/M6.3 — SAML/OIDC SP endpoints (IdP-authenticated, not session)
   "/api/scim", // M6.5/M6.6 — SCIM bearer-token authed
   "/api/v1",   // M7 — public API, bearer-token authed

@@ -117,11 +117,23 @@ export default async function AdminAnalyticsPage({
     customFieldValue: sp.customFieldValue,
   });
 
-  const categorySegments = data.categoryBreakdown.map((c, i) => ({
+  // Z10.2 — primary breakdown pivots on filter.groupBy. Defaults to
+  // category so the widget stays back-compatible; when groupBy is
+  // organization/group/tag/agent the same chart re-renders against
+  // the pivoted rows.
+  const primarySegments = data.primaryBreakdown.rows.map((c, i) => ({
     label: c.label,
     value: c.value,
     color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
   }));
+  const PRIMARY_LABELS: Record<string, string> = {
+    category: "By category",
+    organization: "By organization",
+    group: "By group",
+    tag: "By tag",
+    agent: "By agent",
+  };
+  const primaryHeading = PRIMARY_LABELS[data.primaryBreakdown.dimension] ?? "By category";
   const channelSegments = data.channelBreakdown.map((c) => ({
     label: CHANNEL_LABELS[c.label] ?? c.label,
     value: c.value,
@@ -148,6 +160,7 @@ export default async function AdminAnalyticsPage({
           organizations={data.filterOptions.organizations}
           groups={data.filterOptions.groups}
           tags={data.filterOptions.tags}
+          customFieldDefinitions={data.filterOptions.customFieldDefinitions}
         />
       </Suspense>
 
@@ -251,9 +264,9 @@ export default async function AdminAnalyticsPage({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
-          <h2 className="text-[13px] font-semibold mb-4">By category</h2>
-          {categorySegments.length > 0 ? (
-            <AxisBarChart items={categorySegments} />
+          <h2 className="text-[13px] font-semibold mb-4">{primaryHeading}</h2>
+          {primarySegments.length > 0 ? (
+            <AxisBarChart items={primarySegments} />
           ) : (
             <p className="text-[13px] text-[var(--color-neutral-500)]">No tickets in this range.</p>
           )}

@@ -1428,7 +1428,7 @@ function resolveRange(f: AnalyticsFilter): { start: Date; end: Date } {
  */
 type PrefilteredIds = {
   ticketIdIn?: string[] | null;
-  assignedTeamMemberIdIn?: string[] | null;
+  assignedToIdIn?: string[] | null;
 };
 
 function buildTicketWhere(
@@ -1449,8 +1449,8 @@ function buildTicketWhere(
     // group's member list. Pre-resolved into a scalar id list by the
     // caller because the shared-platform boundary forbids a Prisma
     // relation across the wrapper's TeamMemberGroup table.
-    ...(prefilter.assignedTeamMemberIdIn !== undefined && prefilter.assignedTeamMemberIdIn !== null
-      ? { assignedTeamMemberId: { in: prefilter.assignedTeamMemberIdIn } }
+    ...(prefilter.assignedToIdIn !== undefined && prefilter.assignedToIdIn !== null
+      ? { assignedTeamMemberId: { in: prefilter.assignedToIdIn } }
       : f.assignedToId
         ? f.assignedToId === "unassigned"
           ? { assignedTeamMemberId: null }
@@ -1471,7 +1471,7 @@ async function resolveRelationFilters(
   const out: PrefilteredIds = {};
 
   // Group filter: pull team-member ids in the group. If the caller also
-  // set assignedToId, we intersect: an ADMIN filtering "group=Support &
+  // set assignedTeamMemberId, we intersect: an ADMIN filtering "group=Support &
   // assignee=Sam" should only see tickets where both hold. If Sam isn't
   // in Support the result is an empty set (still emit as an explicit
   // empty array so buildTicketWhere renders no matches).
@@ -1484,7 +1484,7 @@ async function resolveRelationFilters(
     if (f.assignedToId && f.assignedToId !== "unassigned") {
       ids = ids.includes(f.assignedToId) ? [f.assignedToId] : [];
     }
-    out.assignedTeamMemberIdIn = ids;
+    out.assignedToIdIn = ids;
   }
 
   // Tag filter: resolve tag name → tag id → ticket-target assignments.
@@ -1548,8 +1548,8 @@ function buildPriorTicketWhere(
     ...(f.categoryId ? { categoryId: f.categoryId } : {}),
     ...(f.priority ? { priority: f.priority } : {}),
     ...(f.organizationId ? { organizationId: f.organizationId } : {}),
-    ...(prefilter.assignedTeamMemberIdIn !== undefined && prefilter.assignedTeamMemberIdIn !== null
-      ? { assignedTeamMemberId: { in: prefilter.assignedTeamMemberIdIn } }
+    ...(prefilter.assignedToIdIn !== undefined && prefilter.assignedToIdIn !== null
+      ? { assignedTeamMemberId: { in: prefilter.assignedToIdIn } }
       : f.assignedToId
         ? f.assignedToId === "unassigned"
           ? { assignedTeamMemberId: null }
@@ -1593,6 +1593,167 @@ function buildHeatmap(dates: Date[]): number[][] {
   const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
   for (const d of dates) grid[d.getDay()][d.getHours()] += 1;
   return grid;
+}
+
+// Z10.2 — primary breakdown pivot. Runs on the same filter-scoped
+// ticket set as everything else in the overview; picks the group
+// dimension off the filter and returns the same {label, value}[] shape
+// existing chart components already know how to render. Kept as a
+// small standalone helper (rather than inlined into getAnalyticsOverview)
+// so tests can pin its dimensions without spinning the whole overview.
+type BreakdownRow = { label: string; value: number };
+async function computePrimaryBreakdown(
+  tx: Parameters<Parameters<import("@/generated/prisma").PrismaClient["$transaction"]>[0]>[0],
+  tenantId: string,
+  createdWhere: Record<string, unknown>,
+  groupBy: AnalyticsFilter["groupBy"] | undefined,
+  ctx: { categoryBreakdown: BreakdownRow[] }
+): Promise<{ dimension: string; rows: BreakdownRow[] }> {
+  const dim = groupBy ?? "category";
+  if (dim === "category") return { dimension: dim, rows: ctx.categoryBreakdown };
+
+  if (dim === "organization") {
+    const grouped = await tx.ticket.groupBy({
+      by: ["organizationId"],
+      where: createdWhere,
+      _count: true,
+    });
+    const ids = grouped
+      .map((g: { organizationId: string | null }) => g.organizationId)
+      .filter((id: string | null): id is string => id !== null);
+    const orgs = ids.length
+      ? await tx.organization.findMany({
+          where: { tenantId, id: { in: ids } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const byId = new Map(orgs.map((o: { id: string; name: string }) => [o.id, o.name]));
+    return {
+      dimension: dim,
+      rows: grouped
+        .map((g: { organizationId: string | null; _count: number }) => ({
+          label: g.organizationId ? byId.get(g.organizationId) ?? "Unknown org" : "No organization",
+          value: g._count,
+        }))
+        .sort((a: BreakdownRow, b: BreakdownRow) => b.value - a.value),
+    };
+  }
+
+  if (dim === "agent") {
+    const grouped = await tx.ticket.groupBy({
+      by: ["assignedTeamMemberId"],
+      where: createdWhere,
+      _count: true,
+    });
+    const ids = grouped
+      .map((g: { assignedTeamMemberId: string | null }) => g.assignedTeamMemberId)
+      .filter((id: string | null): id is string => id !== null);
+    // Wrapper lookup for team-member names.
+    const wrapperCtx = systemContext(tenantId);
+    const members = ids.length ? await getTeamMembersByIds(wrapperCtx, ids) : new Map();
+    const byId = new Map(
+      [...members.entries()].map(([id, m]: [string, { name?: string | null; email?: string | null }]) => [
+        id,
+        m.name ?? m.email ?? id,
+      ])
+    );
+    return {
+      dimension: dim,
+      rows: grouped
+        .map((g: { assignedTeamMemberId: string | null; _count: number }) => ({
+          label: g.assignedTeamMemberId ? byId.get(g.assignedTeamMemberId) ?? "Unknown agent" : "Unassigned",
+          value: g._count,
+        }))
+        .sort((a: BreakdownRow, b: BreakdownRow) => b.value - a.value),
+    };
+  }
+
+  if (dim === "group") {
+    // Group requires a join through TeamMemberGroup on ticket.assignedTeamMemberId.
+    // Raw SQL is the shortest path; the createdWhere fragment is already
+    // enforced elsewhere in the overview so we scope by the same tenant
+    // + status/date via the ids passed in.
+    const tickets = await tx.ticket.findMany({
+      where: createdWhere,
+      select: { id: true, assignedTeamMemberId: true },
+    });
+    const assigneeIds = [...new Set(tickets.map((t) => t.assignedTeamMemberId).filter((id): id is string => !!id))];
+    const memberships = assigneeIds.length
+      ? await tx.teamMemberGroup.findMany({
+          where: { tenantId, teamMemberId: { in: assigneeIds } },
+          select: { teamMemberId: true, groupId: true },
+        })
+      : [];
+    const groupIds = [...new Set(memberships.map((m) => m.groupId))];
+    const groups = groupIds.length
+      ? await tx.group.findMany({
+          where: { tenantId, id: { in: groupIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const nameById = new Map(groups.map((g) => [g.id, g.name]));
+    const groupsByMember = new Map<string, string[]>();
+    for (const m of memberships) {
+      const arr = groupsByMember.get(m.teamMemberId) ?? [];
+      arr.push(m.groupId);
+      groupsByMember.set(m.teamMemberId, arr);
+    }
+    const counts = new Map<string, number>();
+    for (const t of tickets) {
+      const gids = t.assignedTeamMemberId ? groupsByMember.get(t.assignedTeamMemberId) ?? [] : [];
+      if (gids.length === 0) {
+        counts.set("__unassigned__", (counts.get("__unassigned__") ?? 0) + 1);
+      } else {
+        for (const gid of gids) counts.set(gid, (counts.get(gid) ?? 0) + 1);
+      }
+    }
+    return {
+      dimension: dim,
+      rows: [...counts.entries()]
+        .map(([id, value]) => ({
+          label: id === "__unassigned__" ? "No group" : nameById.get(id) ?? "Unknown group",
+          value,
+        }))
+        .sort((a, b) => b.value - a.value),
+    };
+  }
+
+  if (dim === "tag") {
+    const assignments = await tx.tagAssignment.findMany({
+      where: {
+        tenantId,
+        targetType: "TICKET",
+        // Filter to tickets in scope via createdWhere by fetching ids first.
+      },
+      select: { targetId: true, tagId: true },
+    });
+    const inScopeTicketIds = new Set(
+      (
+        await tx.ticket.findMany({ where: createdWhere, select: { id: true } })
+      ).map((t) => t.id)
+    );
+    const counts = new Map<string, number>();
+    for (const a of assignments) {
+      if (!inScopeTicketIds.has(a.targetId)) continue;
+      counts.set(a.tagId, (counts.get(a.tagId) ?? 0) + 1);
+    }
+    const tagIds = [...counts.keys()];
+    const tags = tagIds.length
+      ? await tx.tag.findMany({
+          where: { tenantId, id: { in: tagIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const nameById = new Map(tags.map((t) => [t.id, t.name]));
+    return {
+      dimension: dim,
+      rows: [...counts.entries()]
+        .map(([id, value]) => ({ label: nameById.get(id) ?? "Unknown tag", value }))
+        .sort((a, b) => b.value - a.value),
+    };
+  }
+
+  return { dimension: dim, rows: ctx.categoryBreakdown };
 }
 
 export async function getAnalyticsOverview(rawFilter: Partial<AnalyticsFilter> = {}) {
@@ -1792,6 +1953,18 @@ export async function getAnalyticsOverviewByTenant(params: {
     const bySource = await tx.ticket.groupBy({ by: ["source"], where: createdWhere, _count: true });
     const channelBreakdown = bySource.map((s) => ({ label: s.source, value: s._count })).sort((a, b) => b.value - a.value);
 
+    // --- Z10.2 primary breakdown (groupBy dimension) ---
+    // Renders in place of "Tickets by category" on the dashboard.
+    // Defaults to category — the existing widget's data — so the shape
+    // stays back-compatible for callers that don't pass groupBy.
+    const primaryBreakdown = await computePrimaryBreakdown(
+      tx,
+      tenantId,
+      createdWhere,
+      f.groupBy,
+      { categoryBreakdown }
+    );
+
     // --- Clients by region (map + top-regions table) ---
     // clientCountry only populates for tickets created through a live
     // request (portal/chatbot) going forward — see actions/tickets.ts's
@@ -1868,7 +2041,7 @@ export async function getAnalyticsOverviewByTenant(params: {
     }
     const avgResolutionHours = overallResCount > 0 ? overallResSum / overallResCount : null;
 
-    // Per-agent CSAT: join ratings to their ticket's assignedToId, scoped by
+    // Per-agent CSAT: join ratings to their ticket's assignedTeamMemberId, scoped by
     // the same createdWhere filter set used everywhere else on this page.
     const agentCsatRows = await tx.surveyResponse.findMany({
       where: { tenantId, ticket: { ...createdWhere, assignedTeamMemberId: { not: null } } },
@@ -1959,6 +2132,23 @@ export async function getAnalyticsOverviewByTenant(params: {
           })
         : [];
 
+    // Z10.1 — custom-field definitions for the filter bar. Split by
+    // scope (TICKET / USER) so the UI can render two dropdowns. Only
+    // active fields; internal fields still surface here — the
+    // isInternal gate applies only to shared per-org views.
+    const allCustomFieldDefs = await tx.customFieldDefinition.findMany({
+      where: { tenantId, isActive: true, scope: { in: ["TICKET", "USER"] } },
+      orderBy: [{ scope: "asc" }, { position: "asc" }, { label: "asc" }],
+      select: {
+        id: true,
+        scope: true,
+        key: true,
+        label: true,
+        type: true,
+        isInternal: true,
+      },
+    });
+
     // M13.2 — prior-window KPI values for delta chips. Same filters,
     // shifted back by the current window's length. Only computed for
     // the KPIs that benefit from a delta view — pure counts and time
@@ -2010,6 +2200,7 @@ export async function getAnalyticsOverviewByTenant(params: {
       dailySeries,
       categoryBreakdown,
       channelBreakdown,
+      primaryBreakdown,
       regionBreakdown,
       agentLeaderboard,
       heatmap,
@@ -2019,6 +2210,7 @@ export async function getAnalyticsOverviewByTenant(params: {
         organizations: allOrganizations,
         groups: allGroups,
         tags: allTags,
+        customFieldDefinitions: allCustomFieldDefs,
       },
     };
   });

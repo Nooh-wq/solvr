@@ -1381,6 +1381,12 @@ model CustomFieldDefinition {
   description String?
   isActive    Boolean          @default(true)
   isRequired  Boolean          @default(false)
+  // Z10 §3 — when true, this field is filtered out of shared per-org
+  // dashboards (spec: "Do NOT display custom-field values in shared
+  // per-org dashboards if the field is marked internal"). Purely a
+  // read-side gate; internal fields still store + surface everywhere
+  // else, they just never leave the tenant boundary via a share link.
+  isInternal  Boolean          @default(false)
   // Display order within a (scope) column on admin/detail sidebars.
   position    Int              @default(0)
   createdAt   DateTime         @default(now())
