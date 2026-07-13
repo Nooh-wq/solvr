@@ -66,7 +66,8 @@ begin
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
     'ticket_guests','login_otps','survey_responses',
-    'kb_suggestions'
+    'kb_suggestions',
+    'ai_tools','ai_action_logs'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -322,6 +323,17 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M8 — ai_tools + ai_action_logs: strict tenant isolation. Server
+-- actions further gate writes to ADMIN+, and the executor writes
+-- ai_action_logs under a SUPER_ADMIN system context (cron / chatbot
+-- fan-out) — same pattern as classify-message.
+drop policy if exists tenant_isolation on ai_tools;
+create policy tenant_isolation on ai_tools
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on ai_action_logs;
+create policy tenant_isolation on ai_action_logs
   using ("tenantId" = app_current_tenant_id());
 
 -- M10 — kb_suggestions: tenant-scoped, admin/super_admin only. The

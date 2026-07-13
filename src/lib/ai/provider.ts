@@ -56,6 +56,56 @@ export type KbDraft = {
   tokensUsed: number;
 };
 
+// M8 — agentic tool-calling. The chat loop passes the tenant's active
+// tool registry as `tools`, plus the current turn history + a "final
+// answer" instruction. The model either:
+//   - proposes ONE tool call (name + args), OR
+//   - returns a plain `reply` string (no tool needed / not applicable).
+//
+// The provider prompt is deliberately conservative:
+//   - Only tools listed here are allowed. Unknown names come back as
+//     rejected at the executor layer; the prompt discourages inventing
+//     them in the first place.
+//   - Args must match the declared JSON schema — the executor validates
+//     regardless, but a lower reject rate at the model saves round-trips.
+export type ToolSpec = {
+  name: string;
+  description: string;
+  argsSchema: JsonSchemaObjectSpec;
+};
+
+/** Minimal JSON-Schema-lite mirror of the validator's shape — kept structural (not `unknown`) so callers get help. */
+export type JsonSchemaObjectSpec = {
+  type: "object";
+  properties: Record<string, JsonSchemaPropSpec>;
+  required?: string[];
+};
+
+export type JsonSchemaPropSpec = {
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  description?: string;
+  enum?: Array<string | number | boolean>;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  items?: JsonSchemaPropSpec;
+  properties?: Record<string, JsonSchemaPropSpec>;
+  required?: string[];
+};
+
+export type ToolProposalInput = {
+  systemPrompt: string;
+  turns: ChatTurn[];
+  tools: ToolSpec[];
+};
+
+export type ToolProposal = {
+  toolCall: { name: string; args: Record<string, unknown> } | null;
+  message: string;
+  tokensUsed: number;
+};
+
 export interface AiProvider {
   /** True when the provider has real credentials — callers use this to degrade gracefully instead of erroring. */
   readonly isConfigured: boolean;
@@ -84,6 +134,15 @@ export interface AiProvider {
    * nightly cron catches and simply files no suggestion for that cluster.
    */
   draftKbArticle(input: DraftKbInput): Promise<KbDraft>;
+  /**
+   * M8 — propose either ONE tool call or a plain reply. Provider-agnostic
+   * plain-text protocol: the model returns
+   *   {"tool": "<name>", "args": {...}}   → toolCall populated, message = ""
+   * OR
+   *   {"reply": "<plain answer>"}         → toolCall = null, message = reply
+   * The executor is the authority on whether the proposal is safe to run.
+   */
+  proposeToolCall(input: ToolProposalInput): Promise<ToolProposal>;
 }
 
 /** No-op provider used when ANTHROPIC_API_KEY isn't set — every method throws NOT_CONFIGURED so call sites can catch and degrade (mirrors the email provider's pattern). */
@@ -116,6 +175,10 @@ export class UnconfiguredAiProvider implements AiProvider {
     throw new Error("NOT_CONFIGURED");
   }
   async draftKbArticle(_input: DraftKbInput): Promise<KbDraft> {
+    void _input;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async proposeToolCall(_input: ToolProposalInput): Promise<ToolProposal> {
     void _input;
     throw new Error("NOT_CONFIGURED");
   }

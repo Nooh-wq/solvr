@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal } from "./provider";
 
 const MODEL = "claude-sonnet-4-5";
 
@@ -167,5 +167,58 @@ export class ClaudeProvider implements AiProvider {
     } catch {
       return { title: input.topicHint, body: text, tokensUsed };
     }
+  }
+
+  async proposeToolCall(input: ToolProposalInput): Promise<ToolProposal> {
+    const toolsBlock = input.tools
+      .map((t) => `  - ${t.name}: ${t.description}\n    args schema: ${JSON.stringify(t.argsSchema)}`)
+      .join("\n");
+    const toolNames = input.tools.map((t) => `"${t.name}"`).join(" | ");
+    const systemPrompt =
+      input.systemPrompt +
+      "\n\n" +
+      "You may propose EXACTLY ONE tool call from the allowed list below, or reply " +
+      "in plain text if no tool applies. Never invent a tool name that isn't listed. " +
+      "Never propose a tool if the caller hasn't asked for it. When you do propose a " +
+      "tool, match its args schema exactly.\n\n" +
+      (input.tools.length > 0
+        ? `Allowed tools (choose one or none):\n${toolsBlock}\n\n`
+        : "No tools available — always reply in plain text.\n\n") +
+      "Respond with EXACTLY one JSON object, nothing else:\n" +
+      (input.tools.length > 0
+        ? `{"tool": ${toolNames} | null, "args": {...}, "reply": "<plain text if no tool>"}\n`
+        : `{"tool": null, "args": {}, "reply": "<plain text>"}\n`) +
+      'If you use a tool, set "reply" to "".';
+
+    const response = await this.client.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: input.turns.map((t) => ({ role: t.role, content: t.content })),
+    });
+    const block = response.content.find((b) => b.type === "text");
+    const text = block?.type === "text" ? block.text : "";
+    const tokensUsed = (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0);
+    return parseToolProposal(text, tokensUsed);
+  }
+}
+
+function parseToolProposal(text: string, tokensUsed: number): ToolProposal {
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : text.trim());
+    const rawTool = typeof parsed.tool === "string" ? parsed.tool.trim() : null;
+    const args =
+      parsed.args && typeof parsed.args === "object" && !Array.isArray(parsed.args)
+        ? (parsed.args as Record<string, unknown>)
+        : {};
+    const reply = typeof parsed.reply === "string" ? parsed.reply : "";
+    return {
+      toolCall: rawTool ? { name: rawTool, args } : null,
+      message: reply,
+      tokensUsed,
+    };
+  } catch {
+    return { toolCall: null, message: text, tokensUsed };
   }
 }

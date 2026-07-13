@@ -152,6 +152,8 @@ model Tenant {
   categories              Category[]
   kbArticles              KbArticle[]
   kbSuggestions           KbSuggestion[]
+  aiTools                 AiTool[]
+  aiActionLogs            AiActionLog[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -625,6 +627,87 @@ model AiClassificationCache {
   @@unique([tenantId, contentHash, taxonomyDigest])
   @@index([tenantId, createdAt])
   @@map("ai_classification_cache")
+}
+
+// M8 — Agentic AI Actions (tool registry). One row per allow-listed
+// tool per tenant. The AI can only propose calls to enabled tools in
+// this table; the executor rejects anything else (spec §3 pin).
+//
+// argsSchema is JSON-Schema-lite (see src/lib/ai/tools/validate.ts) —
+// the executor validates every proposed call against this shape before
+// touching the tool.
+//
+// kind is either INTERNAL (dispatch to a hard-coded handler in
+// src/lib/ai/tools/builtins.ts — safest, no external network) or HTTP
+// (outbound call to httpUrl with tenant-held credentials — never sent
+// to the model). Only Super Admin / Admin can add HTTP tools; the
+// admin UI enforces this.
+//
+// roleAllowlist limits which caller roles may invoke this tool. Stored
+// as a JSON string[] (roles from AppRole: CLIENT | GUEST | AGENT |
+// ADMIN | SUPER_ADMIN). Empty array = tool disabled for everyone but
+// preserves the tool config so admins can turn it back on later.
+model AiTool {
+  id               String   @id @default(cuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name             String   // e.g. "reset_password" — unique per tenant, snake_case
+  description      String   // Sent to the model as the tool description
+  kind             String   @default("INTERNAL") // INTERNAL | HTTP
+  argsSchema       Json     // JSON-Schema-lite: { type: "object", properties: {...}, required: [...] }
+  requiresApproval Boolean  @default(true)      // Default true (spec §3) — safe-by-default
+  isEnabled        Boolean  @default(true)
+  roleAllowlist    Json     @default("[]")      // string[] of AppRole values allowed to invoke
+  httpUrl          String?                       // Only when kind = HTTP
+  httpMethod       String?                       // GET | POST | PATCH | DELETE
+  httpHeaders      Json?                          // Tenant-held headers; never sent to model
+  retryLimit       Int      @default(2)          // Executor caps total attempts at retryLimit + 1
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  actionLogs       AiActionLog[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isEnabled])
+  @@map("ai_tools")
+}
+
+// M8 — AI action ledger. Every proposal, approval, rejection, execution
+// attempt, success, and failure lands here. Read by the agent approval
+// queue AND surfaced on ticket detail timelines.
+//
+// Status transitions (enforced in src/actions/aiActionQueue.ts +
+// src/lib/ai/tools/executor.ts):
+//   PROPOSED → EXECUTED               (requiresApproval=false, ok)
+//   PROPOSED → FAILED                 (requiresApproval=false, error, over retryLimit)
+//   PROPOSED → APPROVED → EXECUTED    (requiresApproval=true, agent approves, runs)
+//   PROPOSED → APPROVED → FAILED      (agent approves, run errors)
+//   PROPOSED → REJECTED               (agent rejects; tool never runs)
+model AiActionLog {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolId               String
+  tool                 AiTool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  toolName             String   // Denormalised — survives tool deletion (audit stability)
+  conversationId       String?  // Chatbot origin (nullable — agent-copilot origin coming later)
+  ticketId             String?  // Ticket context if any
+  proposedByRole       String   // CLIENT | GUEST | AGENT | ADMIN | SUPER_ADMIN | SYSTEM
+  proposedBySubjectId  String?  // Null when SYSTEM
+  status               String   @default("PROPOSED") // PROPOSED | APPROVED | REJECTED | EXECUTED | FAILED
+  argsJson             Json
+  resultJson           Json?
+  attempts             Int      @default(0)
+  errorMessage         String?
+  approvedBySubjectId  String?
+  decidedAt            DateTime?
+  executedAt           DateTime?
+  createdAt            DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@index([tenantId, ticketId])
+  @@index([tenantId, createdAt])
+  @@map("ai_action_logs")
 }
 
 model Attachment {

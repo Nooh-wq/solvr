@@ -1,4 +1,4 @@
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft, ToolProposalInput, ToolProposal } from "./provider";
 
 const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -225,6 +225,70 @@ export class OpenRouterProvider implements AiProvider {
       return { title, body, tokensUsed };
     } catch {
       return { title: input.topicHint, body: text, tokensUsed };
+    }
+  }
+
+  async proposeToolCall(input: ToolProposalInput): Promise<ToolProposal> {
+    const toolsBlock = input.tools
+      .map((t) => `  - ${t.name}: ${t.description}\n    args schema: ${JSON.stringify(t.argsSchema)}`)
+      .join("\n");
+    const toolNames = input.tools.map((t) => `"${t.name}"`).join(" | ");
+    const systemPrompt =
+      input.systemPrompt +
+      "\n\n" +
+      "You may propose EXACTLY ONE tool call from the allowed list below, or reply " +
+      "in plain text if no tool applies. Never invent a tool name that isn't listed. " +
+      "Never propose a tool if the caller hasn't asked for it. When you do propose a " +
+      "tool, match its args schema exactly.\n\n" +
+      (input.tools.length > 0
+        ? `Allowed tools (choose one or none):\n${toolsBlock}\n\n`
+        : "No tools available — always reply in plain text.\n\n") +
+      "Respond with EXACTLY one JSON object, nothing else:\n" +
+      (input.tools.length > 0
+        ? `{"tool": ${toolNames} | null, "args": {...}, "reply": "<plain text if no tool>"}\n`
+        : `{"tool": null, "args": {}, "reply": "<plain text>"}\n`) +
+      'If you use a tool, set "reply" to "".';
+
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+        "X-Title": "Stralis Ticketing System",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...input.turns.map((t) => ({ role: t.role, content: t.content })),
+        ],
+        max_tokens: 1024,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`OpenRouter proposeToolCall failed (${response.status}): ${body.slice(0, 300)}`);
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content ?? "";
+    const tokensUsed = (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0);
+    try {
+      const match = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : text.trim());
+      const rawTool = typeof parsed.tool === "string" ? parsed.tool.trim() : null;
+      const args =
+        parsed.args && typeof parsed.args === "object" && !Array.isArray(parsed.args)
+          ? (parsed.args as Record<string, unknown>)
+          : {};
+      const reply = typeof parsed.reply === "string" ? parsed.reply : "";
+      return {
+        toolCall: rawTool ? { name: rawTool, args } : null,
+        message: reply,
+        tokensUsed,
+      };
+    } catch {
+      return { toolCall: null, message: text, tokensUsed };
     }
   }
 }
