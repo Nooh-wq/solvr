@@ -114,7 +114,7 @@ describe("M9 — classify-message Inngest function", () => {
   });
 
   it("bails when message is already classified (aiSignalsAt set)", () => {
-    assert.match(CLASSIFY_FN_SRC, /if \(msg\.aiSignalsAt\).*already-classified/s);
+    assert.match(CLASSIFY_FN_SRC, /if \(msg\.aiSignalsAt\)[\s\S]*already-classified/);
   });
 
   it("fires INTENT_DETECTED and SENTIMENT_DETECTED rule events on success (M9.5)", () => {

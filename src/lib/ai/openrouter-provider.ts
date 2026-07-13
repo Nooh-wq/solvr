@@ -1,4 +1,4 @@
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft } from "./provider";
 
 const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -180,5 +180,51 @@ export class OpenRouterProvider implements AiProvider {
       text,
       tokensUsed: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
     };
+  }
+
+  async draftKbArticle(input: DraftKbInput): Promise<KbDraft> {
+    const resolutionsBlock = input.resolutions
+      .map((r, i) => `[${i + 1}] Ticket ${r.ticketReference}:\n${r.excerpt}`)
+      .join("\n\n");
+    const systemPrompt =
+      "You draft a knowledge-base article for a support team, grounded strictly in the provided resolved-ticket " +
+      "excerpts. Never invent steps, prices, versions, or policies that the excerpts do not support. If the " +
+      "excerpts disagree on details, describe the shared pattern and mark the divergent step as \"varies — " +
+      "confirm with the team\". Write plainly and directly, sentence case, short paragraphs, no marketing filler. " +
+      "Respond with EXACTLY one JSON object, nothing else: " +
+      '{"title": "<concise, sentence case>", "body": "<Markdown, 2-4 short sections>"}';
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+        "X-Title": "Stralis Ticketing System",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Topic hint: ${input.topicHint}\n\nResolved ticket excerpts:\n\n${resolutionsBlock}` },
+        ],
+        max_tokens: 1500,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`OpenRouter draftKbArticle failed (${response.status}): ${body.slice(0, 300)}`);
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content ?? "";
+    const tokensUsed = (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0);
+    try {
+      const match = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : text.trim());
+      const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : input.topicHint;
+      const body = typeof parsed.body === "string" && parsed.body.trim() ? parsed.body.trim() : text;
+      return { title, body, tokensUsed };
+    } catch {
+      return { title: input.topicHint, body: text, tokensUsed };
+    }
   }
 }

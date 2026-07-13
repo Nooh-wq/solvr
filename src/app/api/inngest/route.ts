@@ -11,6 +11,7 @@ import { buildTicketRollup } from "@/lib/inngest/functions/build-ticket-rollup";
 import { sendReportSchedules } from "@/lib/inngest/functions/send-report-schedules";
 import { deliverWebhook } from "@/lib/inngest/functions/deliver-webhook";
 import { classifyMessageFn } from "@/lib/inngest/functions/classify-message";
+import { clusterKbSuggestions } from "@/lib/inngest/functions/cluster-kb-suggestions";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -26,5 +27,6 @@ export const { GET, POST, PUT } = serve({
     sendReportSchedules,
     deliverWebhook,
     classifyMessageFn,
+    clusterKbSuggestions,
   ],
 });

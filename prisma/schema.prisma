@@ -151,6 +151,7 @@ model Tenant {
   tickets                 Ticket[]
   categories              Category[]
   kbArticles              KbArticle[]
+  kbSuggestions           KbSuggestion[]
   chatConversations       ChatConversation[]
   auditLogs               AuditLog[]
   notifications           Notification[]
@@ -1386,12 +1387,45 @@ model KbArticle {
   title       String
   body        String
   isPublished Boolean   @default(false)
+  // M10.3 — set by an admin's Suggestions-tab accept OR by the "mark
+  // reviewed" action on a stale-flagged article. Distinct from updatedAt
+  // (which any edit bumps) so freshness is tracked by intent, not touch.
+  reviewedAt  DateTime?
   updatedAt   DateTime  @updatedAt
   createdAt   DateTime  @default(now())
   chunks      KbChunk[]
+  suggestions KbSuggestion[]
 
   @@index([tenantId])
   @@map("kb_articles")
+}
+
+// M10 — self-learning KB. The nightly clustering job files drafts
+// (status=PENDING) grounded in resolved-ticket clusters that had no
+// strong KB match. Admin review is mandatory before anything hits the
+// live KB (spec §3 "do NOT auto-publish"). Rejection memory (§M10.4)
+// uses sourceDigest: the sha256 of the sorted source-ticket-ids. Same
+// digest + REJECTED → skip re-suggest until materially more content.
+model KbSuggestion {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status               String   @default("PENDING") // PENDING | ACCEPTED | REJECTED
+  title                String
+  body                 String
+  sourceTicketIds      Json     // string[] — 1..N ticket ids that seeded the draft
+  sourceDigest         String   // sha256 of sorted sourceTicketIds; dedup + rejection memory
+  reason               String?  // e.g. "cluster of N tickets with no KB coverage"
+  rejectionReason      String?  // filled when admin rejects
+  decidedAt            DateTime?
+  decidedBySubjectId   String?
+  publishedArticleId   String?
+  publishedArticle     KbArticle? @relation(fields: [publishedArticleId], references: [id], onDelete: SetNull)
+  createdAt            DateTime @default(now())
+
+  @@unique([tenantId, sourceDigest])
+  @@index([tenantId, status])
+  @@map("kb_suggestions")
 }
 
 model KbChunk {

@@ -34,6 +34,28 @@ export type ClassifyInput = {
   intents: Array<{ slug: string; label: string; description: string }>;
 };
 
+// M10 — self-learning KB. The clustering job passes a set of
+// resolved-ticket digests (title + agent-visible resolution excerpt,
+// PII-redacted) and asks the model to draft ONE unified article
+// grounded in the pattern across them. Return payload is small enough
+// to stream — title + body + tokensUsed for budget accounting.
+export type DraftKbInput = {
+  // Human-language topic hint distilled from the cluster's most common
+  // terms — e.g. "Reset printer PIN". Used as a nudge, not authoritative.
+  topicHint: string;
+  // Anonymised, agent-facing excerpts of each ticket's resolution. Order
+  // matches sourceTicketIds so citations line up. Never includes
+  // internal notes (§3) — the clustering pipeline filters those out
+  // before calling this.
+  resolutions: Array<{ ticketReference: string; excerpt: string }>;
+};
+
+export type KbDraft = {
+  title: string;
+  body: string;
+  tokensUsed: number;
+};
+
 export interface AiProvider {
   /** True when the provider has real credentials — callers use this to degrade gracefully instead of erroring. */
   readonly isConfigured: boolean;
@@ -55,6 +77,13 @@ export interface AiProvider {
    * target, or the target isn't a language the provider handles.
    */
   translate(body: string, sourceLang: string | null, targetLang: string): Promise<{ text: string; tokensUsed: number } | null>;
+  /**
+   * M10 — draft a KB article from a cluster of resolved-ticket
+   * resolutions. Never invents facts outside the excerpts. Returns
+   * tokensUsed for tenant budget accounting. On failure, throws — the
+   * nightly cron catches and simply files no suggestion for that cluster.
+   */
+  draftKbArticle(input: DraftKbInput): Promise<KbDraft>;
 }
 
 /** No-op provider used when ANTHROPIC_API_KEY isn't set — every method throws NOT_CONFIGURED so call sites can catch and degrade (mirrors the email provider's pattern). */
@@ -72,10 +101,22 @@ export class UnconfiguredAiProvider implements AiProvider {
   async suggestTriage(): Promise<{ category: string | null; priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT" }> {
     throw new Error("NOT_CONFIGURED");
   }
-  async classifyMessage(): Promise<ClassifySignals> {
+  async classifyMessage(_input: ClassifyInput): Promise<ClassifySignals> {
+    void _input;
     throw new Error("NOT_CONFIGURED");
   }
-  async translate(): Promise<{ text: string; tokensUsed: number } | null> {
+  async translate(
+    _body: string,
+    _sourceLang: string | null,
+    _targetLang: string
+  ): Promise<{ text: string; tokensUsed: number } | null> {
+    void _body;
+    void _sourceLang;
+    void _targetLang;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async draftKbArticle(_input: DraftKbInput): Promise<KbDraft> {
+    void _input;
     throw new Error("NOT_CONFIGURED");
   }
 }

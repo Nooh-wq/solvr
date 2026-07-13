@@ -47,6 +47,22 @@ export async function upsertKbArticle(input: z.infer<typeof upsertKbArticleSchem
   });
 }
 
+/** M10.3 — bump reviewedAt without touching the article body. */
+export async function markKbArticleReviewed(id: string) {
+  const session = await requireSession({ minRole: "ADMIN" });
+  return withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
+    async (tx) => {
+      await tx.kbArticle.update({
+        where: { id },
+        data: { reviewedAt: new Date() },
+      });
+      revalidatePath("/admin/kb");
+      return { ok: true };
+    }
+  );
+}
+
 export async function deleteKbArticle(id: string) {
   const session = await requireSession({ minRole: "ADMIN" });
   return withRls({ tenantId: session.tenantId, userId: session.subjectId, role: session.role }, async (tx) => {

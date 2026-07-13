@@ -65,7 +65,8 @@ begin
     'tenant_branding','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
-    'ticket_guests','login_otps','survey_responses'
+    'ticket_guests','login_otps','survey_responses',
+    'kb_suggestions'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -321,6 +322,15 @@ create policy client_sees_published_kb on kb_articles
   );
 drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
+  using ("tenantId" = app_current_tenant_id());
+
+-- M10 — kb_suggestions: tenant-scoped, admin/super_admin only. The
+-- clustering cron writes rows under a SUPER_ADMIN RLS context (system
+-- fan-out over tenants — same pattern as auto-close), so a plain
+-- tenant_isolation policy suffices; role gating happens in the server
+-- actions before writes/reads land.
+drop policy if exists tenant_isolation on kb_suggestions;
+create policy tenant_isolation on kb_suggestions
   using ("tenantId" = app_current_tenant_id());
 
 -- chat_conversations / chat_messages

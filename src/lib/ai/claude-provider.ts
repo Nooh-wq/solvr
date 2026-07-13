@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals } from "./provider";
+import type { AiProvider, GenerateInput, ClassifyInput, ClassifySignals, DraftKbInput, KbDraft } from "./provider";
 
 const MODEL = "claude-sonnet-4-5";
 
@@ -131,5 +131,41 @@ export class ClaudeProvider implements AiProvider {
       text: translated,
       tokensUsed: (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0),
     };
+  }
+
+  async draftKbArticle(input: DraftKbInput): Promise<KbDraft> {
+    const resolutionsBlock = input.resolutions
+      .map((r, i) => `[${i + 1}] Ticket ${r.ticketReference}:\n${r.excerpt}`)
+      .join("\n\n");
+    const systemPrompt =
+      "You draft a knowledge-base article for a support team, grounded strictly in the provided resolved-ticket " +
+      "excerpts. Never invent steps, prices, versions, or policies that the excerpts do not support. If the " +
+      "excerpts disagree on details, describe the shared pattern and mark the divergent step as \"varies — " +
+      "confirm with the team\". Write plainly and directly, sentence case, short paragraphs, no marketing filler. " +
+      "Respond with EXACTLY one JSON object, nothing else: " +
+      '{"title": "<concise, sentence case>", "body": "<Markdown, 2-4 short sections>"}';
+    const response = await this.client.messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: `Topic hint: ${input.topicHint}\n\nResolved ticket excerpts:\n\n${resolutionsBlock}`,
+        },
+      ],
+    });
+    const block = response.content.find((b) => b.type === "text");
+    const text = block?.type === "text" ? block.text : "";
+    const tokensUsed = (response.usage.input_tokens ?? 0) + (response.usage.output_tokens ?? 0);
+    try {
+      const match = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : text.trim());
+      const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : input.topicHint;
+      const body = typeof parsed.body === "string" && parsed.body.trim() ? parsed.body.trim() : text;
+      return { title, body, tokensUsed };
+    } catch {
+      return { title: input.topicHint, body: text, tokensUsed };
+    }
   }
 }
