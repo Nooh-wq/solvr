@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ADMIN_PAGE_CATALOG, type AdminPageEntry } from "@/lib/admin-nav";
+import { ADMIN_PAGE_CATALOG, type AdminPageEntry } from "@/lib/admin-nav-catalog";
 
 const RECENT_KEY = "solvr:admin-recently-viewed";
 
