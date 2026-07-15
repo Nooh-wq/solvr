@@ -20,13 +20,29 @@ import { AgentReplyBox } from "./agent-reply-box";
 import { AgentControls } from "./agent-controls";
 import { CopilotPanel } from "./copilot-panel";
 import { EscalateRail } from "./escalate-rail";
+import { LinkedAppsPanel } from "./linked-apps-panel";
 import { listEscalationPathsForTicket } from "@/actions/escalations";
+import {
+  listTicketIntegrationLinks,
+  listInstalledIntegrationsForPicker,
+} from "@/actions/marketplace";
 import { getSlaForTicket } from "@/actions/sla";
 import { SlaCountdown } from "@/components/sla-badge";
 
 export default async function AgentTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [session, ticket, agents, guests, cannedResponses, macros, escalationPaths, ticketSla] = await Promise.all([
+  const [
+    session,
+    ticket,
+    agents,
+    guests,
+    cannedResponses,
+    macros,
+    escalationPaths,
+    ticketSla,
+    integrationLinks,
+    integrationPicker,
+  ] = await Promise.all([
     requireSession({ minRole: "AGENT" }),
     getTicket(id),
     listAgents(),
@@ -35,6 +51,8 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
     listMacros(),
     listEscalationPathsForTicket(id),
     getSlaForTicket(id),
+    listTicketIntegrationLinks(id),
+    listInstalledIntegrationsForPicker(),
   ]);
   if (!ticket) notFound();
   const isLightAgent = session.roleName === "Light Agent";
@@ -217,6 +235,13 @@ export default async function AgentTicketPage({ params }: { params: Promise<{ id
         <EscalateRail
           ticketId={ticket.id}
           paths={escalationPaths.map((p) => ({ id: p.id, label: p.label, icon: p.icon, destKind: p.destKind }))}
+        />
+
+        {/* M19 — Linked apps (integrations) */}
+        <LinkedAppsPanel
+          ticketId={ticket.id}
+          links={integrationLinks}
+          integrations={integrationPicker}
         />
 
         {/* Contact = client identity + org line + prior activity + ticket meta. */}

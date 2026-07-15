@@ -72,7 +72,8 @@ begin
     'service_catalog_items','approval_requests','assets','asset_links',
     'agent_presence',
     'channel_configs',
-    'help_centers','community_posts','community_replies','community_upvotes'
+    'help_centers','community_posts','community_replies','community_upvotes',
+    'tenant_integrations','ticket_integration_links'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -353,6 +354,17 @@ create policy tenant_isolation on community_upvotes
 -- the outer boundary.
 drop policy if exists tenant_isolation on channel_configs;
 create policy tenant_isolation on channel_configs
+  using ("tenantId" = app_current_tenant_id());
+
+-- M19 — tenant_integrations + ticket_integration_links: strict tenant
+-- isolation. OAuth tokens / API keys are envelope-encrypted at write
+-- time (spec §3 "Do NOT share OAuth tokens across tenants"); RLS is
+-- still the outer boundary.
+drop policy if exists tenant_isolation on tenant_integrations;
+create policy tenant_isolation on tenant_integrations
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on ticket_integration_links;
+create policy tenant_isolation on ticket_integration_links
   using ("tenantId" = app_current_tenant_id());
 
 -- M4.1 — agent_presence: strict tenant isolation (spec §3 "Do NOT

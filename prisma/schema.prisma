@@ -216,6 +216,8 @@ model Tenant {
   csatSettings            CsatSettings?
   savedReports            SavedReport[]
   ticketDailyRollups      TicketDailyRollup[]
+  tenantIntegrations      TenantIntegration[]
+  ticketIntegrationLinks  TicketIntegrationLink[]
 
   @@map("tenants")
 }
@@ -333,6 +335,7 @@ model Ticket {
   csatQueue         CsatQueue[]
   ticketViews       TicketView[]
   slas              TicketSla[]
+  integrationLinks  TicketIntegrationLink[]
 
   @@unique([tenantId, reference])
   @@index([tenantId, status, priority])
@@ -2541,4 +2544,78 @@ model TicketDailyRollup {
   @@unique([tenantId, date])
   @@index([tenantId, date])
   @@map("ticket_daily_rollups")
+}
+
+// ---------------------------------------------------------------------------
+// M19 — App Marketplace / Integrations Directory
+// ---------------------------------------------------------------------------
+// The marketplace *catalog* itself is a code-side registry
+// (src/lib/marketplace/apps.ts) — spec §2 notes the catalog is platform-
+// wide, not per-tenant, so there's no MarketplaceApp table. A row here
+// represents a single tenant's install of one catalog entry. Credentials
+// are envelope-encrypted the same way M12's ChannelConfig stores them
+// (see @/core/auth/envelope-crypto). Non-secret display metadata (target
+// project name, Slack workspace, etc.) lives on metaJson so the admin UI
+// can render context without decrypting.
+//
+// (tenantId, appKey, displayName) is unique because a tenant might install
+// the same app twice for two different targets — e.g. two Jira projects,
+// two Slack workspaces — and the human-facing name is what disambiguates.
+model TenantIntegration {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Catalog key — matches an entry in src/lib/marketplace/apps.ts. If the
+  // catalog ever removes an app, the row still exists (uninstall guard
+  // handles cleanup); code reads treat unknown keys as inactive.
+  appKey       String
+  displayName  String
+  isActive     Boolean  @default(true)
+  // Envelope-encrypted JSON. Shape depends on appKey — see the catalog
+  // entry's `credentialFields` for the schema.
+  configEnc    String
+  // Non-secret display metadata (workspace name, project key, etc.).
+  metaJson     Json     @default("{}")
+  // Populated by the connector's `test()` method — used by the admin
+  // "Installed apps" list to show a health indicator.
+  lastTestedAt DateTime?
+  lastTestOk   Boolean?
+  lastTestMessage String?
+  installedByTeamMemberId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ticketIntegrationLinks TicketIntegrationLink[]
+
+  @@unique([tenantId, appKey, displayName])
+  @@index([tenantId, isActive])
+  @@map("tenant_integrations")
+}
+
+// M19 — a link from a Stralis ticket to an external object created via
+// an integration (Jira issue, GitHub PR, Linear issue, Slack message
+// thread, etc.). Written by the connector's `execute()` when an
+// escalation or ticket action runs. Rendered on the ticket detail as
+// clickable "linked objects".
+model TicketIntegrationLink {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId      String
+  ticket        Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  integrationId String
+  integration   TenantIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  // The external system's canonical id ("PROJ-123" for Jira, "owner/repo#42"
+  // for GitHub). Human-readable — safe to render.
+  externalKey   String
+  externalUrl   String
+  // Free-form label the connector picks — usually the external object's
+  // title at creation time (won't auto-refresh).
+  externalTitle String?
+  createdByTeamMemberId String?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, ticketId])
+  @@index([tenantId, integrationId])
+  @@map("ticket_integration_links")
 }

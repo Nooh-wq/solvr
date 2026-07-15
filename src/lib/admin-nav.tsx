@@ -116,7 +116,10 @@ export function buildAdminNav({
     {
       slug: "apps",
       label: "Apps & Integrations",
-      links: [],
+      links: [
+        { href: "/admin/apps/marketplace", label: "Marketplace", icon: "overview" },
+        { href: "/admin/apps/installed", label: "Installed apps", icon: "overview" },
+      ],
     },
     {
       slug: "ai",
