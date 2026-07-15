@@ -15,6 +15,7 @@ import { clusterKbSuggestions } from "@/lib/inngest/functions/cluster-kb-suggest
 import { scoreReplyFn } from "@/lib/inngest/functions/score-reply";
 import { expireApprovals } from "@/lib/inngest/functions/expire-approvals";
 import { sweepAgentPresence } from "@/lib/inngest/functions/sweep-agent-presence";
+import { sweepRetention } from "@/lib/inngest/functions/sweep-retention";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -34,5 +35,6 @@ export const { GET, POST, PUT } = serve({
     scoreReplyFn,
     expireApprovals,
     sweepAgentPresence,
+    sweepRetention,
   ],
 });

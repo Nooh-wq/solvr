@@ -151,6 +151,24 @@ model Tenant {
   // toggle is reversible — no schema changes are gated on this value,
   // only presentation.
   serviceMode  String       @default("CUSTOMER") // CUSTOMER | EMPLOYEE
+  // M20.1 — Data residency. Advisory field set at provisioning; the
+  // cross-region guard (src/lib/compliance/residency.ts) matches the
+  // deployment's region against this on every request and refuses
+  // cross-region traffic (spec §3 pin). Region moves are a support
+  // ticket, not a self-serve toggle — no admin UI writes this after
+  // provisioning.
+  residencyRegion String    @default("US")
+  // M20 — HIPAA readiness. Toggles PHI-column redaction on logs, gates
+  // BAA download in Trust Center, and disables shipping error traces
+  // to any third-party observability tool (spec §3 pin).
+  hipaaEnabled Boolean      @default(false)
+  // M20.2 — retention TTLs (days). Nullable = keep forever. The nightly
+  // sweep-retention cron deletes rows older than the policy or (for
+  // BYOK tenants) triggers crypto-shred; see src/lib/inngest/functions/
+  // sweep-retention.ts.
+  retentionTicketsDays  Int?
+  retentionMessagesDays Int?
+  retentionAuditLogsDays Int?
   createdAt    DateTime     @default(now())
 
   branding                TenantBranding?
@@ -1270,6 +1288,16 @@ model TenantEncryptionKey {
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   wrappedDek String
   createdAt  DateTime @default(now())
+  // M20.5 — BYOK. "PLATFORM" (default) keeps the M6.1 shape: KEK from
+  // MFA_SECRET_KEY wraps the DEK. "BYOK" means the wrappedDek was
+  // wrapped by the tenant's own KMS key (`kmsKeyRef`); unwrapping
+  // requires a KMS call. Deleting this row (or nulling wrappedDek and
+  // setting shreddedAt) crypto-shreds all values encrypted under the
+  // tenant DEK — the ciphertexts in tickets/messages/custom_field_values
+  // become unrecoverable without touching a single data row.
+  kmsMode      String    @default("PLATFORM") // PLATFORM | BYOK
+  kmsKeyRef    String?   // e.g. an AWS KMS ARN, GCP KMS resource name, etc.
+  shreddedAt   DateTime?
 
   @@map("tenant_encryption_keys")
 }
@@ -1576,6 +1604,11 @@ model CustomFieldDefinition {
   // read-side gate; internal fields still store + surface everywhere
   // else, they just never leave the tenant boundary via a share link.
   isInternal  Boolean          @default(false)
+  // M20.3 — PHI marking. When true, values written to this field are
+  // envelope-encrypted at rest under the tenant DEK (M6.1 / M20.4),
+  // rendered as "•••" for callers whose Role permissions don't include
+  // `phiRead`, and scrubbed out of exports (M20.6 redactValueForLog).
+  isPhi       Boolean          @default(false)
   // Display order within a (scope) column on admin/detail sidebars.
   position    Int              @default(0)
   createdAt   DateTime         @default(now())
@@ -1717,6 +1750,13 @@ model CustomFieldValue {
   // Z2.5: id of the referenced wrapper entity (EndUser for USER_LOOKUP,
   // Organization for ORG_LOOKUP). Raw scalar — no Prisma relation.
   valueLookupId     String?
+  // M20.4 — envelope-encrypted blob for PHI-marked fields. When the
+  // definition's isPhi=true, the write path envelope-encrypts the
+  // typed value under the tenant DEK and stores the ciphertext here;
+  // the plaintext typed columns above are left NULL so a stolen DB
+  // dump reveals nothing. Reads decrypt only when the caller carries
+  // the phiRead permission — otherwise the sidebar shows "•••".
+  valueEnc          String?
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
