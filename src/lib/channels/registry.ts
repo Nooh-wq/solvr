@@ -11,12 +11,14 @@ import type { ChannelKind, Connector } from "./connector";
 import { twilioSmsConnector } from "./twilio-sms";
 import { twilioWhatsappConnector } from "./twilio-whatsapp";
 import { messengerConnector, instagramConnector } from "./meta-graph";
+import { twilioVoiceConnector } from "./twilio-voice";
 
 const CONNECTORS: Record<ChannelKind, Connector> = {
   SMS: twilioSmsConnector,
   WHATSAPP: twilioWhatsappConnector,
   MESSENGER: messengerConnector,
   INSTAGRAM: instagramConnector,
+  VOICE: twilioVoiceConnector,
 };
 
 export function lookupConnector(kind: ChannelKind | string): Connector | null {
@@ -49,6 +51,10 @@ export const CREDENTIAL_FIELDS: Record<ChannelKind, CredentialField[]> = {
     { key: "appSecret", label: "Meta App Secret", isSecret: true },
     { key: "pageAccessToken", label: "Page Access Token", isSecret: true },
   ],
+  VOICE: [
+    { key: "accountSid", label: "Twilio Account SID", isSecret: false },
+    { key: "authToken", label: "Twilio Auth Token", isSecret: true },
+  ],
 };
 
 export const CHANNEL_LABELS: Record<ChannelKind, string> = {
@@ -56,6 +62,7 @@ export const CHANNEL_LABELS: Record<ChannelKind, string> = {
   WHATSAPP: "WhatsApp",
   MESSENGER: "Messenger",
   INSTAGRAM: "Instagram",
+  VOICE: "Voice",
 };
 
 /** Per-channel outbound rate-limit key. Prevents one channel's

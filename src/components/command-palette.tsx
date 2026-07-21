@@ -2,19 +2,23 @@
 
 // M-admin — Command palette (Cmd/Ctrl + K).
 //
-// Two modes:
+// Modes:
 //   navigate (default): fuzzy-match label + keywords across ADMIN_PAGE_CATALOG
+//     plus a live server search across teammates, customers, orgs,
+//     groups, roles, macros, canned responses (Phase 4g).
 //   action (prefix `>`): quick actions that navigate to a page/modal
 //
 // Recent (empty input): last 5 visited admin pages from the same
 // localStorage key the sidebar uses (Z7.2), so palette + sidebar
 // agree on "recently viewed".
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ADMIN_PAGE_CATALOG, type AdminPageEntry } from "@/lib/admin-nav-catalog";
+import { searchAdmin, type AdminSearchResult } from "@/actions/adminSearch";
 
 const RECENT_KEY = "solvr:admin-recently-viewed";
+const SEARCH_DEBOUNCE_MS = 220;
 
 type ActionEntry = { id: string; label: string; run: (router: ReturnType<typeof useRouter>) => void };
 
@@ -24,6 +28,9 @@ const ACTIONS: ActionEntry[] = [
   { id: "create-trigger", label: "Create trigger", run: (r) => r.push("/admin/triggers?new=1") },
   { id: "new-report", label: "New report", run: (r) => r.push("/admin/reports?new=1") },
   { id: "install-app", label: "Install app", run: (r) => r.push("/admin/apps/marketplace") },
+  { id: "new-tag", label: "Create tag", run: (r) => r.push("/admin/objects/tags") },
+  { id: "new-prompt", label: "Create AI prompt", run: (r) => r.push("/admin/ai/prompts") },
+  { id: "system-health", label: "Open system health", run: (r) => r.push("/admin/super/health") },
 ];
 
 function score(entry: AdminPageEntry, q: string): number {
@@ -43,6 +50,8 @@ export function CommandPalette() {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [recent, setRecent] = useState<{ href: string; label: string }[]>([]);
+  const [liveResults, setLiveResults] = useState<AdminSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -61,47 +70,97 @@ export function CommandPalette() {
     if (!open) return;
     setQ("");
     setCursor(0);
+    setLiveResults([]);
     try {
       const raw = localStorage.getItem(RECENT_KEY);
       if (raw) setRecent(JSON.parse(raw));
     } catch {
       /* ignore */
     }
-    // Focus after paint.
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
   const isActionMode = q.startsWith(">");
   const trimmed = isActionMode ? q.slice(1).trim() : q.trim();
 
-  const results = useMemo(() => {
+  // Debounced live server search. Only fires in navigate mode with
+  // non-trivial input to keep round-trips low.
+  useEffect(() => {
+    if (isActionMode) {
+      setLiveResults([]);
+      return;
+    }
+    if (trimmed.length < 2) {
+      setLiveResults([]);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const handle = setTimeout(async () => {
+      try {
+        const res = await searchAdmin(trimmed);
+        if (!cancelled) {
+          // Strip out page-kind results — they're already in the catalog
+          // match below, and duplication would confuse the arrow-key
+          // cursor.
+          setLiveResults(res.filter((r) => r.kind !== "page"));
+        }
+      } catch {
+        if (!cancelled) setLiveResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [trimmed, isActionMode]);
+
+  type Row =
+    | { kind: "nav"; label: string; href: string; subtitle?: string }
+    | { kind: "action"; label: string; action: ActionEntry }
+    | { kind: "live"; label: string; href: string; subtitle?: string; badge: string };
+
+  const results = useMemo<Row[]>(() => {
     if (!trimmed && !isActionMode) {
-      // Empty input = recent.
-      return recent.map((r) => ({ kind: "nav" as const, label: r.label, href: r.href, entry: null }));
+      return recent.map((r) => ({ kind: "nav" as const, label: r.label, href: r.href }));
     }
     if (isActionMode) {
       const filter = trimmed.toLowerCase();
       return ACTIONS.filter((a) => a.label.toLowerCase().includes(filter))
-        .slice(0, 8)
-        .map((a) => ({ kind: "action" as const, label: a.label, href: "", entry: null, action: a }));
+        .slice(0, 10)
+        .map<Row>((a) => ({ kind: "action", label: a.label, action: a }));
     }
-    return ADMIN_PAGE_CATALOG.map((e) => ({ e, s: score(e, trimmed) }))
+    const pageMatches = ADMIN_PAGE_CATALOG.map((e) => ({ e, s: score(e, trimmed) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
-      .slice(0, 8)
-      .map((x) => ({ kind: "nav" as const, label: x.e.label, href: x.e.href, entry: x.e }));
-  }, [q, trimmed, isActionMode, recent]);
+      .slice(0, 6)
+      .map<Row>((x) => ({ kind: "nav", label: x.e.label, href: x.e.href, subtitle: x.e.href }));
 
-  function activate(index: number) {
-    const r = results[index];
-    if (!r) return;
-    setOpen(false);
-    if (r.kind === "action" && "action" in r) {
-      r.action.run(router);
-    } else if (r.kind === "nav") {
-      router.push(r.href);
-    }
-  }
+    const live: Row[] = liveResults.slice(0, 12).map((r) => ({
+      kind: "live",
+      label: r.title,
+      href: r.href,
+      subtitle: r.subtitle,
+      badge: r.kind,
+    }));
+    return [...pageMatches, ...live];
+  }, [trimmed, isActionMode, recent, liveResults]);
+
+  const activate = useCallback(
+    (index: number) => {
+      const r = results[index];
+      if (!r) return;
+      setOpen(false);
+      if (r.kind === "action") {
+        r.action.run(router);
+      } else {
+        router.push(r.href);
+      }
+    },
+    [results, router]
+  );
 
   if (!open) return null;
   return (
@@ -112,7 +171,7 @@ export function CommandPalette() {
       <div
         role="dialog"
         aria-label="Command palette"
-        className="w-[560px] max-w-[92vw] bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl shadow-xl overflow-hidden"
+        className="w-[600px] max-w-[92vw] bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl shadow-xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -134,37 +193,50 @@ export function CommandPalette() {
               activate(cursor);
             }
           }}
-          placeholder='Jump to a page — or type ">" for actions'
+          placeholder={
+            isActionMode
+              ? "Action mode — pick a command"
+              : "Search pages, people, orgs, tags — or type “>” for actions"
+          }
           className="w-full px-4 py-3 text-[14px] bg-transparent outline-none border-b border-[var(--color-neutral-200)]"
         />
         {results.length === 0 ? (
           <div className="px-4 py-6 text-[12px] text-[var(--color-neutral-500)] text-center">
-            {isActionMode ? "No matching actions" : trimmed ? "No matches" : "Type to search"}
+            {isActionMode
+              ? "No matching actions"
+              : trimmed
+                ? searching
+                  ? "Searching…"
+                  : "No matches"
+                : "Start typing to search"}
           </div>
         ) : (
-          <ul className="max-h-80 overflow-y-auto">
+          <ul className="max-h-96 overflow-y-auto">
             {results.map((r, i) => (
               <li key={`${r.kind}-${r.label}-${i}`}>
                 <button
                   onClick={() => activate(i)}
                   onMouseEnter={() => setCursor(i)}
-                  className={`w-full text-left px-4 py-2.5 text-[13px] flex items-center justify-between ${
+                  className={`w-full text-left px-4 py-2.5 text-[13px] flex items-center justify-between cursor-pointer ${
                     i === cursor ? "bg-[var(--color-neutral-100)]" : ""
                   }`}
                 >
-                  <span>{r.label}</span>
-                  {r.kind === "nav" ? (
-                    <span className="text-[11px] text-[var(--color-neutral-500)]">{r.href}</span>
-                  ) : (
-                    <span className="text-[11px] text-[var(--color-neutral-500)]">action</span>
-                  )}
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-medium">{r.label}</span>
+                    {"subtitle" in r && r.subtitle ? (
+                      <span className="ml-2 text-[11px] text-[var(--color-neutral-500)]">{r.subtitle}</span>
+                    ) : null}
+                  </span>
+                  <span className="text-[10px] uppercase-label text-[var(--color-neutral-500)] ml-2 whitespace-nowrap">
+                    {r.kind === "action" ? "action" : r.kind === "live" ? r.badge : "page"}
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
         )}
         <div className="px-4 py-2 border-t border-[var(--color-neutral-200)] text-[10px] uppercase-label text-[var(--color-neutral-500)] flex justify-between">
-          <span>{isActionMode ? "Action mode" : "Navigate mode"}</span>
+          <span>{isActionMode ? "Action mode" : searching ? "Searching…" : "Navigate mode"}</span>
           <span>↑↓ move · Enter open · Esc close</span>
         </div>
       </div>

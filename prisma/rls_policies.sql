@@ -73,7 +73,8 @@ begin
     'agent_presence',
     'channel_configs',
     'help_centers','community_posts','community_replies','community_upvotes',
-    'tenant_integrations','ticket_integration_links'
+    'tenant_integrations','ticket_integration_links',
+    'prompt_templates'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -365,6 +366,12 @@ create policy tenant_isolation on tenant_integrations
   using ("tenantId" = app_current_tenant_id());
 drop policy if exists tenant_isolation on ticket_integration_links;
 create policy tenant_isolation on ticket_integration_links
+  using ("tenantId" = app_current_tenant_id());
+
+-- Phase 4d — prompt_templates: strict tenant isolation. Read-modify by
+-- ADMIN+ only at the app layer; RLS just keeps cross-tenant reads out.
+drop policy if exists tenant_isolation on prompt_templates;
+create policy tenant_isolation on prompt_templates
   using ("tenantId" = app_current_tenant_id());
 
 -- M4.1 — agent_presence: strict tenant isolation (spec §3 "Do NOT

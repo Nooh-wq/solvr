@@ -5,7 +5,7 @@
 // dispatcher are channel-agnostic — they get an instance of Connector
 // via lookupConnector(channel).
 
-export type ChannelKind = "SMS" | "WHATSAPP" | "MESSENGER" | "INSTAGRAM";
+export type ChannelKind = "SMS" | "WHATSAPP" | "MESSENGER" | "INSTAGRAM" | "VOICE";
 
 export type InboundMessage = {
   /** Sender identifier — phone number, page-scoped id, etc. */

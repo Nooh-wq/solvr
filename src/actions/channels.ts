@@ -13,7 +13,7 @@ import { requireSession } from "@/lib/auth";
 import { envelopeEncrypt } from "@/core/auth/envelope-crypto";
 import { actorCols, dualFkForUser } from "@/lib/z1-dual-fk";
 
-const CHANNELS = ["SMS", "WHATSAPP", "MESSENGER", "INSTAGRAM"] as const;
+const CHANNELS = ["SMS", "WHATSAPP", "MESSENGER", "INSTAGRAM", "VOICE"] as const;
 
 const upsertSchema = z.object({
   id: z.string().min(1).optional(),

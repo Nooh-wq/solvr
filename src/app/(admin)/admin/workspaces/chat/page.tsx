@@ -1,5 +1,18 @@
-import { ComingSoon } from "@/components/empty-state";
+import { getChatbotConfig } from "@/actions/workspaceSettings";
+import { ChatbotEditor } from "./chatbot-editor";
 
-export default function StubPage() {
-  return <ComingSoon title="Chat widget" description="Live chat appearance, availability rules, off-hours behavior." href="/admin" />;
+export const dynamic = "force-dynamic";
+
+export default async function ChatWidgetPage() {
+  const config = await getChatbotConfig();
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-1">Chat widget</h1>
+      <p className="text-sm text-[var(--color-neutral-600)] mb-6 max-w-2xl">
+        The AI-powered chat widget on the customer portal. Configure the persona, when to
+        deflect vs. escalate to a human, and topic guardrails.
+      </p>
+      <ChatbotEditor initialConfig={config} />
+    </div>
+  );
 }

@@ -169,6 +169,27 @@ model Tenant {
   retentionTicketsDays  Int?
   retentionMessagesDays Int?
   retentionAuditLogsDays Int?
+  // Phase 4b — localization defaults for outbound emails, timestamps
+  // in agent UI, and default portal language. Both are IETF/IANA
+  // strings, validated at write time in actions/accountSettings.ts.
+  locale                String    @default("en-US")
+  timezone              String    @default("UTC")
+  // Phase 4b — Tenant-wide default BusinessCalendar. Read by the
+  // SLA/dueAt walker (M2) when a policy/org has no override. Nullable
+  // = fall back to 24×7 (the walker's existing behavior).
+  defaultBusinessCalendarId String?
+  // Phase 4b — billing metadata. Not a Stripe integration; the plan
+  // enum is display-only, seatLimit is advisory (enforced only in the
+  // Billing card copy). Real metering will replace this when the
+  // billing provider is picked.
+  plan                  String    @default("TRIAL") // TRIAL | STARTER | GROWTH | ENTERPRISE
+  seatLimit             Int?
+  trialEndsAt           DateTime?
+  // Phase 4c — per-tenant feature flags. JSON blob of {key: boolean}.
+  // The catalog lives in src/lib/feature-flags.ts so the schema stays
+  // dependency-free; unknown keys stored here are silently ignored.
+  // Toggled from the Super Admin → Feature flags page.
+  featureFlags          Json      @default("{}")
   createdAt    DateTime     @default(now())
 
   branding                TenantBranding?
@@ -236,6 +257,7 @@ model Tenant {
   ticketDailyRollups      TicketDailyRollup[]
   tenantIntegrations      TenantIntegration[]
   ticketIntegrationLinks  TicketIntegrationLink[]
+  promptTemplates         PromptTemplate[]
 
   @@map("tenants")
 }
@@ -640,6 +662,27 @@ model IntentTaxonomy {
   @@unique([tenantId, slug])
   @@index([tenantId, isActive])
   @@map("intent_taxonomy")
+}
+
+// Phase 4d — reusable AI prompt templates. Admin-authored library the
+// agent copilot pulls from. `variables` is a Json array of variable
+// descriptors ({key,label,defaultValue?}) validated on write; the
+// composer substitutes {{key}} placeholders at invocation.
+model PromptTemplate {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                  String
+  description           String?
+  body                  String
+  variables             Json     @default("[]")
+  createdByTeamMemberId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("prompt_templates")
 }
 
 // M9 — content-hash keyed classification cache. Same message body →
