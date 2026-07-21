@@ -173,21 +173,30 @@ export async function setFeatureFlag(
   if (!knownKeys.has(parsed.data.key as FeatureFlagKey)) {
     return { ok: false, error: "Unknown flag." };
   }
-  await requireHostSuperAdmin();
+  const session = await requireHostSuperAdmin();
 
-  const t = await prisma.tenant.findUniqueOrThrow({
-    where: { id: parsed.data.tenantId },
-    select: { featureFlags: true },
-  });
-  const current =
-    t.featureFlags && typeof t.featureFlags === "object"
-      ? (t.featureFlags as Record<string, boolean>)
-      : {};
-  const next = { ...current, [parsed.data.key]: parsed.data.enabled };
-  await prisma.tenant.update({
-    where: { id: parsed.data.tenantId },
-    data: { featureFlags: next },
-  });
+  // The write targets another tenant's row, which the tenants table's
+  // super_admin_write policy only permits when role=SUPER_ADMIN is set in
+  // the GUC. Bare prisma (no withRls) runs GUC-less under app_runtime and
+  // would be blocked by RLS.
+  await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: "SUPER_ADMIN" },
+    async (tx) => {
+      const t = await tx.tenant.findUniqueOrThrow({
+        where: { id: parsed.data.tenantId },
+        select: { featureFlags: true },
+      });
+      const current =
+        t.featureFlags && typeof t.featureFlags === "object"
+          ? (t.featureFlags as Record<string, boolean>)
+          : {};
+      const next = { ...current, [parsed.data.key]: parsed.data.enabled };
+      await tx.tenant.update({
+        where: { id: parsed.data.tenantId },
+        data: { featureFlags: next },
+      });
+    }
+  );
   revalidatePath("/admin/super/flags");
   return { ok: true };
 }
@@ -218,25 +227,32 @@ export async function listSupportTickets(opts?: {
   includeClosed?: boolean;
   limit?: number;
 }): Promise<SupportTicketRow[]> {
-  await requireHostSuperAdmin();
+  const session = await requireHostSuperAdmin();
   const limit = Math.min(opts?.limit ?? 100, 500);
-  const rows = await prisma.ticket.findMany({
-    where: opts?.includeClosed
-      ? undefined
-      : { status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } },
-    orderBy: { updatedAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      reference: true,
-      title: true,
-      status: true,
-      priority: true,
-      createdAt: true,
-      updatedAt: true,
-      tenant: { select: { name: true, slug: true, type: true } },
-    },
-  });
+  // Cross-tenant read: tickets' super_admin_read policy only returns other
+  // tenants' rows when role=SUPER_ADMIN is set in the GUC. Bare prisma runs
+  // GUC-less under app_runtime and would return zero rows.
+  const rows = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.ticket.findMany({
+        where: opts?.includeClosed
+          ? undefined
+          : { status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } },
+        orderBy: { updatedAt: "desc" },
+        take: limit,
+        select: {
+          id: true,
+          reference: true,
+          title: true,
+          status: true,
+          priority: true,
+          createdAt: true,
+          updatedAt: true,
+          tenant: { select: { name: true, slug: true, type: true } },
+        },
+      })
+  );
 
   return rows
     .filter((r) => r.tenant.type !== "INTERNAL") // customer tickets only
