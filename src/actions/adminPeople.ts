@@ -13,7 +13,8 @@ export type SuspendedRow = {
   id: string;
   name: string;
   email: string;
-  role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN" | "LIGHT_AGENT";
+  /** Role display name ("Customer" for end users; custom role names pass through). */
+  role: string;
   suspendedAt: Date | null;
   lastActiveAt: Date | null;
 };
@@ -59,21 +60,21 @@ export async function listSuspendedUsers(): Promise<SuspendedRow[]> {
         const lc = euLc.find((r) => r.subjectId === eu.id);
         rows.push({
           id: eu.id,
-          name: eu.name,
+          name: eu.name ?? eu.email,
           email: eu.email,
-          role: "CLIENT",
+          role: "Customer",
           suspendedAt: lc?.updatedAt ?? null,
           lastActiveAt: lc?.lastActiveAt ?? null,
         });
       }
       for (const tm of tms) {
         const lc = tmLc.find((r) => r.subjectId === tm.id);
-        const roleName = tm.role.name.toUpperCase().replace(/\s+/g, "_") as SuspendedRow["role"];
         rows.push({
           id: tm.id,
-          name: tm.name,
+          name: tm.name ?? tm.email,
           email: tm.email,
-          role: roleName === "SUPPORT_ADMIN" ? "ADMIN" : roleName,
+          // Custom roles (Z5.4) mean the name is free-form — show it as-is.
+          role: tm.role.name,
           suspendedAt: lc?.updatedAt ?? null,
           lastActiveAt: lc?.lastActiveAt ?? null,
         });

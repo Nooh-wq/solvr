@@ -91,7 +91,9 @@ export async function getSystemHealth(): Promise<SystemHealth> {
       where: { createdAt: { gte: dayAgo }, statusCode: { gte: 500 } },
     }),
     prisma.csatQueue.count({ where: { sentAt: null } }),
-    prisma.digestQueue.count({ where: { sentAt: null } }),
+    // digest_queue rows are deleted after the daily send, so every
+    // remaining row is by definition still pending.
+    prisma.digestQueue.count(),
     prisma.approvalRequest.count({ where: { status: "PENDING" } }),
   ]);
 

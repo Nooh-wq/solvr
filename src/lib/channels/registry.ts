@@ -73,6 +73,7 @@ export const OUTBOUND_RATE_PER_MINUTE: Record<ChannelKind, number> = {
   WHATSAPP: 40,
   MESSENGER: 30,
   INSTAGRAM: 30,
+  VOICE: 30,
 };
 
 export function outboundRateKey(tenantId: string, channel: ChannelKind): string {
