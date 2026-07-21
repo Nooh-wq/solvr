@@ -86,3 +86,38 @@ rewrite? If not, leave as-is.
 
 **Suggested resolution:** Leave as-is; revisit only if a tenant reports slow
 merges on very large tag assignments.
+
+---
+
+## F4 — No SSRF guard on admin-configured outbound webhook/integration URLs
+
+**Location:** `src/lib/inngest/functions/deliver-webhook.ts` (`fetch(sub.url)`),
+`src/lib/escalations.ts` (`fetch(cfg.url)`), `src/lib/rule-engine.ts`
+(`fetch(a.url)`), `src/lib/ai/tools/executor.ts` (`fetch(tool.httpUrl)`), and the
+tenant-configured Jira base URL in `src/lib/marketplace/jira.ts`.
+
+**What:** These outbound `fetch()` targets are URLs an **ADMIN** configures
+(webhook subscriptions, escalation destinations, rule-action webhooks, custom AI
+tool endpoints, Jira base URL). There is no blocklist preventing a target from
+resolving to a private/link-local address, so an admin could point one at
+`http://169.254.169.254/…` (cloud metadata), `http://localhost:…`, or an internal
+service and use the server as an SSRF proxy.
+
+**Ambiguity:** This is admin-gated (an admin abusing their own tenant's config),
+which is a much lower bar than an unauthenticated SSRF, and it is pre-existing
+across M7/M8/M19/Z8. A correct guard is non-trivial: it must resolve DNS and
+re-check on redirect (DNS-rebinding), cover IPv6 and IPv4-mapped ranges, and
+offer a break-glass for tenants who legitimately webhook to a private VPC peer.
+A naive `startsWith("http://10.")` check gives false confidence and can break
+legitimate integrations.
+
+**Question:** Do we block private/link-local/metadata ranges for all outbound
+integration fetches (and provide an allowlist escape hatch for private-VPC
+webhooks), or is admin-configured egress an accepted trust boundary?
+
+**Suggested resolution:** Add a shared `assertPublicUrl(url)` helper (resolve
+host → reject RFC-1918/loopback/link-local/ULA + `169.254.169.254`, re-validate
+after any redirect, `redirect: "manual"` on the fetch) and call it before every
+outbound integration fetch. Ship as a dedicated security-hardening PR with a
+per-tenant allowlist for intentional private targets — too broad and
+breakage-prone to land inside a QA sweep.
