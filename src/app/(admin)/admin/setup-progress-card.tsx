@@ -4,10 +4,15 @@
 // self-dismiss via localStorage per spec ("Dismissible after tenant is
 // beyond initial setup").
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 const DISMISS_KEY = "solvr:admin-setup-dismissed";
+
+function subscribe(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
+}
 
 type SetupState = {
   brandingConfigured: boolean;
@@ -28,21 +33,23 @@ const ITEMS: Array<{ key: keyof SetupState; label: string; href: string }> = [
 ];
 
 export function SetupProgressCard({ setup }: { setup: SetupState }) {
-  const [dismissed, setDismissed] = useState(false);
-  useEffect(() => {
-    try {
-      setDismissed(localStorage.getItem(DISMISS_KEY) === "true");
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  // Stored dismissal is read hydration-safely via useSyncExternalStore;
+  // justDismissed covers the same-tab click (localStorage writes don't
+  // fire "storage" in the tab that made them).
+  const stored = useSyncExternalStore(
+    subscribe,
+    () => localStorage.getItem(DISMISS_KEY),
+    () => null
+  );
+  const [justDismissed, setJustDismissed] = useState(false);
+  const dismissed = stored === "true" || justDismissed;
   function dismiss() {
     try {
       localStorage.setItem(DISMISS_KEY, "true");
     } catch {
       /* ignore */
     }
-    setDismissed(true);
+    setJustDismissed(true);
   }
   if (dismissed) return null;
   const pct = Math.round((setup.doneCount / setup.totalCount) * 100);

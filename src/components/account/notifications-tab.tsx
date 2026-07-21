@@ -82,7 +82,7 @@ export function NotificationsTab() {
       <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-6 space-y-4">
         <h2 className="text-[15px] font-semibold">Delivery</h2>
         <p className="text-[13px] text-[var(--color-neutral-600)]">
-          Real-time emails fire the moment an event happens. In daily mode, they're batched into
+          Real-time emails fire the moment an event happens. In daily mode, they&apos;re batched into
           one summary sent overnight.
         </p>
         <div className="flex gap-2">

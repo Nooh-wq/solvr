@@ -107,7 +107,7 @@ export function RubricForm({ rubrics }: { rubrics: RubricDto[] }) {
       <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {rubrics.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">
-            No rubrics. Click "Seed default" for the starter helpfulness / tone / accuracy / compliance rubric.
+            No rubrics. Click &quot;Seed default&quot; for the starter helpfulness / tone / accuracy / compliance rubric.
           </p>
         ) : (
           <table className="w-full text-sm">

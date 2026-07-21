@@ -53,49 +53,53 @@ export function CommandPalette() {
   const [liveResults, setLiveResults] = useState<AdminSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // Opening resets the palette state. Lives in the event handler (not an
+  // effect) so no setState happens synchronously inside an effect body.
+  const openPalette = useCallback(() => {
+    setQ("");
+    setCursor(0);
+    setLiveResults([]);
+    setSearching(false);
+    try {
+      const raw = localStorage.getItem(RECENT_KEY);
+      setRecent(raw ? JSON.parse(raw) : []);
+    } catch {
+      /* ignore */
+    }
+    setOpen(true);
+  }, []);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((v) => !v);
+        if (open) setOpen(false);
+        else openPalette();
       } else if (e.key === "Escape" && open) {
         setOpen(false);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, openPalette]);
 
   useEffect(() => {
     if (!open) return;
-    setQ("");
-    setCursor(0);
-    setLiveResults([]);
-    try {
-      const raw = localStorage.getItem(RECENT_KEY);
-      if (raw) setRecent(JSON.parse(raw));
-    } catch {
-      /* ignore */
-    }
-    setTimeout(() => inputRef.current?.focus(), 0);
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
   }, [open]);
 
   const isActionMode = q.startsWith(">");
   const trimmed = isActionMode ? q.slice(1).trim() : q.trim();
 
   // Debounced live server search. Only fires in navigate mode with
-  // non-trivial input to keep round-trips low.
+  // non-trivial input to keep round-trips low. The synchronous state
+  // transitions (clearing results, flipping the "searching" flag) happen
+  // in the input's onChange handler — this effect only owns the async
+  // round-trip.
   useEffect(() => {
-    if (isActionMode) {
-      setLiveResults([]);
-      return;
-    }
-    if (trimmed.length < 2) {
-      setLiveResults([]);
-      return;
-    }
+    if (isActionMode || trimmed.length < 2) return;
     let cancelled = false;
-    setSearching(true);
     const handle = setTimeout(async () => {
       try {
         const res = await searchAdmin(trimmed);
@@ -178,8 +182,17 @@ export function CommandPalette() {
           ref={inputRef}
           value={q}
           onChange={(e) => {
-            setQ(e.target.value);
+            const v = e.target.value;
+            setQ(v);
             setCursor(0);
+            const nextIsAction = v.startsWith(">");
+            const nextTrimmed = (nextIsAction ? v.slice(1) : v).trim();
+            if (nextIsAction || nextTrimmed.length < 2) {
+              setLiveResults([]);
+              setSearching(false);
+            } else {
+              setSearching(true);
+            }
           }}
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {

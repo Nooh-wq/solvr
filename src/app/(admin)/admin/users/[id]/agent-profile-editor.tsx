@@ -89,7 +89,7 @@ export function AgentProfileEditor({
         <div className="flex flex-wrap gap-1.5 mb-2">
           {skills.length === 0 ? (
             <span className="text-[12px] text-[var(--color-neutral-500)] italic">
-              No skills — this agent won't match skills-based rules.
+              No skills — this agent won&apos;t match skills-based rules.
             </span>
           ) : (
             skills.map((s) => (

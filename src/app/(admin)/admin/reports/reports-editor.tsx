@@ -62,8 +62,8 @@ export function ReportsEditor({
           description: description.trim() || undefined,
           filters: {
             range: filters.range,
-            ...(filters.channel && { channel: filters.channel as any }),
-            ...(filters.priority && { priority: filters.priority as any }),
+            ...(filters.channel && { channel: filters.channel as AnalyticsFilter["channel"] }),
+            ...(filters.priority && { priority: filters.priority as AnalyticsFilter["priority"] }),
             ...(filters.categoryId && { categoryId: filters.categoryId }),
             ...(filters.organizationId && { organizationId: filters.organizationId }),
           },
@@ -218,7 +218,9 @@ export function ReportsEditor({
             <label className="block text-[12px] font-medium mb-1.5">Schedule</label>
             <Select
               value={scheduleFrequency}
-              onChange={(e) => setScheduleFrequency(e.target.value as any)}
+              onChange={(e) =>
+                setScheduleFrequency(e.target.value as "NONE" | "DAILY" | "WEEKLY" | "MONTHLY")
+              }
             >
               <option value="NONE">Off (on-demand only)</option>
               <option value="DAILY">Daily</option>

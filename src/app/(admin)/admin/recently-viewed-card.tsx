@@ -2,24 +2,34 @@
 
 // Landing dashboard card — reads Z7.2's localStorage key so recently
 // visited admin pages jump back into view. Client component because
-// localStorage isn't available on the server.
+// localStorage isn't available on the server. useSyncExternalStore is
+// the hydration-safe way to read it without a setState-in-effect.
 
-import { useEffect, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 type Entry = { href: string; label: string };
 const KEY = "solvr:admin-recently-viewed";
 
+function subscribe(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
+}
+
 export function RecentlyViewedCard() {
-  const [items, setItems] = useState<Entry[]>([]);
-  useEffect(() => {
+  const raw = useSyncExternalStore(
+    subscribe,
+    () => localStorage.getItem(KEY),
+    () => null // server snapshot — renders the empty state
+  );
+  const items = useMemo<Entry[]>(() => {
+    if (!raw) return [];
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) setItems(JSON.parse(raw));
+      return JSON.parse(raw);
     } catch {
-      /* corrupt entry — ignore */
+      return []; // corrupt entry — ignore
     }
-  }, []);
+  }, [raw]);
   return (
     <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl p-5">
       <h2 className="text-[13px] font-semibold mb-3">Recently viewed</h2>

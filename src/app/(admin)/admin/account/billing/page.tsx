@@ -28,10 +28,8 @@ const PLAN_META: Record<string, { label: string; description: string; badge: str
 export default async function BillingPage() {
   const usage = await getBillingUsage();
   const plan = PLAN_META[usage.plan] ?? PLAN_META.TRIAL;
-  const daysActive = Math.max(
-    1,
-    Math.floor((Date.now() - new Date(usage.createdAt).getTime()) / (24 * 60 * 60 * 1000))
-  );
+  // Computed server-action-side so render stays pure (react-compiler rule).
+  const daysActive = usage.daysActive;
 
   return (
     <div>

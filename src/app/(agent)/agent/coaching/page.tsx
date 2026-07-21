@@ -13,7 +13,7 @@ export default async function CoachingPage() {
         <h1 className="text-2xl font-bold mb-1">Coaching</h1>
         <p className="text-sm text-[var(--color-neutral-600)]">
           Your QA trend from the last 30 days. Coaching signal only — not a compensation input. Team leads see their
-          team's aggregate; individual agents see only their own scores.
+          team&apos;s aggregate; individual agents see only their own scores.
         </p>
       </div>
       <ComplianceView rubric={rubric} rows={rows} correlation={[]} />

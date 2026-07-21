@@ -192,6 +192,8 @@ export type BillingUsage = {
   seatLimit: number | null;
   trialEndsAt: Date | null;
   createdAt: Date;
+  /** Whole days since the tenant was created (min 1). */
+  daysActive: number;
   teamMemberCount: number;
   activeTeamMemberCount: number;
   endUserCount: number;
@@ -224,6 +226,10 @@ export async function getBillingUsage(): Promise<BillingUsage> {
         seatLimit: tenant.seatLimit,
         trialEndsAt: tenant.trialEndsAt,
         createdAt: tenant.createdAt,
+        daysActive: Math.max(
+          1,
+          Math.floor((Date.now() - tenant.createdAt.getTime()) / (24 * 60 * 60 * 1000))
+        ),
         teamMemberCount,
         activeTeamMemberCount: activeCount,
         endUserCount,

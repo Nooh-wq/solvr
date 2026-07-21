@@ -116,7 +116,7 @@ export function ToolsForm({ tools }: { tools: ToolDto[] }) {
       <div className="bg-[var(--color-surface)] border border-[var(--color-neutral-300)] rounded-2xl overflow-hidden">
         {tools.length === 0 ? (
           <p className="p-8 text-center text-sm text-[var(--color-neutral-600)]">
-            No tools registered. Click "Seed built-ins" to install the safe starter set.
+            No tools registered. Click &quot;Seed built-ins&quot; to install the safe starter set.
           </p>
         ) : (
           <table className="w-full text-sm">

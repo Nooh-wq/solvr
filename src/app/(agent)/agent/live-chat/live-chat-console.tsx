@@ -32,6 +32,10 @@ export function LiveChatConsole({
   const [pending, startTransition] = useTransition();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail>(null);
+  // Timestamp of the last detail fetch — lets render derive "client is
+  // typing" without calling Date.now() during render (react-compiler
+  // purity rule). Freshness is bounded by POLL_MS anyway.
+  const [detailAt, setDetailAt] = useState(0);
   const [status, setStatus] = useState(presence);
   const [reply, setReply] = useState("");
 
@@ -52,7 +56,10 @@ export function LiveChatConsole({
     let alive = true;
     const load = async () => {
       const d = await getLiveChatDetail({ conversationId: activeId });
-      if (alive) setDetail(d);
+      if (alive) {
+        setDetail(d);
+        setDetailAt(Date.now());
+      }
     };
     void load();
     const t = setInterval(load, POLL_MS);
@@ -87,6 +94,7 @@ export function LiveChatConsole({
         setReply("");
         const d = await getLiveChatDetail({ conversationId: activeId });
         setDetail(d);
+        setDetailAt(Date.now());
       } catch (e) {
         toast({
           title: "Couldn't send",
@@ -133,8 +141,9 @@ export function LiveChatConsole({
   }
 
   const activeConv = conversations.find((c) => c.id === activeId);
-  const clientTyping =
-    detail?.clientTypingAt && Date.now() - new Date(detail.clientTypingAt).getTime() < 6000;
+  const clientTyping = !!(
+    detail?.clientTypingAt && detailAt - new Date(detail.clientTypingAt).getTime() < 6000
+  );
 
   return (
     <div className="grid grid-cols-12 gap-4">
