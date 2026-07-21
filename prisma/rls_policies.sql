@@ -74,7 +74,15 @@ begin
     'channel_configs',
     'help_centers','community_posts','community_replies','community_upvotes',
     'tenant_integrations','ticket_integration_links',
-    'prompt_templates'
+    'prompt_templates',
+    -- QA sweep (2026-07): these eight tenant-scoped tables shipped
+    -- without RLS. Every app-layer query already filters by tenantId, so
+    -- there was no through-the-app cross-tenant leak, but the RLS backstop
+    -- lib/db.ts + AGENTS.md promise was missing. See the policy block at
+    -- the end of this file.
+    'api_keys','scim_tokens','tenant_identity_providers',
+    'tenant_encryption_keys','webhook_subscriptions','api_usage_logs',
+    'intent_taxonomy','ai_classification_cache'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -476,3 +484,41 @@ create policy notification_update on notifications
       or "recipientTeamMemberId" = app_current_user_id()
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- QA sweep (2026-07) — RLS backstop for eight tenant-scoped tables that
+-- shipped without it (M6/M7/M9). Same shape as the provisioning tables
+-- above: tenant_isolation for normal roles + super_admin_write so the
+-- legitimate cross-tenant SUPER_ADMIN system contexts keep working:
+--   * api_keys / scim_tokens — the bearer-token auth fanout reads across
+--     tenants under role=SUPER_ADMIN (the token IS the auth — see
+--     lib/api/auth.ts, lib/auth/scim-auth.ts) then writes lastUsedAt.
+--   * tenant_identity_providers — SAML/OIDC init + login page read the
+--     IdP by slug before any tenant session exists (SUPER_ADMIN fanout).
+--   * tenant_encryption_keys — envelope crypto / FLE runs in cron + system
+--     contexts under role=SUPER_ADMIN.
+--   * webhook_subscriptions / api_usage_logs — deliver-webhook + api
+--     request logging run under role=SUPER_ADMIN with the real tenantId;
+--     the super-admin health dashboard counts them cross-tenant.
+--   * intent_taxonomy / ai_classification_cache — the M9 classifier reads
+--     + writes these under a SUPER_ADMIN system context (lib/ai/classify.ts,
+--     routed through withRls by the same QA sweep).
+-- Normal ADMIN/AGENT/CLIENT sessions get tenant_isolation only, so a
+-- tenant can never read another tenant's keys, tokens, IdP config, DEKs,
+-- webhook secrets, usage logs, or AI cache.
+do $$
+declare
+  t text;
+begin
+  for t in select unnest(array[
+    'api_keys','scim_tokens','tenant_identity_providers',
+    'tenant_encryption_keys','webhook_subscriptions','api_usage_logs',
+    'intent_taxonomy','ai_classification_cache'
+  ])
+  loop
+    execute format('drop policy if exists tenant_isolation on %I;', t);
+    execute format('create policy tenant_isolation on %I using ("tenantId" = app_current_tenant_id());', t);
+    execute format('drop policy if exists super_admin_write on %I;', t);
+    execute format('create policy super_admin_write on %I for all using (app_current_role() = ''SUPER_ADMIN'') with check (app_current_role() = ''SUPER_ADMIN'');', t);
+  end loop;
+end $$;

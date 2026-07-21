@@ -11,7 +11,7 @@
 // Callers: src/lib/inngest/functions/classify-message.ts
 
 import crypto from "node:crypto";
-import { withRls, prisma } from "@/lib/db";
+import { withRls } from "@/lib/db";
 import { aiProvider } from "@/lib/ai";
 
 export type TenantAiConfig = {
@@ -51,35 +51,41 @@ export function taxonomyDigest(
  * reset date has rolled over.
  */
 export async function loadTenantAiConfig(tenantId: string): Promise<TenantAiConfig> {
-  const t = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: {
-      aiEnabled: true,
-      aiConfidenceThreshold: true,
-      aiMonthlyTokenCap: true,
-      aiTokensUsedThisMonth: true,
-      aiTokensMonthResetAt: true,
-      aiAutoTranslate: true,
-      aiPrimaryLanguage: true,
-    },
-  });
-  if (!t) throw new Error(`Tenant ${tenantId} not found`);
-
-  // Monthly reset: if last reset was in a previous calendar month, zero
-  // the counter. Cheap; no cron needed.
-  const now = new Date();
-  if (
-    t.aiTokensMonthResetAt.getUTCMonth() !== now.getUTCMonth() ||
-    t.aiTokensMonthResetAt.getUTCFullYear() !== now.getUTCFullYear()
-  ) {
-    await prisma.tenant.update({
+  // System context: this runs off the message.classify Inngest event, not
+  // a user session. SUPER_ADMIN + the real tenantId satisfies the tenants
+  // table's super_admin_write policy for the monthly-reset update (bare
+  // prisma with no app.tenant_id GUC would be blocked by RLS).
+  return withRls({ tenantId, userId: null, role: "SUPER_ADMIN" }, async (tx) => {
+    const t = await tx.tenant.findUnique({
       where: { id: tenantId },
-      data: { aiTokensUsedThisMonth: 0, aiTokensMonthResetAt: now },
+      select: {
+        aiEnabled: true,
+        aiConfidenceThreshold: true,
+        aiMonthlyTokenCap: true,
+        aiTokensUsedThisMonth: true,
+        aiTokensMonthResetAt: true,
+        aiAutoTranslate: true,
+        aiPrimaryLanguage: true,
+      },
     });
-    t.aiTokensUsedThisMonth = 0;
-    t.aiTokensMonthResetAt = now;
-  }
-  return t;
+    if (!t) throw new Error(`Tenant ${tenantId} not found`);
+
+    // Monthly reset: if last reset was in a previous calendar month, zero
+    // the counter. Cheap; no cron needed.
+    const now = new Date();
+    if (
+      t.aiTokensMonthResetAt.getUTCMonth() !== now.getUTCMonth() ||
+      t.aiTokensMonthResetAt.getUTCFullYear() !== now.getUTCFullYear()
+    ) {
+      await tx.tenant.update({
+        where: { id: tenantId },
+        data: { aiTokensUsedThisMonth: 0, aiTokensMonthResetAt: now },
+      });
+      t.aiTokensUsedThisMonth = 0;
+      t.aiTokensMonthResetAt = now;
+    }
+    return t;
+  });
 }
 
 /**
@@ -99,25 +105,30 @@ export async function classifyBody(
   const config = await loadTenantAiConfig(tenantId);
   if (!config.aiEnabled) return null;
 
-  // Taxonomy fetch + digest.
-  const intents = await prisma.intentTaxonomy.findMany({
-    where: { tenantId, isActive: true },
-    orderBy: { sortOrder: "asc" },
-    select: { slug: true, label: true, description: true },
-  });
-  const digest = taxonomyDigest(intents.map((i) => i.slug));
   const hash = contentHash(body);
 
-  // Cache lookup.
-  const cached = await prisma.aiClassificationCache.findUnique({
-    where: {
-      tenantId_contentHash_taxonomyDigest: {
-        tenantId,
-        contentHash: hash,
-        taxonomyDigest: digest,
-      },
-    },
-  });
+  // Taxonomy fetch + cache lookup in one short system-context tx. intent_taxonomy
+  // and ai_classification_cache are RLS-scoped (QA sweep 2026-07); this runs off
+  // the message.classify event, so SUPER_ADMIN + the real tenantId is the system
+  // context that satisfies their policies. The AI network call is deliberately
+  // OUTSIDE this transaction so a connection is never held across it.
+  const { intents, digest, cached } = await withRls(
+    { tenantId, userId: null, role: "SUPER_ADMIN" },
+    async (tx) => {
+      const intents = await tx.intentTaxonomy.findMany({
+        where: { tenantId, isActive: true },
+        orderBy: { sortOrder: "asc" },
+        select: { slug: true, label: true, description: true },
+      });
+      const digest = taxonomyDigest(intents.map((i) => i.slug));
+      const cached = await tx.aiClassificationCache.findUnique({
+        where: {
+          tenantId_contentHash_taxonomyDigest: { tenantId, contentHash: hash, taxonomyDigest: digest },
+        },
+      });
+      return { intents, digest, cached };
+    }
+  );
   if (cached) {
     return {
       intent: cached.intent,
@@ -141,9 +152,9 @@ export async function classifyBody(
     return null;
   }
 
-  // Persist cache + increment tenant counter in the same tx.
-  await prisma.$transaction([
-    prisma.aiClassificationCache.create({
+  // Persist cache + increment tenant counter in one system-context tx.
+  await withRls({ tenantId, userId: null, role: "SUPER_ADMIN" }, async (tx) => {
+    await tx.aiClassificationCache.create({
       data: {
         tenantId,
         contentHash: hash,
@@ -155,12 +166,12 @@ export async function classifyBody(
         confidence: result.confidence,
         tokensUsed: result.tokensUsed,
       },
-    }),
-    prisma.tenant.update({
+    });
+    await tx.tenant.update({
       where: { id: tenantId },
       data: { aiTokensUsedThisMonth: { increment: result.tokensUsed } },
-    }),
-  ]);
+    });
+  });
 
   return {
     intent: result.intent,
@@ -183,9 +194,3 @@ export function meetsConfidenceThreshold(
   if (confidence == null) return false;
   return confidence >= threshold;
 }
-
-// Silence unused-import warning while keeping withRls available for
-// future SUPER_ADMIN-scoped writes (this file uses `prisma` directly
-// because AI cache and tenant counter writes are cross-tenant admin
-// operations).
-void withRls;

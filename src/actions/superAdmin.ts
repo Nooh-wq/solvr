@@ -50,7 +50,7 @@ export type SystemHealth = {
 };
 
 export async function getSystemHealth(): Promise<SystemHealth> {
-  await requireHostSuperAdmin();
+  const session = await requireHostSuperAdmin();
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const dbStart = Date.now();
@@ -62,7 +62,13 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   }
   const dbLatency = Date.now() - dbStart;
 
-  // Super Admin sees every tenant (see M13 cross-tenant health pattern).
+  // These counts run inside a SUPER_ADMIN RLS context, NOT bare `prisma`.
+  // Under the app_runtime role (no BYPASSRLS) a GUC-less count returns 0
+  // for every RLS-scoped table, so the dashboard would read all-zeros.
+  // tickets/webhook_subscriptions/api_usage_logs have a super_admin cross-
+  // tenant policy so they count every tenant; the tenant_isolation-only
+  // tables (users/messages/csat/digest/approvals) count the host tenant
+  // only — see docs/qa/findings.md "cross-tenant health counts".
   const [
     tenants,
     activeTenants,
@@ -76,26 +82,30 @@ export async function getSystemHealth(): Promise<SystemHealth> {
     csatDepth,
     digestDepth,
     pendingApprovals,
-  ] = await Promise.all([
-    prisma.tenant.count(),
-    prisma.tenant.count({ where: { status: "ACTIVE" } }),
-    prisma.ticket.count(),
-    prisma.ticket.count({ where: { status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } } }),
-    prisma.endUser.count(),
-    prisma.teamMember.count(),
-    prisma.message.count({ where: { createdAt: { gte: dayAgo } } }),
-    prisma.webhookSubscription.count({
-      where: { disabledAt: { not: null, gte: dayAgo } },
-    }),
-    prisma.apiUsageLog.count({
-      where: { createdAt: { gte: dayAgo }, statusCode: { gte: 500 } },
-    }),
-    prisma.csatQueue.count({ where: { sentAt: null } }),
-    // digest_queue rows are deleted after the daily send, so every
-    // remaining row is by definition still pending.
-    prisma.digestQueue.count(),
-    prisma.approvalRequest.count({ where: { status: "PENDING" } }),
-  ]);
+  ] = await withRls(
+    { tenantId: session.tenantId, userId: session.subjectId, role: "SUPER_ADMIN" },
+    (tx) =>
+      Promise.all([
+        tx.tenant.count(),
+        tx.tenant.count({ where: { status: "ACTIVE" } }),
+        tx.ticket.count(),
+        tx.ticket.count({ where: { status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } } }),
+        tx.endUser.count(),
+        tx.teamMember.count(),
+        tx.message.count({ where: { createdAt: { gte: dayAgo } } }),
+        tx.webhookSubscription.count({
+          where: { disabledAt: { not: null, gte: dayAgo } },
+        }),
+        tx.apiUsageLog.count({
+          where: { createdAt: { gte: dayAgo }, statusCode: { gte: 500 } },
+        }),
+        tx.csatQueue.count({ where: { sentAt: null } }),
+        // digest_queue rows are deleted after the daily send, so every
+        // remaining row is by definition still pending.
+        tx.digestQueue.count(),
+        tx.approvalRequest.count({ where: { status: "PENDING" } }),
+      ])
+  );
 
   return {
     db: { ok: dbOk, latencyMs: dbLatency },
