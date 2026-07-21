@@ -111,17 +111,17 @@ enum CustomFieldType {
 // ---------------------------------------------------------------------------
 
 model Tenant {
-  id           String       @id @default(cuid())
-  name         String
-  slug         String       @unique
-  type         TenantType   @default(CLIENT)
-  status       TenantStatus @default(ACTIVE)
-  customDomain String?      @unique
+  id                        String       @id @default(cuid())
+  name                      String
+  slug                      String       @unique
+  type                      TenantType   @default(CLIENT)
+  status                    TenantStatus @default(ACTIVE)
+  customDomain              String?      @unique
   // M6.1.b — tenant-wide 2FA enforcement. When true, every user in
   // this tenant must enroll TOTP before their session cookie is minted.
   // Break-glass invariant: the setter must have MFA enrolled themselves,
   // enforced in actions/adminSecurity.ts.
-  enforceMfa   Boolean      @default(false)
+  enforceMfa                Boolean      @default(false)
   // M9 — AI Intelligence Layer per-tenant knobs.
   //   aiEnabled: master switch. False → classification is skipped entirely.
   //   aiConfidenceThreshold: signals below this render muted in the agent UI
@@ -131,49 +131,49 @@ model Tenant {
   //   aiTokensUsedThisMonth / aiTokensMonthResetAt: usage counters.
   //   aiAutoTranslate: M9.7. When true, non-tenant-language messages get a
   //     translated copy stored on the Message row.
-  aiEnabled              Boolean   @default(true)
-  aiConfidenceThreshold  Float     @default(0.7)
-  aiMonthlyTokenCap      Int       @default(1000000)
-  aiTokensUsedThisMonth  Int       @default(0)
-  aiTokensMonthResetAt   DateTime  @default(now())
-  aiAutoTranslate        Boolean   @default(false)
-  aiPrimaryLanguage      String    @default("en")
+  aiEnabled                 Boolean      @default(true)
+  aiConfidenceThreshold     Float        @default(0.7)
+  aiMonthlyTokenCap         Int          @default(1000000)
+  aiTokensUsedThisMonth     Int          @default(0)
+  aiTokensMonthResetAt      DateTime     @default(now())
+  aiAutoTranslate           Boolean      @default(false)
+  aiPrimaryLanguage         String       @default("en")
   // M6.4 — tenant-wide SSO enforcement. When true, email/password login
   // is disabled for this tenant — only the IdP path works. Break-glass
   // invariant: at least one Super Admin must be flagged as break-glass
   // (their email/password auth stays active regardless of enforceSso).
   // Prevents an IdP misconfiguration from locking the tenant out.
-  enforceSso   Boolean      @default(false)
+  enforceSso                Boolean      @default(false)
   // M15.1 — Service Mode. CUSTOMER (default) keeps the existing
   // support terminology + client portal. EMPLOYEE swaps labels
   // (ticket→request, customer→employee, category→service catalog)
   // and re-orders the portal to lead with the Service Catalog. The
   // toggle is reversible — no schema changes are gated on this value,
   // only presentation.
-  serviceMode  String       @default("CUSTOMER") // CUSTOMER | EMPLOYEE
+  serviceMode               String       @default("CUSTOMER") // CUSTOMER | EMPLOYEE
   // M20.1 — Data residency. Advisory field set at provisioning; the
   // cross-region guard (src/lib/compliance/residency.ts) matches the
   // deployment's region against this on every request and refuses
   // cross-region traffic (spec §3 pin). Region moves are a support
   // ticket, not a self-serve toggle — no admin UI writes this after
   // provisioning.
-  residencyRegion String    @default("US")
+  residencyRegion           String       @default("US")
   // M20 — HIPAA readiness. Toggles PHI-column redaction on logs, gates
   // BAA download in Trust Center, and disables shipping error traces
   // to any third-party observability tool (spec §3 pin).
-  hipaaEnabled Boolean      @default(false)
+  hipaaEnabled              Boolean      @default(false)
   // M20.2 — retention TTLs (days). Nullable = keep forever. The nightly
   // sweep-retention cron deletes rows older than the policy or (for
   // BYOK tenants) triggers crypto-shred; see src/lib/inngest/functions/
   // sweep-retention.ts.
-  retentionTicketsDays  Int?
-  retentionMessagesDays Int?
-  retentionAuditLogsDays Int?
+  retentionTicketsDays      Int?
+  retentionMessagesDays     Int?
+  retentionAuditLogsDays    Int?
   // Phase 4b — localization defaults for outbound emails, timestamps
   // in agent UI, and default portal language. Both are IETF/IANA
   // strings, validated at write time in actions/accountSettings.ts.
-  locale                String    @default("en-US")
-  timezone              String    @default("UTC")
+  locale                    String       @default("en-US")
+  timezone                  String       @default("UTC")
   // Phase 4b — Tenant-wide default BusinessCalendar. Read by the
   // SLA/dueAt walker (M2) when a policy/org has no override. Nullable
   // = fall back to 24×7 (the walker's existing behavior).
@@ -182,15 +182,15 @@ model Tenant {
   // enum is display-only, seatLimit is advisory (enforced only in the
   // Billing card copy). Real metering will replace this when the
   // billing provider is picked.
-  plan                  String    @default("TRIAL") // TRIAL | STARTER | GROWTH | ENTERPRISE
-  seatLimit             Int?
-  trialEndsAt           DateTime?
+  plan                      String       @default("TRIAL") // TRIAL | STARTER | GROWTH | ENTERPRISE
+  seatLimit                 Int?
+  trialEndsAt               DateTime?
   // Phase 4c — per-tenant feature flags. JSON blob of {key: boolean}.
   // The catalog lives in src/lib/feature-flags.ts so the schema stays
   // dependency-free; unknown keys stored here are silently ignored.
   // Toggled from the Super Admin → Feature flags page.
-  featureFlags          Json      @default("{}")
-  createdAt    DateTime     @default(now())
+  featureFlags              Json         @default("{}")
+  createdAt                 DateTime     @default(now())
 
   branding                TenantBranding?
   chatbotConfig           ChatbotConfig?
@@ -652,9 +652,9 @@ model IntentTaxonomy {
   id          String   @id @default(cuid())
   tenantId    String
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  slug        String   // "login_issue", "billing", "how_to", "cancellation"
-  label       String   // "Login issue" (display)
-  description String   // Sent to the model as a hint
+  slug        String // "login_issue", "billing", "how_to", "cancellation"
+  label       String // "Login issue" (display)
+  description String // Sent to the model as a hint
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
@@ -691,18 +691,18 @@ model PromptTemplate {
 // tenant editing their taxonomy invalidates their cache without touching
 // other tenants.
 model AiClassificationCache {
-  id              String   @id @default(cuid())
-  tenantId        String
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contentHash     String   // sha256 of message body
-  taxonomyDigest  String   // sha256 of the tenant's active taxonomy slugs
-  intent          String?
-  sentiment       String?
-  urgency         String?
-  language        String?
-  confidence      Float
-  tokensUsed      Int
-  createdAt       DateTime @default(now())
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contentHash    String // sha256 of message body
+  taxonomyDigest String // sha256 of the tenant's active taxonomy slugs
+  intent         String?
+  sentiment      String?
+  urgency        String?
+  language       String?
+  confidence     Float
+  tokensUsed     Int
+  createdAt      DateTime @default(now())
 
   @@unique([tenantId, contentHash, taxonomyDigest])
   @@index([tenantId, createdAt])
@@ -731,21 +731,21 @@ model AiTool {
   id               String   @id @default(cuid())
   tenantId         String
   tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name             String   // e.g. "reset_password" — unique per tenant, snake_case
-  description      String   // Sent to the model as the tool description
+  name             String // e.g. "reset_password" — unique per tenant, snake_case
+  description      String // Sent to the model as the tool description
   kind             String   @default("INTERNAL") // INTERNAL | HTTP
-  argsSchema       Json     // JSON-Schema-lite: { type: "object", properties: {...}, required: [...] }
-  requiresApproval Boolean  @default(true)      // Default true (spec §3) — safe-by-default
+  argsSchema       Json // JSON-Schema-lite: { type: "object", properties: {...}, required: [...] }
+  requiresApproval Boolean  @default(true) // Default true (spec §3) — safe-by-default
   isEnabled        Boolean  @default(true)
-  roleAllowlist    Json     @default("[]")      // string[] of AppRole values allowed to invoke
-  httpUrl          String?                       // Only when kind = HTTP
-  httpMethod       String?                       // GET | POST | PATCH | DELETE
-  httpHeaders      Json?                          // Tenant-held headers; never sent to model
-  retryLimit       Int      @default(2)          // Executor caps total attempts at retryLimit + 1
+  roleAllowlist    Json     @default("[]") // string[] of AppRole values allowed to invoke
+  httpUrl          String? // Only when kind = HTTP
+  httpMethod       String? // GET | POST | PATCH | DELETE
+  httpHeaders      Json? // Tenant-held headers; never sent to model
+  retryLimit       Int      @default(2) // Executor caps total attempts at retryLimit + 1
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  actionLogs       AiActionLog[]
+  actionLogs AiActionLog[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isEnabled])
@@ -764,25 +764,25 @@ model AiTool {
 //   PROPOSED → APPROVED → FAILED      (agent approves, run errors)
 //   PROPOSED → REJECTED               (agent rejects; tool never runs)
 model AiActionLog {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  toolId               String
-  tool                 AiTool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
-  toolName             String   // Denormalised — survives tool deletion (audit stability)
-  conversationId       String?  // Chatbot origin (nullable — agent-copilot origin coming later)
-  ticketId             String?  // Ticket context if any
-  proposedByRole       String   // CLIENT | GUEST | AGENT | ADMIN | SUPER_ADMIN | SYSTEM
-  proposedBySubjectId  String?  // Null when SYSTEM
-  status               String   @default("PROPOSED") // PROPOSED | APPROVED | REJECTED | EXECUTED | FAILED
-  argsJson             Json
-  resultJson           Json?
-  attempts             Int      @default(0)
-  errorMessage         String?
-  approvedBySubjectId  String?
-  decidedAt            DateTime?
-  executedAt           DateTime?
-  createdAt            DateTime @default(now())
+  id                  String    @id @default(cuid())
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolId              String
+  tool                AiTool    @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  toolName            String // Denormalised — survives tool deletion (audit stability)
+  conversationId      String? // Chatbot origin (nullable — agent-copilot origin coming later)
+  ticketId            String? // Ticket context if any
+  proposedByRole      String // CLIENT | GUEST | AGENT | ADMIN | SUPER_ADMIN | SYSTEM
+  proposedBySubjectId String? // Null when SYSTEM
+  status              String    @default("PROPOSED") // PROPOSED | APPROVED | REJECTED | EXECUTED | FAILED
+  argsJson            Json
+  resultJson          Json?
+  attempts            Int       @default(0)
+  errorMessage        String?
+  approvedBySubjectId String?
+  decidedAt           DateTime?
+  executedAt          DateTime?
+  createdAt           DateTime  @default(now())
 
   @@index([tenantId, status])
   @@index([tenantId, ticketId])
@@ -802,16 +802,16 @@ model AiActionLog {
 // weight sums are not enforced — the scorer computes `overall` as a
 // weight-normalised weighted mean, so any weights work.
 model QaRubric {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name         String
-  dimensions   Json     // array of { key, label, description, weight, flagBelow }
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name       String
+  dimensions Json // array of { key, label, description, weight, flagBelow }
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  qaScores     QaScore[]
+  qaScores QaScore[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
@@ -824,33 +824,33 @@ model QaRubric {
 // dashboards + coaching views don't have to fan out to Message.
 // isFlagged is derived at insert time from each dimension's flagBelow.
 model QaScore {
-  id                    String   @id @default(cuid())
-  tenantId              String
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  rubricId              String
-  rubric                QaRubric @relation(fields: [rubricId], references: [id], onDelete: Cascade)
-  messageId             String   @unique
-  ticketId              String
+  id                  String    @id @default(cuid())
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rubricId            String
+  rubric              QaRubric  @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  messageId           String    @unique
+  ticketId            String
   // Denormalised — agent-side dashboards read these directly. Nullable
   // authorTeamMemberId covers BOT/SYSTEM/client-originated replies
   // (which are still scorable — the tenant may want to grade its own
   // AI). authorEndUserId set for CLIENT replies (rare — most tenants
   // score only outbound).
-  authorTeamMemberId    String?
-  authorEndUserId       String?
-  senderRole            String   // AGENT | ADMIN | BOT | SYSTEM | CLIENT | GUEST
+  authorTeamMemberId  String?
+  authorEndUserId     String?
+  senderRole          String // AGENT | ADMIN | BOT | SYSTEM | CLIENT | GUEST
   // Per-dimension { helpfulness: {score: 4.2, rationale: "..."}, ... }
   // Rationales are internal-only — never surfaced to end users
   // (spec §3 "Do NOT display QA scores to end users").
-  scoresJson            Json
-  overall               Float
-  isFlagged             Boolean  @default(false)
-  flaggedReasons        Json?    // string[] of dimension keys that tripped flagBelow
-  reviewStatus          String   @default("PENDING") // PENDING | REVIEWED | DISMISSED
-  reviewedBySubjectId   String?
-  reviewedAt            DateTime?
-  tokensUsed            Int      @default(0)
-  createdAt             DateTime @default(now())
+  scoresJson          Json
+  overall             Float
+  isFlagged           Boolean   @default(false)
+  flaggedReasons      Json? // string[] of dimension keys that tripped flagBelow
+  reviewStatus        String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBySubjectId String?
+  reviewedAt          DateTime?
+  tokensUsed          Int       @default(0)
+  createdAt           DateTime  @default(now())
 
   @@index([tenantId, isFlagged, reviewStatus])
   @@index([tenantId, authorTeamMemberId, createdAt])
@@ -871,36 +871,36 @@ model QaScore {
 // values persist as ordinary CustomFieldValue rows against the created
 // ticket.
 model ServiceCatalogItem {
-  id                 String   @id @default(cuid())
-  tenantId           String
-  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name               String
-  description        String
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                 String
+  description          String
   // Emoji shown on the portal catalog card. UI-only, no fallback logic.
-  iconEmoji          String?
-  isActive           Boolean  @default(true)
+  iconEmoji            String?
+  isActive             Boolean  @default(true)
   // If true, request creation queues an ApprovalRequest before the
   // ticket becomes actionable by the fulfilment group. Multi-step
   // support lives in ApprovalRequest.currentStep / approvers.
-  requiresApproval   Boolean  @default(false)
+  requiresApproval     Boolean  @default(false)
   // JSON-encoded string[] of subject ids (team-member ids) for the
   // approver step list. Empty when requiresApproval=false. Order
   // matters — step N+1 is only asked after step N approves.
-  approverSubjectIds Json     @default("[]")
+  approverSubjectIds   Json     @default("[]")
   // Escalation policy: expire pending approval after N hours.
-  approvalTimeoutHours Int    @default(72)
+  approvalTimeoutHours Int      @default(72)
   // Ordered list of CustomFieldDefinition ids to render on the request
   // form. Fields must be scope=TICKET or scope=USER; other scopes are
   // rejected at admin edit time.
-  formFieldDefIds    Json     @default("[]")
+  formFieldDefIds      Json     @default("[]")
   // Auto-route submitted requests into this group (M3 routing).
-  routingGroupId     String?
+  routingGroupId       String?
   // Sort order on the portal catalog grid.
-  position           Int      @default(0)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  position             Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  approvalRequests   ApprovalRequest[]
+  approvalRequests ApprovalRequest[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive, position])
@@ -916,21 +916,21 @@ model ServiceCatalogItem {
 // ticket is unlocked for fulfilment via runRulesForEvent on the
 // APPROVAL_APPROVED event (M1 hook).
 model ApprovalRequest {
-  id                    String   @id @default(cuid())
-  tenantId              String
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId              String
-  catalogItemId         String?
-  catalogItem           ServiceCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
-  status                String   @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED
-  approverSubjectIds    Json     // string[] — ordered
-  currentStep           Int      @default(0)
-  totalSteps            Int
-  decisionsJson         Json     @default("[]") // Array<{step: number, subjectId: string, decision: APPROVED|REJECTED, note?: string, at: string}>
-  expiresAt             DateTime
-  decidedAt             DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                 String              @id @default(cuid())
+  tenantId           String
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId           String
+  catalogItemId      String?
+  catalogItem        ServiceCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  status             String              @default("PENDING") // PENDING | APPROVED | REJECTED | EXPIRED
+  approverSubjectIds Json // string[] — ordered
+  currentStep        Int                 @default(0)
+  totalSteps         Int
+  decisionsJson      Json                @default("[]") // Array<{step: number, subjectId: string, decision: APPROVED|REJECTED, note?: string, at: string}>
+  expiresAt          DateTime
+  decidedAt          DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@unique([tenantId, ticketId])
   @@index([tenantId, status])
@@ -946,7 +946,7 @@ model Asset {
   id                   String   @id @default(cuid())
   tenantId             String
   tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  assetTag             String   // e.g. "LAP-00123" — tenant-controlled label
+  assetTag             String // e.g. "LAP-00123" — tenant-controlled label
   name                 String
   kind                 String   @default("OTHER") // LAPTOP | MONITOR | LICENSE | ACCESS | OTHER
   status               String   @default("IN_STOCK") // IN_STOCK | ASSIGNED | RETIRED
@@ -958,7 +958,7 @@ model Asset {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  links                AssetLink[]
+  links AssetLink[]
 
   @@unique([tenantId, assetTag])
   @@index([tenantId, status])
@@ -985,26 +985,26 @@ model AssetLink {
 // column is the human-readable "who you are on this channel" — e.g.
 // a Twilio number for SMS/WhatsApp, a Facebook page id for Messenger.
 model ChannelConfig {
-  id            String   @id @default(cuid())
-  tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  channel       String   // SMS | WHATSAPP | MESSENGER | INSTAGRAM
-  phoneOrHandle String   // "+15551234567" / page id / handle
-  isActive      Boolean  @default(true)
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel        String // SMS | WHATSAPP | MESSENGER | INSTAGRAM
+  phoneOrHandle  String // "+15551234567" / page id / handle
+  isActive       Boolean   @default(true)
   // Envelope-encrypted credentials JSON blob. Never surfaces upstream.
   // Shape depends on channel — see src/lib/channels/registry.ts. Wire
   // format is the same "v2:iv:ciphertext:tag" produced by
   // envelopeEncrypt.
-  credsEnc      String
+  credsEnc       String
   // Public webhook slug embedded in the inbound URL. Random per-row so
   // rotation is a straight replace + updated provider webhook URL.
-  webhookSlug   String   @unique
+  webhookSlug    String    @unique
   // Last provider-reported delivery event. Used by the admin UI for
   // an "is this working?" indicator. Doesn't drive routing.
   lastInboundAt  DateTime?
   lastOutboundAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@unique([tenantId, channel])
   @@index([tenantId, isActive])
@@ -1018,13 +1018,13 @@ model ChannelConfig {
 // by the workspace's heartbeat action; the sweep cron flips stale
 // rows to OFFLINE.
 model AgentPresence {
-  id                String   @id @default(cuid())
-  tenantId          String
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  teamMemberId      String
-  status            String   @default("OFFLINE") // ONLINE | AWAY | OFFLINE
-  lastHeartbeatAt   DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  teamMemberId    String
+  status          String   @default("OFFLINE") // ONLINE | AWAY | OFFLINE
+  lastHeartbeatAt DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@unique([tenantId, teamMemberId])
   @@index([tenantId, status])
@@ -1210,16 +1210,16 @@ model Notification {
 // via email/password AFTER an SSO misconfiguration — used during
 // the "IdP unreachable, use break-glass" recovery path.
 model TenantIdentityProvider {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  kind           String   // "SAML" | "OIDC"
-  displayName    String   @default("Sign in with SSO")
-  isActive       Boolean  @default(true)
-  config         Json
-  groupMappings  Json     @default("[]")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind          String // "SAML" | "OIDC"
+  displayName   String   @default("Sign in with SSO")
+  isActive      Boolean  @default(true)
+  config        Json
+  groupMappings Json     @default("[]")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@unique([tenantId, kind])
   @@index([tenantId])
@@ -1231,14 +1231,14 @@ model TenantIdentityProvider {
 // exactly once on create, same UX as GitHub personal-access-tokens).
 // `revokedAt` non-null → hard-fail all requests from this token.
 model ScimToken {
-  id          String    @id @default(cuid())
-  tenantId    String
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tokenHash   String
-  name        String
-  createdAt   DateTime  @default(now())
-  lastUsedAt  DateTime?
-  revokedAt   DateTime?
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tokenHash  String
+  name       String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
 
   @@index([tenantId])
   @@map("scim_tokens")
@@ -1259,17 +1259,17 @@ model ScimToken {
 //   fast pre-filter in verifyApiKey (bcrypt-scanning every live key
 //   doesn't scale past ~50 keys/tenant; scanning by prefix is O(1)).
 model ApiKey {
-  id                   String    @id @default(cuid())
-  tenantId             String
-  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name                 String
-  prefix               String
-  tokenHash            String
-  scopes               Json      @default("[]")
-  createdBySubjectId   String
-  createdAt            DateTime  @default(now())
-  lastUsedAt           DateTime?
-  revokedAt            DateTime?
+  id                 String    @id @default(cuid())
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  prefix             String
+  tokenHash          String
+  scopes             Json      @default("[]")
+  createdBySubjectId String
+  createdAt          DateTime  @default(now())
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
 
   @@index([tenantId, prefix])
   @@index([tenantId, revokedAt])
@@ -1285,18 +1285,18 @@ model ApiKey {
 // disable threshold (default 20 attempts over ~24h backoff window), the
 // subscription is marked disabled and the tenant is notified.
 model WebhookSubscription {
-  id             String    @id @default(cuid())
-  tenantId       String
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  url            String
-  events         Json      @default("[]")
-  secret         String    // envelope-encrypted
-  isActive       Boolean   @default(true)
-  failCount      Int       @default(0)
-  disabledAt     DateTime?
-  disabledReason String?
-  createdAt      DateTime  @default(now())
-  lastDeliveredAt DateTime?
+  id                 String    @id @default(cuid())
+  tenantId           String
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  url                String
+  events             Json      @default("[]")
+  secret             String // envelope-encrypted
+  isActive           Boolean   @default(true)
+  failCount          Int       @default(0)
+  disabledAt         DateTime?
+  disabledReason     String?
+  createdAt          DateTime  @default(now())
+  lastDeliveredAt    DateTime?
   createdBySubjectId String
 
   @@index([tenantId, isActive])
@@ -1307,15 +1307,15 @@ model WebhookSubscription {
 // rows drained by the M13.gap3 daily rollup pattern (out-of-band; not
 // part of M7.6 initial ship). Cardinality: ~O(req_per_day × retention).
 model ApiUsageLog {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  apiKeyId     String?  // null for anonymous or invalid-key rejections
-  method       String
-  path         String
-  statusCode   Int
-  durationMs   Int
-  createdAt    DateTime @default(now())
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  apiKeyId   String? // null for anonymous or invalid-key rejections
+  method     String
+  path       String
+  statusCode Int
+  durationMs Int
+  createdAt  DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([tenantId, apiKeyId, createdAt])
@@ -1327,10 +1327,10 @@ model ApiUsageLog {
 // level KEK from MFA_SECRET_KEY. See src/core/auth/envelope-crypto.ts
 // for the wire format and rotation model.
 model TenantEncryptionKey {
-  tenantId   String   @id
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId   String    @id
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   wrappedDek String
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
   // M20.5 — BYOK. "PLATFORM" (default) keeps the M6.1 shape: KEK from
   // MFA_SECRET_KEY wraps the DEK. "BYOK" means the wrappedDek was
   // wrapped by the tenant's own KMS key (`kmsKeyRef`); unwrapping
@@ -1338,9 +1338,9 @@ model TenantEncryptionKey {
   // setting shreddedAt) crypto-shreds all values encrypted under the
   // tenant DEK — the ciphertexts in tickets/messages/custom_field_values
   // become unrecoverable without touching a single data row.
-  kmsMode      String    @default("PLATFORM") // PLATFORM | BYOK
-  kmsKeyRef    String?   // e.g. an AWS KMS ARN, GCP KMS resource name, etc.
-  shreddedAt   DateTime?
+  kmsMode    String    @default("PLATFORM") // PLATFORM | BYOK
+  kmsKeyRef  String? // e.g. an AWS KMS ARN, GCP KMS resource name, etc.
+  shreddedAt DateTime?
 
   @@map("tenant_encryption_keys")
 }
@@ -1813,35 +1813,35 @@ model CustomFieldValue {
 // ---------------------------------------------------------------------------
 
 model KbArticle {
-  id          String    @id @default(cuid())
-  tenantId    String
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  title       String
-  body        String
-  isPublished Boolean   @default(false)
+  id           String         @id @default(cuid())
+  tenantId     String
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title        String
+  body         String
+  isPublished  Boolean        @default(false)
   // M10.3 — set by an admin's Suggestions-tab accept OR by the "mark
   // reviewed" action on a stale-flagged article. Distinct from updatedAt
   // (which any edit bumps) so freshness is tracked by intent, not touch.
-  reviewedAt  DateTime?
+  reviewedAt   DateTime?
   // M14.1 — which help center this article belongs to. Nullable for
   // back-compat with existing rows written before M14; new admin
   // writes prompt for it when the tenant has ≥ 1 HelpCenter. Retrieval
   // for the chatbot / RAG can now filter by helpCenterId so
   // Product-A's bot only sees Product-A's articles.
   helpCenterId String?
-  helpCenter  HelpCenter? @relation(fields: [helpCenterId], references: [id], onDelete: SetNull)
+  helpCenter   HelpCenter?    @relation(fields: [helpCenterId], references: [id], onDelete: SetNull)
   // URL slug within the help center. Optional — new articles get one
   // auto-generated from the title if not provided. Not globally unique;
   // uniqueness is enforced per (tenantId, helpCenterId, slug).
-  slug        String?
-  updatedAt   DateTime  @updatedAt
-  createdAt   DateTime  @default(now())
-  chunks      KbChunk[]
-  suggestions KbSuggestion[]
+  slug         String?
+  updatedAt    DateTime       @updatedAt
+  createdAt    DateTime       @default(now())
+  chunks       KbChunk[]
+  suggestions  KbSuggestion[]
 
+  @@unique([tenantId, helpCenterId, slug])
   @@index([tenantId])
   @@index([tenantId, helpCenterId, isPublished])
-  @@unique([tenantId, helpCenterId, slug])
   @@map("kb_articles")
 }
 
@@ -1853,27 +1853,27 @@ model KbArticle {
 // isn't recognised, so tenant A's help center can never serve
 // tenant B's articles (spec §3).
 model HelpCenter {
-  id                          String   @id @default(cuid())
-  tenantId                    String
-  tenant                      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  slug                        String
-  name                        String
-  description                 String?
-  customDomain                String?  @unique
-  isActive                    Boolean  @default(true)
+  id                         String   @id @default(cuid())
+  tenantId                   String
+  tenant                     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  slug                       String
+  name                       String
+  description                String?
+  customDomain               String?  @unique
+  isActive                   Boolean  @default(true)
   // M14.3 — Community forum on/off + default moderation setting for
   // new posts. Spec §3 pin: moderation defaults ON.
-  communityEnabled            Boolean  @default(false)
-  communityModerationDefault  Boolean  @default(true)
+  communityEnabled           Boolean  @default(false)
+  communityModerationDefault Boolean  @default(true)
   // M14.4 — thresholds for the "solved + upvoted → M10 suggestion"
   // feed. minUpvotes lets a tenant tune what "helpful enough" means.
-  communityUpvoteThreshold    Int      @default(3)
-  brandingJson                Json?    // logoUrl, primaryColor, etc.
-  createdAt                   DateTime @default(now())
-  updatedAt                   DateTime @updatedAt
+  communityUpvoteThreshold   Int      @default(3)
+  brandingJson               Json? // logoUrl, primaryColor, etc.
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 
-  articles                    KbArticle[]
-  communityPosts              CommunityPost[]
+  articles       KbArticle[]
+  communityPosts CommunityPost[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, isActive])
@@ -1886,25 +1886,25 @@ model HelpCenter {
 //   PENDING → REJECTED (moderator rejects; hidden)
 //   APPROVED → SOLVED (author or moderator marks a reply as best answer)
 model CommunityPost {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  helpCenterId   String
-  helpCenter     HelpCenter @relation(fields: [helpCenterId], references: [id], onDelete: Cascade)
-  authorEndUserId String
-  title          String
-  body           String
-  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED | SOLVED
-  upvoteCount    Int      @default(0)
-  bestReplyId    String?  // set on SOLVED
+  id                     String     @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  helpCenterId           String
+  helpCenter             HelpCenter @relation(fields: [helpCenterId], references: [id], onDelete: Cascade)
+  authorEndUserId        String
+  title                  String
+  body                   String
+  status                 String     @default("PENDING") // PENDING | APPROVED | REJECTED | SOLVED
+  upvoteCount            Int        @default(0)
+  bestReplyId            String? // set on SOLVED
   // Set when the post got fed into KbSuggestion (M14.4). Prevents
   // re-feeding the same solved post.
   feedIntoKbSuggestionAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
 
-  replies        CommunityReply[]
-  upvotes        CommunityUpvote[]
+  replies CommunityReply[]
+  upvotes CommunityUpvote[]
 
   @@index([tenantId, helpCenterId, status])
   @@index([tenantId, status, createdAt])
@@ -1912,19 +1912,19 @@ model CommunityPost {
 }
 
 model CommunityReply {
-  id             String   @id @default(cuid())
-  tenantId       String
-  postId         String
-  post           CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  id              String        @id @default(cuid())
+  tenantId        String
+  postId          String
+  post            CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
   authorEndUserId String
-  body           String
-  isBestAnswer   Boolean  @default(false)
-  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED
-  upvoteCount    Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  body            String
+  isBestAnswer    Boolean       @default(false)
+  status          String        @default("PENDING") // PENDING | APPROVED | REJECTED
+  upvoteCount     Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  upvotes        CommunityUpvote[]
+  upvotes CommunityUpvote[]
 
   @@index([tenantId, postId, status])
   @@map("community_replies")
@@ -1934,14 +1934,14 @@ model CommunityReply {
 // vote points at either a post OR a reply; the caller enforces
 // exactly-one at write time.
 model CommunityUpvote {
-  id        String   @id @default(cuid())
-  tenantId  String
-  postId    String?
-  post      CommunityPost? @relation(fields: [postId], references: [id], onDelete: Cascade)
-  replyId   String?
-  reply     CommunityReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  id             String          @id @default(cuid())
+  tenantId       String
+  postId         String?
+  post           CommunityPost?  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  replyId        String?
+  reply          CommunityReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
   voterEndUserId String
-  createdAt DateTime @default(now())
+  createdAt      DateTime        @default(now())
 
   @@unique([tenantId, postId, voterEndUserId])
   @@unique([tenantId, replyId, voterEndUserId])
@@ -1957,21 +1957,21 @@ model CommunityUpvote {
 // uses sourceDigest: the sha256 of the sorted source-ticket-ids. Same
 // digest + REJECTED → skip re-suggest until materially more content.
 model KbSuggestion {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  status               String   @default("PENDING") // PENDING | ACCEPTED | REJECTED
-  title                String
-  body                 String
-  sourceTicketIds      Json     // string[] — 1..N ticket ids that seeded the draft
-  sourceDigest         String   // sha256 of sorted sourceTicketIds; dedup + rejection memory
-  reason               String?  // e.g. "cluster of N tickets with no KB coverage"
-  rejectionReason      String?  // filled when admin rejects
-  decidedAt            DateTime?
-  decidedBySubjectId   String?
-  publishedArticleId   String?
-  publishedArticle     KbArticle? @relation(fields: [publishedArticleId], references: [id], onDelete: SetNull)
-  createdAt            DateTime @default(now())
+  id                 String     @id @default(cuid())
+  tenantId           String
+  tenant             Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status             String     @default("PENDING") // PENDING | ACCEPTED | REJECTED
+  title              String
+  body               String
+  sourceTicketIds    Json // string[] — 1..N ticket ids that seeded the draft
+  sourceDigest       String // sha256 of sorted sourceTicketIds; dedup + rejection memory
+  reason             String? // e.g. "cluster of N tickets with no KB coverage"
+  rejectionReason    String? // filled when admin rejects
+  decidedAt          DateTime?
+  decidedBySubjectId String?
+  publishedArticleId String?
+  publishedArticle   KbArticle? @relation(fields: [publishedArticleId], references: [id], onDelete: SetNull)
+  createdAt          DateTime   @default(now())
 
   @@unique([tenantId, sourceDigest])
   @@index([tenantId, status])
@@ -2007,21 +2007,21 @@ model ChatbotConfig {
 }
 
 model ChatConversation {
-  id           String        @id @default(cuid())
-  tenantId     String
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                   String        @id @default(cuid())
+  tenantId             String
+  tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Dual-FK subject (wrapper). Raw scalars.
-  endUserId    String?
-  teamMemberId String?
+  endUserId            String?
+  teamMemberId         String?
   // status now includes M4 states:
   //   active     — client is chatting with the bot (default).
   //   waiting    — client requested live agent; not yet picked up.
   //   live       — agent joined and is chatting.
   //   escalated  — converted to a Ticket (M4.5 / existing path).
   //   closed     — client or agent ended the conversation.
-  status       String        @default("active")
-  ticketId     String?
-  ticket       Ticket?       @relation(fields: [ticketId], references: [id])
+  status               String        @default("active")
+  ticketId             String?
+  ticket               Ticket?       @relation(fields: [ticketId], references: [id])
   // M4.3 — the team member currently owning the conversation. Set by
   // pickUpLiveChat; nullable so multiple agents can pass it around.
   assignedTeamMemberId String?
@@ -2034,8 +2034,8 @@ model ChatConversation {
   // persistent state — no long-lived row on typing.
   clientTypingAt       DateTime?
   agentTypingAt        DateTime?
-  createdAt    DateTime      @default(now())
-  messages     ChatMessage[]
+  createdAt            DateTime      @default(now())
+  messages             ChatMessage[]
 
   @@index([tenantId])
   @@index([tenantId, endUserId])
@@ -2645,28 +2645,28 @@ model TicketDailyRollup {
 // the same app twice for two different targets — e.g. two Jira projects,
 // two Slack workspaces — and the human-facing name is what disambiguates.
 model TenantIntegration {
-  id           String   @id @default(cuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                      String    @id @default(cuid())
+  tenantId                String
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Catalog key — matches an entry in src/lib/marketplace/apps.ts. If the
   // catalog ever removes an app, the row still exists (uninstall guard
   // handles cleanup); code reads treat unknown keys as inactive.
-  appKey       String
-  displayName  String
-  isActive     Boolean  @default(true)
+  appKey                  String
+  displayName             String
+  isActive                Boolean   @default(true)
   // Envelope-encrypted JSON. Shape depends on appKey — see the catalog
   // entry's `credentialFields` for the schema.
-  configEnc    String
+  configEnc               String
   // Non-secret display metadata (workspace name, project key, etc.).
-  metaJson     Json     @default("{}")
+  metaJson                Json      @default("{}")
   // Populated by the connector's `test()` method — used by the admin
   // "Installed apps" list to show a health indicator.
-  lastTestedAt DateTime?
-  lastTestOk   Boolean?
-  lastTestMessage String?
+  lastTestedAt            DateTime?
+  lastTestOk              Boolean?
+  lastTestMessage         String?
   installedByTeamMemberId String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   ticketIntegrationLinks TicketIntegrationLink[]
 
@@ -2681,22 +2681,22 @@ model TenantIntegration {
 // escalation or ticket action runs. Rendered on the ticket detail as
 // clickable "linked objects".
 model TicketIntegrationLink {
-  id            String   @id @default(cuid())
-  tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId      String
-  ticket        Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  integrationId String
-  integration   TenantIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  id                    String            @id @default(cuid())
+  tenantId              String
+  tenant                Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticketId              String
+  ticket                Ticket            @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  integrationId         String
+  integration           TenantIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   // The external system's canonical id ("PROJ-123" for Jira, "owner/repo#42"
   // for GitHub). Human-readable — safe to render.
-  externalKey   String
-  externalUrl   String
+  externalKey           String
+  externalUrl           String
   // Free-form label the connector picks — usually the external object's
   // title at creation time (won't auto-refresh).
-  externalTitle String?
+  externalTitle         String?
   createdByTeamMemberId String?
-  createdAt     DateTime @default(now())
+  createdAt             DateTime          @default(now())
 
   @@index([tenantId, ticketId])
   @@index([tenantId, integrationId])
