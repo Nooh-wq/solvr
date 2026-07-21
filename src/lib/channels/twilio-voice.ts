@@ -9,7 +9,7 @@
 // of silently corrupting a ticket.
 
 import crypto from "node:crypto";
-import type { Connector, InboundMessage, OutboundResult, ConnectorCreds } from "./connector";
+import type { Connector, InboundMessage, OutboundResult } from "./connector";
 
 export const twilioVoiceConnector: Connector = {
   kind: "VOICE",

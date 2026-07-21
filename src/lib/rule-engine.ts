@@ -1,12 +1,11 @@
 import { Prisma } from "@/generated/prisma";
-import type { PrismaClient, Ticket } from "@/generated/prisma";
+import type { Ticket } from "@/generated/prisma";
 import type { UserRole } from "@/lib/auth";
 import { withRls } from "@/lib/db";
 import {
   actionListSchema,
   conditionGroupSchema,
   type Condition,
-  type ConditionGroup,
   type RuleAction,
   type TriggerEvent,
 } from "@/lib/rule-schema";
@@ -35,8 +34,6 @@ export type RuleEngineSession = {
   subjectId: string | null;
   role: UserRole;
 };
-
-type Tx = Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
 
 // ---------------------------------------------------------------------------
 // Condition evaluation

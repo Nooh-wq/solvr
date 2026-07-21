@@ -18,7 +18,6 @@ import {
 } from "@/lib/email/inbound";
 import {
   systemContext,
-  getEndUser,
   getTeamMember,
   createEndUser,
 } from "@/lib/shared-platform";

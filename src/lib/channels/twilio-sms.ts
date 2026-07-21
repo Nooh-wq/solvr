@@ -12,7 +12,7 @@
 // the hood; we roll it by hand to keep the connector server-lib-free.
 
 import crypto from "node:crypto";
-import type { Connector, ConnectorCreds, InboundMessage, OutboundResult } from "./connector";
+import type { Connector, OutboundResult } from "./connector";
 
 function parseForm(body: string): Record<string, string> {
   const params = new URLSearchParams(body);
