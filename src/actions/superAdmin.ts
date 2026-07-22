@@ -11,6 +11,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { withRls, prisma } from "@/lib/db";
+import { getHostHealthCounts } from "@/lib/host-aggregate";
 import { requireSession } from "@/lib/auth";
 import { FEATURE_FLAGS, type FeatureFlagKey } from "@/lib/feature-flags";
 
@@ -50,7 +51,7 @@ export type SystemHealth = {
 };
 
 export async function getSystemHealth(): Promise<SystemHealth> {
-  const session = await requireHostSuperAdmin();
+  await requireHostSuperAdmin();
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const dbStart = Date.now();
@@ -62,70 +63,35 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   }
   const dbLatency = Date.now() - dbStart;
 
-  // These counts run inside a SUPER_ADMIN RLS context, NOT bare `prisma`.
-  // Under the app_runtime role (no BYPASSRLS) a GUC-less count returns 0
-  // for every RLS-scoped table, so the dashboard would read all-zeros.
-  // tickets/webhook_subscriptions/api_usage_logs have a super_admin cross-
-  // tenant policy so they count every tenant; the tenant_isolation-only
-  // tables (users/messages/csat/digest/approvals) count the host tenant
-  // only — see docs/qa/findings.md "cross-tenant health counts".
-  const [
-    tenants,
-    activeTenants,
-    tickets,
-    openTickets,
-    endUsers,
-    teamMembers,
-    recentMessages,
-    failedWebhooks,
-    failedApiCalls,
-    csatDepth,
-    digestDepth,
-    pendingApprovals,
-  ] = await withRls(
-    { tenantId: session.tenantId, userId: session.subjectId, role: "SUPER_ADMIN" },
-    (tx) =>
-      Promise.all([
-        tx.tenant.count(),
-        tx.tenant.count({ where: { status: "ACTIVE" } }),
-        tx.ticket.count(),
-        tx.ticket.count({ where: { status: { in: ["OPEN", "IN_PROGRESS", "PENDING"] } } }),
-        tx.endUser.count(),
-        tx.teamMember.count(),
-        tx.message.count({ where: { createdAt: { gte: dayAgo } } }),
-        tx.webhookSubscription.count({
-          where: { disabledAt: { not: null, gte: dayAgo } },
-        }),
-        tx.apiUsageLog.count({
-          where: { createdAt: { gte: dayAgo }, statusCode: { gte: 500 } },
-        }),
-        tx.csatQueue.count({ where: { sentAt: null } }),
-        // digest_queue rows are deleted after the daily send, so every
-        // remaining row is by definition still pending.
-        tx.digestQueue.count(),
-        tx.approvalRequest.count({ where: { status: "PENDING" } }),
-      ])
-  );
+  // F1 — cross-tenant health counts come from the count-only host aggregate
+  // helper (BYPASSRLS owner connection), NOT app_runtime. A SUPER_ADMIN
+  // withRls context would only see cross-tenant rows for tables that have a
+  // super_admin_read policy (tickets/webhooks/api-usage) and would silently
+  // under-report the tenant_isolation-only tables (users/messages/csat/
+  // digest/approvals) as host-tenant-only. hostAggregate gives true totals
+  // without granting SUPER_ADMIN any row-level cross-tenant read — see
+  // src/lib/host-aggregate.ts and docs/qa/findings.md F1.
+  const c = await getHostHealthCounts(dayAgo);
 
   return {
     db: { ok: dbOk, latencyMs: dbLatency },
     counts: {
-      tenants,
-      activeTenants,
-      tickets,
-      openTickets,
-      users: endUsers + teamMembers,
-      messagesLast24h: recentMessages,
+      tenants: c.tenants,
+      activeTenants: c.activeTenants,
+      tickets: c.tickets,
+      openTickets: c.openTickets,
+      users: c.users,
+      messagesLast24h: c.messagesLast24h,
     },
     errors: {
       errorLogsLast24h: 0,
-      failedWebhooksLast24h: failedWebhooks,
-      failedApiCallsLast24h: failedApiCalls,
+      failedWebhooksLast24h: c.failedWebhooksLast24h,
+      failedApiCallsLast24h: c.failedApiCallsLast24h,
     },
     queues: {
-      csatQueueDepth: csatDepth,
-      digestQueueDepth: digestDepth,
-      pendingApprovals,
+      csatQueueDepth: c.csatQueueDepth,
+      digestQueueDepth: c.digestQueueDepth,
+      pendingApprovals: c.pendingApprovals,
     },
     updatedAt: new Date(),
   };
