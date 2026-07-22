@@ -198,15 +198,36 @@ create policy guest_insert_message on messages
     and "isInternal" = false
   );
 
--- attachments: NOTE — scoped only by tenantId, same as every role today
--- (including plain CLIENT); real per-ticket scoping is enforced at the app
--- layer (every attachment query filters by ticketId). GUEST rides on this
--- same pre-existing, already-app-layer-enforced pattern rather than a new
--- RLS carve-out, since attachments never had ticket-level RLS scoping to
--- begin with — see actions/attachments.ts for the query-level enforcement.
+-- attachments: for CLIENT/AGENT/ADMIN, scoped by tenantId (real per-ticket
+-- scoping is enforced at the app layer — every non-guest attachment query
+-- filters by ticketId).
+--
+-- F2 (QA follow-up): GUEST is now excluded from tenant_isolation and gets
+-- its own ticket-scoped policy, mirroring messages. A guest link grants
+-- access to exactly ONE ticket (app.guest_ticket_id), so a guest may only
+-- read/upload/link attachments on that ticket — not the tenant-wide set the
+-- old tenant_isolation (which included GUEST) exposed. FOR ALL because the
+-- guest surface does all three: SELECT (thread view), INSERT
+-- (uploadGuestAttachment), and UPDATE (linking a staged file to its message
+-- in postGuestReply) — see actions/guest.ts. The SELECT arm also satisfies
+-- the implicit RETURNING on the guest's own INSERT (same reasoning as the
+-- audit_logs note above).
 drop policy if exists tenant_isolation on attachments;
 create policy tenant_isolation on attachments
-  using ("tenantId" = app_current_tenant_id());
+  using ("tenantId" = app_current_tenant_id() and app_current_role() <> 'GUEST');
+drop policy if exists guest_ticket_attachments on attachments;
+create policy guest_ticket_attachments on attachments
+  for all
+  using (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+  )
+  with check (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+  );
 
 -- ticket_guests: readable tenant-wide (same app-layer-scoping note as
 -- attachments above); adding/revoking a guest is restricted to staff, or a
