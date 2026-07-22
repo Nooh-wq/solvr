@@ -5,7 +5,7 @@
 
 import { inngest } from "../client";
 import { withRls, prisma } from "@/lib/db";
-import { signDataExportToken } from "@/lib/session";
+import { signPurposeToken } from "@/core/auth/tokens";
 import { sendSystemNotice } from "@/lib/email/send";
 import {
   systemContext,
@@ -129,7 +129,7 @@ export const buildDataExport = inngest.createFunction(
       );
     });
 
-    const token = await signDataExportToken({ requestId, tenantId, subjectId });
+    const token = await signPurposeToken("data-export", { requestId, tenantId, subjectId });
     const downloadUrl = `${siteUrl()}/api/data-export/${encodeURIComponent(token)}`;
 
     await step.run("email-link", async () => {

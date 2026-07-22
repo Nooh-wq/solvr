@@ -8,6 +8,7 @@ import { SlaBadge } from "@/components/sla-badge";
 import { AvailabilityChip } from "@/components/availability-chip";
 import { SearchIcon } from "@/components/icons";
 import { Select, Input } from "@/components/ui/input";
+import { DropdownSelect } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
@@ -358,39 +359,27 @@ export function QueueWorkspace({
               className="h-9 pl-9 pr-3 text-sm border border-[var(--color-neutral-300)] rounded-xl w-64 bg-[var(--color-surface)] text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
             />
           </div>
-          <Select
+          <DropdownSelect
             value={status}
-            onChange={(e) => setStatus(e.target.value as TicketStatus | "ALL")}
-            className="h-9 w-40"
-          >
-            {STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-          <Select
+            onChange={(v) => setStatus(v as TicketStatus | "ALL")}
+            options={STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            ariaLabel="Status"
+            className="w-40"
+          />
+          <DropdownSelect
             value={priority}
-            onChange={(e) => setPriority(e.target.value as Priority | "ALL")}
-            className="h-9 w-40"
-          >
-            {PRIORITY_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-          <Select
+            onChange={(v) => setPriority(v as Priority | "ALL")}
+            options={PRIORITY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            ariaLabel="Priority"
+            className="w-40"
+          />
+          <DropdownSelect
             value={assignee}
-            onChange={(e) => setAssignee(e.target.value)}
-            className="h-9 w-40"
-          >
-            {ASSIGNEE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
+            onChange={(v) => setAssignee(v)}
+            options={ASSIGNEE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            ariaLabel="Assignee"
+            className="w-40"
+          />
           {activeView && (
             <Button
               variant="secondary"

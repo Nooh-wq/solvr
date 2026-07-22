@@ -7,7 +7,7 @@
 import { headers } from "next/headers";
 import geoip from "geoip-lite";
 import { withRls } from "@/lib/db";
-import type { SubjectKind } from "@/lib/session";
+import type { SubjectKind } from "@/core/auth/types";
 
 export async function recordLoginActivity(input: {
   tenantId: string;

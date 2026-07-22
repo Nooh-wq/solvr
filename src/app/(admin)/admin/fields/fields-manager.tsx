@@ -233,6 +233,7 @@ export function FieldsManager({
       />
 
       <EditFieldModal
+        key={editing?.id ?? "edit-closed"}
         definition={editing}
         onClose={() => setEditing(null)}
         onSaved={() => {
@@ -242,6 +243,7 @@ export function FieldsManager({
       />
 
       <OptionsModal
+        key={managingOptionsFor?.id ?? "options-closed"}
         definition={managingOptionsFor}
         onClose={() => {
           setManagingOptionsFor(null);
@@ -423,17 +425,12 @@ function EditFieldModal({
 }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
-  const [label, setLabel] = useState("");
-  const [description, setDescription] = useState("");
-  const [isRequired, setIsRequired] = useState(false);
-
-  useEffect(() => {
-    if (definition) {
-      setLabel(definition.label);
-      setDescription(definition.description ?? "");
-      setIsRequired(definition.isRequired);
-    }
-  }, [definition?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The caller keys this component by definition id, so a change of
+  // definition remounts and re-runs these initializers — no prop-sync
+  // effect needed.
+  const [label, setLabel] = useState(definition?.label ?? "");
+  const [description, setDescription] = useState(definition?.description ?? "");
+  const [isRequired, setIsRequired] = useState(definition?.isRequired ?? false);
 
   function submit() {
     if (!definition) return;
@@ -514,11 +511,13 @@ function OptionsModal({
   const [newValue, setNewValue] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [newTag, setNewTag] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Keyed by definition id at the call site, so "loading" starts true
+  // whenever the modal opens for a definition and the effect only does
+  // the async fetch (no synchronous setState).
+  const [loading, setLoading] = useState(definition !== null);
 
   useEffect(() => {
     if (!definition) return;
-    setLoading(true);
     listOptions(definition.id)
       .then((rows) =>
         setOptions(

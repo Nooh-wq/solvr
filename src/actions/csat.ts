@@ -2,7 +2,8 @@
 
 import { z } from "zod";
 import { withRls } from "@/lib/db";
-import { verifyCsatToken } from "@/lib/session";
+// B7.5: no cookie R/W in this file — verifyCsatToken fully migrates.
+import { verifyPurposeToken } from "@/core/auth/tokens";
 
 export type CsatContext = {
   ticketReference: string;
@@ -16,7 +17,7 @@ export type CsatContext = {
 
 /** Public, token-authenticated context for the /rate/[token] page — no session cookie involved. Returns null for an invalid/expired/tampered token or a ticket that no longer exists. */
 export async function getCsatContext(rawToken: string): Promise<CsatContext | null> {
-  const claims = await verifyCsatToken(rawToken);
+  const claims = await verifyPurposeToken(rawToken, "csat");
   if (!claims) return null;
 
   // role: "SUPER_ADMIN" — same established pattern as the auto-close Inngest
@@ -75,7 +76,7 @@ export async function submitCsatRating(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
 
-  const claims = await verifyCsatToken(data.token);
+  const claims = await verifyPurposeToken(data.token, "csat");
   if (!claims) return { ok: false, error: "This link is no longer valid." };
 
   const err = await withRls({ tenantId: claims.tenantId, userId: null, role: "SUPER_ADMIN" }, async (tx) => {

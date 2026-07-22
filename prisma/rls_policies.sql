@@ -65,7 +65,24 @@ begin
     'tenant_branding','categories','tickets','messages',
     'attachments','audit_logs','kb_articles','kb_chunks',
     'chatbot_configs','chat_conversations','chat_messages','notifications',
-    'ticket_guests','login_otps','survey_responses'
+    'ticket_guests','login_otps','survey_responses',
+    'kb_suggestions',
+    'ai_tools','ai_action_logs',
+    'qa_rubrics','qa_scores',
+    'service_catalog_items','approval_requests','assets','asset_links',
+    'agent_presence',
+    'channel_configs',
+    'help_centers','community_posts','community_replies','community_upvotes',
+    'tenant_integrations','ticket_integration_links',
+    'prompt_templates',
+    -- QA sweep (2026-07): these eight tenant-scoped tables shipped
+    -- without RLS. Every app-layer query already filters by tenantId, so
+    -- there was no through-the-app cross-tenant leak, but the RLS backstop
+    -- lib/db.ts + AGENTS.md promise was missing. See the policy block at
+    -- the end of this file.
+    'api_keys','scim_tokens','tenant_identity_providers',
+    'tenant_encryption_keys','webhook_subscriptions','api_usage_logs',
+    'intent_taxonomy','ai_classification_cache'
   ])
   loop
     execute format('alter table %I enable row level security;', t);
@@ -181,15 +198,36 @@ create policy guest_insert_message on messages
     and "isInternal" = false
   );
 
--- attachments: NOTE — scoped only by tenantId, same as every role today
--- (including plain CLIENT); real per-ticket scoping is enforced at the app
--- layer (every attachment query filters by ticketId). GUEST rides on this
--- same pre-existing, already-app-layer-enforced pattern rather than a new
--- RLS carve-out, since attachments never had ticket-level RLS scoping to
--- begin with — see actions/attachments.ts for the query-level enforcement.
+-- attachments: for CLIENT/AGENT/ADMIN, scoped by tenantId (real per-ticket
+-- scoping is enforced at the app layer — every non-guest attachment query
+-- filters by ticketId).
+--
+-- F2 (QA follow-up): GUEST is now excluded from tenant_isolation and gets
+-- its own ticket-scoped policy, mirroring messages. A guest link grants
+-- access to exactly ONE ticket (app.guest_ticket_id), so a guest may only
+-- read/upload/link attachments on that ticket — not the tenant-wide set the
+-- old tenant_isolation (which included GUEST) exposed. FOR ALL because the
+-- guest surface does all three: SELECT (thread view), INSERT
+-- (uploadGuestAttachment), and UPDATE (linking a staged file to its message
+-- in postGuestReply) — see actions/guest.ts. The SELECT arm also satisfies
+-- the implicit RETURNING on the guest's own INSERT (same reasoning as the
+-- audit_logs note above).
 drop policy if exists tenant_isolation on attachments;
 create policy tenant_isolation on attachments
-  using ("tenantId" = app_current_tenant_id());
+  using ("tenantId" = app_current_tenant_id() and app_current_role() <> 'GUEST');
+drop policy if exists guest_ticket_attachments on attachments;
+create policy guest_ticket_attachments on attachments
+  for all
+  using (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+  )
+  with check (
+    "tenantId" = app_current_tenant_id()
+    and app_current_role() = 'GUEST'
+    and "ticketId" = app_current_guest_ticket_id()
+  );
 
 -- ticket_guests: readable tenant-wide (same app-layer-scoping note as
 -- attachments above); adding/revoking a guest is restricted to staff, or a
@@ -323,6 +361,106 @@ drop policy if exists tenant_isolation on kb_chunks;
 create policy tenant_isolation on kb_chunks
   using ("tenantId" = app_current_tenant_id());
 
+-- M14 — help_centers + community_* — strict tenant isolation. Public
+-- read paths (marketing help center) call the read actions under a
+-- SUPER_ADMIN system context scoped by the resolved help-center's
+-- tenantId; the middleware fails closed on domain mismatch (spec §3).
+drop policy if exists tenant_isolation on help_centers;
+create policy tenant_isolation on help_centers
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_posts;
+create policy tenant_isolation on community_posts
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_replies;
+create policy tenant_isolation on community_replies
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on community_upvotes;
+create policy tenant_isolation on community_upvotes
+  using ("tenantId" = app_current_tenant_id());
+
+-- M12 — channel_configs: strict tenant isolation. Provider
+-- credentials are envelope-encrypted at write time (M6.1), so even a
+-- successful cross-tenant read would return ciphertext; RLS is still
+-- the outer boundary.
+drop policy if exists tenant_isolation on channel_configs;
+create policy tenant_isolation on channel_configs
+  using ("tenantId" = app_current_tenant_id());
+
+-- M19 — tenant_integrations + ticket_integration_links: strict tenant
+-- isolation. OAuth tokens / API keys are envelope-encrypted at write
+-- time (spec §3 "Do NOT share OAuth tokens across tenants"); RLS is
+-- still the outer boundary.
+drop policy if exists tenant_isolation on tenant_integrations;
+create policy tenant_isolation on tenant_integrations
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on ticket_integration_links;
+create policy tenant_isolation on ticket_integration_links
+  using ("tenantId" = app_current_tenant_id());
+
+-- Phase 4d — prompt_templates: strict tenant isolation. Read-modify by
+-- ADMIN+ only at the app layer; RLS just keeps cross-tenant reads out.
+drop policy if exists tenant_isolation on prompt_templates;
+create policy tenant_isolation on prompt_templates
+  using ("tenantId" = app_current_tenant_id());
+
+-- M4.1 — agent_presence: strict tenant isolation (spec §3 "Do NOT
+-- broadcast presence cross-tenant"). Heartbeats update rows scoped to
+-- the caller's tenant via withRls; the sweep cron writes under
+-- SUPER_ADMIN system context per tenant.
+drop policy if exists tenant_isolation on agent_presence;
+create policy tenant_isolation on agent_presence
+  using ("tenantId" = app_current_tenant_id());
+
+-- M15 — Employee Service Suite tables. Strict tenant isolation on
+-- every one. Approval decisions + asset writes go through server
+-- actions that already gate on the caller's role; RLS is the backstop.
+drop policy if exists tenant_isolation on service_catalog_items;
+create policy tenant_isolation on service_catalog_items
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on approval_requests;
+create policy tenant_isolation on approval_requests
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on assets;
+create policy tenant_isolation on assets
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on asset_links;
+create policy tenant_isolation on asset_links
+  using ("tenantId" = app_current_tenant_id());
+
+-- M11 — qa_rubrics + qa_scores: strict tenant isolation. Coaching
+-- and flagged-queue queries run under the caller's RLS context; the
+-- Inngest scorer writes qa_scores under SUPER_ADMIN system context
+-- (same fan-out pattern as classify-message + cluster-kb-suggestions).
+-- Spec §3 pin: "Do NOT display QA scores to end users" — enforced in
+-- the app layer since RLS is not role-selective here (CLIENTs simply
+-- have no route that queries qa_scores).
+drop policy if exists tenant_isolation on qa_rubrics;
+create policy tenant_isolation on qa_rubrics
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on qa_scores;
+create policy tenant_isolation on qa_scores
+  using ("tenantId" = app_current_tenant_id());
+
+-- M8 — ai_tools + ai_action_logs: strict tenant isolation. Server
+-- actions further gate writes to ADMIN+, and the executor writes
+-- ai_action_logs under a SUPER_ADMIN system context (cron / chatbot
+-- fan-out) — same pattern as classify-message.
+drop policy if exists tenant_isolation on ai_tools;
+create policy tenant_isolation on ai_tools
+  using ("tenantId" = app_current_tenant_id());
+drop policy if exists tenant_isolation on ai_action_logs;
+create policy tenant_isolation on ai_action_logs
+  using ("tenantId" = app_current_tenant_id());
+
+-- M10 — kb_suggestions: tenant-scoped, admin/super_admin only. The
+-- clustering cron writes rows under a SUPER_ADMIN RLS context (system
+-- fan-out over tenants — same pattern as auto-close), so a plain
+-- tenant_isolation policy suffices; role gating happens in the server
+-- actions before writes/reads land.
+drop policy if exists tenant_isolation on kb_suggestions;
+create policy tenant_isolation on kb_suggestions
+  using ("tenantId" = app_current_tenant_id());
+
 -- chat_conversations / chat_messages
 drop policy if exists tenant_isolation on chat_conversations;
 create policy tenant_isolation on chat_conversations
@@ -367,3 +505,41 @@ create policy notification_update on notifications
       or "recipientTeamMemberId" = app_current_user_id()
     )
   );
+
+-- ---------------------------------------------------------------------------
+-- QA sweep (2026-07) — RLS backstop for eight tenant-scoped tables that
+-- shipped without it (M6/M7/M9). Same shape as the provisioning tables
+-- above: tenant_isolation for normal roles + super_admin_write so the
+-- legitimate cross-tenant SUPER_ADMIN system contexts keep working:
+--   * api_keys / scim_tokens — the bearer-token auth fanout reads across
+--     tenants under role=SUPER_ADMIN (the token IS the auth — see
+--     lib/api/auth.ts, lib/auth/scim-auth.ts) then writes lastUsedAt.
+--   * tenant_identity_providers — SAML/OIDC init + login page read the
+--     IdP by slug before any tenant session exists (SUPER_ADMIN fanout).
+--   * tenant_encryption_keys — envelope crypto / FLE runs in cron + system
+--     contexts under role=SUPER_ADMIN.
+--   * webhook_subscriptions / api_usage_logs — deliver-webhook + api
+--     request logging run under role=SUPER_ADMIN with the real tenantId;
+--     the super-admin health dashboard counts them cross-tenant.
+--   * intent_taxonomy / ai_classification_cache — the M9 classifier reads
+--     + writes these under a SUPER_ADMIN system context (lib/ai/classify.ts,
+--     routed through withRls by the same QA sweep).
+-- Normal ADMIN/AGENT/CLIENT sessions get tenant_isolation only, so a
+-- tenant can never read another tenant's keys, tokens, IdP config, DEKs,
+-- webhook secrets, usage logs, or AI cache.
+do $$
+declare
+  t text;
+begin
+  for t in select unnest(array[
+    'api_keys','scim_tokens','tenant_identity_providers',
+    'tenant_encryption_keys','webhook_subscriptions','api_usage_logs',
+    'intent_taxonomy','ai_classification_cache'
+  ])
+  loop
+    execute format('drop policy if exists tenant_isolation on %I;', t);
+    execute format('create policy tenant_isolation on %I using ("tenantId" = app_current_tenant_id());', t);
+    execute format('drop policy if exists super_admin_write on %I;', t);
+    execute format('create policy super_admin_write on %I for all using (app_current_role() = ''SUPER_ADMIN'') with check (app_current_role() = ''SUPER_ADMIN'');', t);
+  end loop;
+end $$;

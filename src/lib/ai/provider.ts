@@ -9,6 +9,138 @@ export type GenerateInput = {
   turns: ChatTurn[];
 };
 
+// M9 — the classification surface.
+//
+// Every inbound message goes through classifyMessage(). The provider
+// returns four signals + a scalar confidence + the raw token cost so
+// per-tenant budget enforcement (M9 §3) has real numbers to work with.
+//
+// intent is bounded to `intentSlugs` — the classification prompt is
+// generated with the tenant's IntentTaxonomy embedded, so the model
+// cannot invent an intent that admins haven't declared. On no match,
+// intent is null and confidence reflects that uncertainty.
+
+export type ClassifySignals = {
+  intent: string | null;
+  sentiment: "positive" | "neutral" | "negative" | "frustrated" | "angry" | null;
+  urgency: "low" | "medium" | "high" | "critical" | null;
+  language: string | null; // BCP-47
+  confidence: number; // 0.0–1.0 aggregate
+  tokensUsed: number;
+};
+
+export type ClassifyInput = {
+  body: string;
+  intents: Array<{ slug: string; label: string; description: string }>;
+};
+
+// M10 — self-learning KB. The clustering job passes a set of
+// resolved-ticket digests (title + agent-visible resolution excerpt,
+// PII-redacted) and asks the model to draft ONE unified article
+// grounded in the pattern across them. Return payload is small enough
+// to stream — title + body + tokensUsed for budget accounting.
+export type DraftKbInput = {
+  // Human-language topic hint distilled from the cluster's most common
+  // terms — e.g. "Reset printer PIN". Used as a nudge, not authoritative.
+  topicHint: string;
+  // Anonymised, agent-facing excerpts of each ticket's resolution. Order
+  // matches sourceTicketIds so citations line up. Never includes
+  // internal notes (§3) — the clustering pipeline filters those out
+  // before calling this.
+  resolutions: Array<{ ticketReference: string; excerpt: string }>;
+};
+
+export type KbDraft = {
+  title: string;
+  body: string;
+  tokensUsed: number;
+};
+
+// M8 — agentic tool-calling. The chat loop passes the tenant's active
+// tool registry as `tools`, plus the current turn history + a "final
+// answer" instruction. The model either:
+//   - proposes ONE tool call (name + args), OR
+//   - returns a plain `reply` string (no tool needed / not applicable).
+//
+// The provider prompt is deliberately conservative:
+//   - Only tools listed here are allowed. Unknown names come back as
+//     rejected at the executor layer; the prompt discourages inventing
+//     them in the first place.
+//   - Args must match the declared JSON schema — the executor validates
+//     regardless, but a lower reject rate at the model saves round-trips.
+export type ToolSpec = {
+  name: string;
+  description: string;
+  argsSchema: JsonSchemaObjectSpec;
+};
+
+/** Minimal JSON-Schema-lite mirror of the validator's shape — kept structural (not `unknown`) so callers get help. */
+export type JsonSchemaObjectSpec = {
+  type: "object";
+  properties: Record<string, JsonSchemaPropSpec>;
+  required?: string[];
+};
+
+export type JsonSchemaPropSpec = {
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  description?: string;
+  enum?: Array<string | number | boolean>;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  items?: JsonSchemaPropSpec;
+  properties?: Record<string, JsonSchemaPropSpec>;
+  required?: string[];
+};
+
+export type ToolProposalInput = {
+  systemPrompt: string;
+  turns: ChatTurn[];
+  tools: ToolSpec[];
+};
+
+export type ToolProposal = {
+  toolCall: { name: string; args: Record<string, unknown> } | null;
+  message: string;
+  tokensUsed: number;
+};
+
+// M11 — QA scoring. The tenant's rubric declares the axes; the
+// provider grades ONE reply against ALL of them in a single call.
+// Spec §3 pin: "Do NOT let the rubric prompt leak to Sentry" — the
+// scorer catches its own errors and never re-throws with the rubric
+// or reply body attached.
+export type QaDimensionSpec = {
+  key: string;
+  label: string;
+  description: string;
+  weight: number;
+  flagBelow: number;
+};
+
+export type QaScoreInput = {
+  dimensions: QaDimensionSpec[];
+  // A short slice of the surrounding thread (client's most recent
+  // question + a couple prior turns) so the model can grade in context
+  // rather than in isolation. Never includes tenant credentials.
+  threadExcerpt: string;
+  // The reply body the human/AI sent. Scored as-is — spec §3 forbids
+  // scoring drafts that were never sent.
+  replyBody: string;
+};
+
+export type QaDimensionResult = {
+  key: string;
+  score: number;    // 0..5, per dimension
+  rationale: string;
+};
+
+export type QaScoreResult = {
+  dimensions: QaDimensionResult[];
+  tokensUsed: number;
+};
+
 export interface AiProvider {
   /** True when the provider has real credentials — callers use this to degrade gracefully instead of erroring. */
   readonly isConfigured: boolean;
@@ -16,6 +148,43 @@ export interface AiProvider {
   summarizeTicket(thread: string): Promise<string>;
   suggestReply(thread: string, kbContext: string): Promise<string>;
   suggestTriage(title: string, description: string): Promise<{ category: string | null; priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT" }>;
+  /**
+   * M9 — enrich a customer / guest message with AI-derived signals.
+   * Returns raw provider tokens so per-tenant budget tracking has a
+   * source-of-truth number. On failure, throws — the Inngest classify
+   * function catches and stores nothing, keeping the "signals not yet
+   * available" UI path for both errors and pending states.
+   */
+  classifyMessage(input: ClassifyInput): Promise<ClassifySignals>;
+  /**
+   * M9.7 — translate `body` from `sourceLang` (BCP-47 or null for auto-
+   * detect) into `targetLang`. Returns null if the source is already the
+   * target, or the target isn't a language the provider handles.
+   */
+  translate(body: string, sourceLang: string | null, targetLang: string): Promise<{ text: string; tokensUsed: number } | null>;
+  /**
+   * M10 — draft a KB article from a cluster of resolved-ticket
+   * resolutions. Never invents facts outside the excerpts. Returns
+   * tokensUsed for tenant budget accounting. On failure, throws — the
+   * nightly cron catches and simply files no suggestion for that cluster.
+   */
+  draftKbArticle(input: DraftKbInput): Promise<KbDraft>;
+  /**
+   * M8 — propose either ONE tool call or a plain reply. Provider-agnostic
+   * plain-text protocol: the model returns
+   *   {"tool": "<name>", "args": {...}}   → toolCall populated, message = ""
+   * OR
+   *   {"reply": "<plain answer>"}         → toolCall = null, message = reply
+   * The executor is the authority on whether the proposal is safe to run.
+   */
+  proposeToolCall(input: ToolProposalInput): Promise<ToolProposal>;
+  /**
+   * M11 — score ONE reply against the tenant's rubric. Returns
+   * per-dimension scores + brief rationales + token cost. On failure,
+   * throws — the async scorer catches and simply writes no QaScore
+   * row (spec §3: never log the rubric prompt to Sentry).
+   */
+  scoreReply(input: QaScoreInput): Promise<QaScoreResult>;
 }
 
 /** No-op provider used when ANTHROPIC_API_KEY isn't set — every method throws NOT_CONFIGURED so call sites can catch and degrade (mirrors the email provider's pattern). */
@@ -31,6 +200,32 @@ export class UnconfiguredAiProvider implements AiProvider {
     throw new Error("NOT_CONFIGURED");
   }
   async suggestTriage(): Promise<{ category: string | null; priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT" }> {
+    throw new Error("NOT_CONFIGURED");
+  }
+  async classifyMessage(_input: ClassifyInput): Promise<ClassifySignals> {
+    void _input;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async translate(
+    _body: string,
+    _sourceLang: string | null,
+    _targetLang: string
+  ): Promise<{ text: string; tokensUsed: number } | null> {
+    void _body;
+    void _sourceLang;
+    void _targetLang;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async draftKbArticle(_input: DraftKbInput): Promise<KbDraft> {
+    void _input;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async proposeToolCall(_input: ToolProposalInput): Promise<ToolProposal> {
+    void _input;
+    throw new Error("NOT_CONFIGURED");
+  }
+  async scoreReply(_input: QaScoreInput): Promise<QaScoreResult> {
+    void _input;
     throw new Error("NOT_CONFIGURED");
   }
 }

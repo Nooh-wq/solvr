@@ -2,19 +2,41 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { upsertKbArticle, deleteKbArticle } from "@/actions/kb";
+import { upsertKbArticle, deleteKbArticle, markKbArticleReviewed } from "@/actions/kb";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 
-type Article = { id: string; title: string; body: string; isPublished: boolean; updatedAt: string };
+type Article = { id: string; title: string; body: string; isPublished: boolean; updatedAt: string; isStale?: boolean };
 
-export function KbManager({ articles }: { articles: Article[] }) {
+export function KbManager({
+  articles,
+  staleThresholdMonths,
+}: {
+  articles: Article[];
+  staleThresholdMonths?: number;
+}) {
   const router = useRouter();
   const { toast } = useToast();
   const [editing, setEditing] = useState<Article | null>(null);
   const [creating, setCreating] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  function reviewed(id: string, title: string) {
+    startTransition(async () => {
+      try {
+        await markKbArticleReviewed(id);
+        toast({ title: "Marked reviewed", description: title, variant: "success" });
+        router.refresh();
+      } catch (e) {
+        toast({
+          title: "Couldn't update",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "error",
+        });
+      }
+    });
+  }
 
   function remove(id: string, title: string) {
     startTransition(async () => {
@@ -82,15 +104,39 @@ export function KbManager({ articles }: { articles: Article[] }) {
                     <button onClick={() => setEditing(a)} className="text-left text-[var(--color-primary)] font-medium">
                       {a.title}
                     </button>
+                    {a.isStale ? (
+                      <span
+                        title={
+                          staleThresholdMonths
+                            ? `Not reviewed in ${staleThresholdMonths} months`
+                            : "Stale"
+                        }
+                        className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-[10px] font-semibold uppercase tracking-wide"
+                      >
+                        Stale
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">{a.isPublished ? "Published" : "Draft"}</td>
                   <td className="px-4 py-3 text-[var(--color-neutral-600)]">
                     {new Date(a.updatedAt).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3">
-                    <Button variant="secondary" size="sm" disabled={pending} onClick={() => remove(a.id, a.title)}>
-                      Delete
-                    </Button>
+                    <div className="flex gap-2 justify-end">
+                      {a.isStale ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => reviewed(a.id, a.title)}
+                        >
+                          Mark reviewed
+                        </Button>
+                      ) : null}
+                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => remove(a.id, a.title)}>
+                        Delete
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

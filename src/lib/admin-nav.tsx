@@ -12,34 +12,16 @@
 import type { NavLink, NavSection } from "@/components/sidebar";
 import type { UserRole } from "@/lib/auth";
 import { roleAtLeast } from "@/lib/auth";
-
-/**
- * Section slugs are used both for landing-page routes
- * (`/admin/section/<slug>`) and as the collapse-state key in
- * localStorage — keep them stable.
- */
-export type AdminSectionSlug =
-  | "account"
-  | "people"
-  | "objects-rules"
-  | "workspaces"
-  | "channels"
-  | "apps"
-  | "ai";
-
-export const ADMIN_SECTIONS: {
-  slug: AdminSectionSlug;
-  label: string;
-  description: string;
-}[] = [
-  { slug: "account", label: "Account", description: "Billing, security, and audit trail." },
-  { slug: "people", label: "People", description: "Team members, customers, roles, groups, and organizations." },
-  { slug: "objects-rules", label: "Objects & Rules", description: "Fields, forms, macros, canned responses, and placeholders." },
-  { slug: "workspaces", label: "Workspaces", description: "Agent workspace and branding." },
-  { slug: "channels", label: "Channels", description: "Email, chat, and voice channels." },
-  { slug: "apps", label: "Apps & Integrations", description: "API keys, webhooks, and marketplace." },
-  { slug: "ai", label: "AI", description: "Chatbot and knowledge base." },
-];
+// Re-export the client-safe catalog so existing callers keep working.
+// The catalog lives in a separate module (no @/lib/auth deps) so client
+// components can import it without dragging next/headers into the
+// client bundle.
+export {
+  ADMIN_SECTIONS,
+  ADMIN_PAGE_CATALOG,
+  type AdminSectionSlug,
+  type AdminPageEntry,
+} from "./admin-nav-catalog";
 
 export function buildAdminNav({
   role,
@@ -52,9 +34,11 @@ export function buildAdminNav({
   pendingCount: number;
   deletionCount: number;
 }): { top: NavLink[]; sections: NavSection[]; footer: NavLink[] } {
+  // Top row is intentionally narrow post-M-admin: just Overview +
+  // Queue. Analytics/Reports moved into the Analytics & Reporting
+  // section per spec §Nav.
   const top: NavLink[] = [
     { href: "/admin", label: "Overview", icon: "overview" },
-    { href: "/admin/analytics", label: "Analytics", icon: "analytics" },
     { href: "/agent", label: "Queue", icon: "tickets" },
   ];
 
@@ -63,7 +47,13 @@ export function buildAdminNav({
       slug: "account",
       label: "Account",
       links: [
-        { href: "/admin/audit-log", label: "Audit log", icon: "audit" },
+        { href: "/admin/account", label: "Account overview", icon: "overview" },
+        { href: "/admin/branding", label: "Branding", icon: "branding" },
+        { href: "/admin/account/business-hours", label: "Business hours", icon: "calendars" },
+        { href: "/admin/account/localization", label: "Localization", icon: "overview" },
+        { href: "/admin/account/domains", label: "Custom domains", icon: "overview" },
+        { href: "/admin/account/billing", label: "Billing", icon: "overview" },
+        { href: "/admin/account/compliance", label: "Data & privacy", icon: "shield" },
         {
           href: "/admin/account-deletions",
           label: "Deletion requests",
@@ -78,67 +68,118 @@ export function buildAdminNav({
       links: [
         { href: "/admin/team-members", label: "Team members", icon: "teamMembers", badge: pendingCount },
         { href: "/admin/customers", label: "Customers", icon: "customers" },
-        { href: "/admin/roles", label: "Roles", icon: "shield" },
         { href: "/admin/organizations", label: "Organizations", icon: "organizations" },
         { href: "/admin/groups", label: "Groups", icon: "groups" },
+        { href: "/admin/roles", label: "Roles & permissions", icon: "roles" },
+        { href: "/admin/people/pending", label: "Pending approvals", icon: "customers", badge: pendingCount },
+        { href: "/admin/people/suspended", label: "Suspended users", icon: "customers" },
+        { href: "/admin/people/activity", label: "Login activity", icon: "audit" },
       ],
     },
     {
       slug: "objects-rules",
       label: "Objects & Rules",
       links: [
-        { href: "/admin/fields", label: "Ticket fields", icon: "fields" },
+        { href: "/admin/fields", label: "Custom fields", icon: "fields" },
         { href: "/admin/forms", label: "Ticket forms", icon: "forms" },
+        { href: "/admin/objects/tags", label: "Tags", icon: "categories" },
         { href: "/admin/categories", label: "Categories", icon: "categories" },
-        { href: "/admin/triggers", label: "Triggers", icon: "shield" },
-        { href: "/admin/automations", label: "Automations", icon: "shield" },
-        { href: "/admin/escalation-paths", label: "Escalation paths", icon: "shield" },
-        { href: "/admin/sla-policies", label: "SLA policies", icon: "shield" },
-        { href: "/admin/business-calendars", label: "Business calendars", icon: "shield" },
-        { href: "/admin/routing", label: "Routing", icon: "shield" },
-        { href: "/admin/csat", label: "CSAT & Feedback", icon: "shield" },
-        { href: "/admin/macros", label: "Macros", icon: "forms" },
-        { href: "/admin/canned-responses", label: "Canned responses", icon: "forms" },
-        { href: "/admin/placeholders", label: "Placeholders", icon: "fields" },
+        { href: "/admin/triggers", label: "Triggers", icon: "triggers" },
+        { href: "/admin/automations", label: "Automations", icon: "automations" },
+        { href: "/admin/escalation-paths", label: "Escalation paths", icon: "escalations" },
+        { href: "/admin/macros", label: "Macros", icon: "macros" },
+        { href: "/admin/placeholders", label: "Placeholders", icon: "placeholders" },
+        { href: "/admin/sla-policies", label: "SLA policies", icon: "sla" },
+        { href: "/admin/business-calendars", label: "Business calendars", icon: "calendars" },
+        { href: "/admin/routing", label: "Routing rules", icon: "routing" },
+        { href: "/admin/csat", label: "CSAT & Feedback", icon: "csat" },
+        { href: "/admin/canned-responses", label: "Canned responses", icon: "cannedResponses" },
       ],
     },
     {
       slug: "workspaces",
       label: "Workspaces",
-      links: [{ href: "/admin/branding", label: "Branding", icon: "branding" }],
+      links: [
+        { href: "/admin/workspaces/agent", label: "Agent workspace", icon: "overview" },
+        { href: "/admin/workspaces/views", label: "Views", icon: "overview" },
+        { href: "/admin/workspaces/portal", label: "Portal", icon: "overview" },
+        { href: "/admin/workspaces/layout", label: "Ticket layout", icon: "overview" },
+        { href: "/admin/workspaces/chat", label: "Chat widget", icon: "overview" },
+      ],
     },
     {
       slug: "channels",
       label: "Channels",
-      links: [],
+      links: [
+        { href: "/admin/channels/email", label: "Email channels", icon: "overview" },
+        { href: "/admin/channels/web-forms", label: "Web forms", icon: "overview" },
+        { href: "/admin/channels", label: "Live chat & omnichannel", icon: "overview" },
+        { href: "/admin/apps/api-keys", label: "API keys", icon: "overview" },
+        { href: "/admin/channels/voice", label: "Voice (soon)", icon: "overview" },
+      ],
     },
     {
       slug: "apps",
       label: "Apps & Integrations",
-      links: [],
+      links: [
+        { href: "/admin/apps/marketplace", label: "Marketplace", icon: "overview" },
+        { href: "/admin/apps/installed", label: "Installed apps", icon: "overview" },
+        { href: "/admin/apps/webhooks", label: "Webhooks", icon: "overview" },
+        { href: "/admin/apps/zapier", label: "Zapier / Make", icon: "overview" },
+        { href: "/admin/identity-providers", label: "SSO / SAML", icon: "shield" },
+        { href: "/admin/apps/scim", label: "SCIM provisioning", icon: "shield" },
+      ],
     },
     {
       slug: "ai",
       label: "AI",
-      links: [{ href: "/admin/kb", label: "Knowledge base", icon: "kb" }],
+      links: [
+        { href: "/admin/ai/settings", label: "AI configuration", icon: "overview" },
+        { href: "/admin/ai/intents", label: "Intent library", icon: "overview" },
+        { href: "/admin/ai/tools", label: "AI agents", icon: "overview" },
+        { href: "/admin/ai/qa", label: "AI QA", icon: "overview" },
+        { href: "/admin/ai/qa/rubric", label: "QA rubric", icon: "overview" },
+        { href: "/admin/kb", label: "Knowledge base", icon: "kb" },
+        { href: "/admin/ai/performance", label: "AI performance", icon: "analytics" },
+        { href: "/admin/ai/prompts", label: "Prompt library", icon: "overview" },
+      ],
+    },
+    {
+      slug: "analytics",
+      label: "Analytics & Reporting",
+      links: [
+        { href: "/admin/analytics", label: "Analytics overview", icon: "analytics" },
+        { href: "/admin/reports", label: "Custom reports", icon: "reports" },
+        { href: "/admin/analytics/shared", label: "Shared reports", icon: "reports" },
+        { href: "/admin/analytics/per-org", label: "Per-organization dashboards", icon: "analytics" },
+        { href: "/admin/audit-log", label: "Audit log", icon: "audit" },
+      ],
     },
   ];
 
-  // Empty sections still surface a landing card so admins can see the
-  // section exists (and that it's intentionally sparse rather than
-  // missing). The nav renderer collapses empty sections to a single
-  // "Overview" row that links to the landing page.
-  for (const s of sections) {
-    if (s.links.length === 0) {
-      s.links = [{ href: `/admin/section/${s.slug}`, label: `${s.label} overview`, icon: s.slug === "ai" ? "kb" : "overview" }];
-    }
+  // Super Admin section — only rendered for SUPER_ADMIN role. Spec §3
+  // pin: "Do not surface Super Admin capabilities to Admins" — hide,
+  // don't disable.
+  if (role === "SUPER_ADMIN") {
+    sections.push({
+      slug: "super",
+      label: "Super Admin",
+      links: [
+        { href: "/admin/super", label: "Tenant management", icon: "super" },
+        { href: "/admin/super/analytics", label: "Cross-tenant analytics", icon: "analytics" },
+        { href: "/admin/super/impersonation", label: "Impersonation", icon: "super" },
+        { href: "/admin/super/health", label: "System health", icon: "overview" },
+        { href: "/admin/super/flags", label: "Feature flags", icon: "overview" },
+        { href: "/admin/super/support", label: "Support tickets", icon: "tickets" },
+      ],
+    });
   }
+  // Silence unused-var lint on tenantType — kept in the signature so
+  // callers that already pass it don't break; the previous
+  // INTERNAL-only gating moved into the SUPER_ADMIN role check above.
+  void tenantType;
 
   const footer: NavLink[] = [];
-  if (role === "SUPER_ADMIN" && tenantType === "INTERNAL") {
-    footer.push({ href: "/admin/super", label: "Super admin", icon: "super" });
-  }
-
   return { top, sections, footer };
 }
 
@@ -149,41 +190,5 @@ export function buildAgentNav(role: UserRole): NavLink[] {
     : [{ href: "/agent", label: "Queue", icon: "tickets" }];
 }
 
-/**
- * Flat catalog of every admin page — used by admin search (Z7.3) and
- * Recently viewed (Z7.2). Kept next to `buildAdminNav` so it stays
- * consistent with the taxonomy.
- */
-export type AdminPageEntry = {
-  href: string;
-  label: string;
-  section: AdminSectionSlug | "top";
-  keywords: string[];
-};
-
-export const ADMIN_PAGE_CATALOG: AdminPageEntry[] = [
-  { href: "/admin", label: "Overview", section: "top", keywords: ["home", "dashboard", "start"] },
-  { href: "/admin/analytics", label: "Analytics", section: "top", keywords: ["reports", "metrics", "kpi", "charts"] },
-  { href: "/admin/audit-log", label: "Audit log", section: "account", keywords: ["history", "trail", "activity"] },
-  { href: "/admin/account-deletions", label: "Deletion requests", section: "account", keywords: ["delete", "gdpr", "remove account"] },
-  { href: "/admin/team-members", label: "Team members", section: "people", keywords: ["staff", "agents", "team", "invite"] },
-  { href: "/admin/customers", label: "Customers", section: "people", keywords: ["end users", "clients", "requesters"] },
-  { href: "/admin/roles", label: "Roles", section: "people", keywords: ["permissions", "access", "custom role"] },
-  { href: "/admin/organizations", label: "Organizations", section: "people", keywords: ["companies", "accounts", "org"] },
-  { href: "/admin/groups", label: "Groups", section: "people", keywords: ["team groups", "assignment"] },
-  { href: "/admin/fields", label: "Ticket fields", section: "objects-rules", keywords: ["custom fields", "attributes"] },
-  { href: "/admin/forms", label: "Ticket forms", section: "objects-rules", keywords: ["form builder", "intake"] },
-  { href: "/admin/categories", label: "Categories", section: "objects-rules", keywords: ["taxonomy", "tags"] },
-  { href: "/admin/triggers", label: "Triggers", section: "objects-rules", keywords: ["automation", "rules", "workflow", "event"] },
-  { href: "/admin/automations", label: "Automations", section: "objects-rules", keywords: ["scheduled", "cron", "background", "workflow"] },
-  { href: "/admin/escalation-paths", label: "Escalation paths", section: "objects-rules", keywords: ["escalate", "workflow", "team", "webhook"] },
-  { href: "/admin/sla-policies", label: "SLA policies", section: "objects-rules", keywords: ["sla", "response time", "resolution", "targets"] },
-  { href: "/admin/business-calendars", label: "Business calendars", section: "objects-rules", keywords: ["business hours", "timezone", "holidays", "working days"] },
-  { href: "/admin/routing", label: "Routing", section: "objects-rules", keywords: ["assignment", "round robin", "load", "skills", "agents", "availability"] },
-  { href: "/admin/csat", label: "CSAT & Feedback", section: "objects-rules", keywords: ["csat", "nps", "survey", "rating", "feedback", "moderation"] },
-  { href: "/admin/macros", label: "Macros", section: "objects-rules", keywords: ["automation", "shortcut", "quick actions"] },
-  { href: "/admin/canned-responses", label: "Canned responses", section: "objects-rules", keywords: ["templates", "replies", "shortcut"] },
-  { href: "/admin/placeholders", label: "Placeholders", section: "objects-rules", keywords: ["variables", "tokens", "liquid"] },
-  { href: "/admin/branding", label: "Branding", section: "workspaces", keywords: ["logo", "colors", "theme"] },
-  { href: "/admin/kb", label: "Knowledge base", section: "ai", keywords: ["help center", "articles", "docs"] },
-];
+// The catalog moved to admin-nav-catalog.ts (client-safe, no @/lib/auth
+// deps) — see the re-export at the top of this file.

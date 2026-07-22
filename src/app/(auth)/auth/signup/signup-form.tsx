@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { startTenantSignup, verifyTenantSignup } from "@/actions/signup";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -12,6 +12,11 @@ import { suggestSlugFromName } from "@/lib/validation/signup";
 
 export function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // M15.6 — /auth/signup?mode=employee provisions the tenant with
+  // serviceMode=EMPLOYEE. Anything else defaults to CUSTOMER.
+  const requestedMode: "CUSTOMER" | "EMPLOYEE" =
+    searchParams.get("mode") === "employee" ? "EMPLOYEE" : "CUSTOMER";
   const { toast } = useToast();
   const [tenantName, setTenantName] = useState("");
   // Custom slug the user typed. `null` means "not touched" — the field
@@ -35,6 +40,7 @@ export function SignupForm() {
         adminName: String(formData.get("adminName")),
         adminEmail: String(formData.get("adminEmail")),
         password: String(formData.get("password")),
+        serviceMode: requestedMode,
       });
       if (!result.ok) {
         setError(result.error);

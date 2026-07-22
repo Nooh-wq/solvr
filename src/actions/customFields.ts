@@ -55,6 +55,7 @@ const createDefinitionSchema = z.object({
   label: z.string().min(1).max(120),
   description: z.string().max(500).optional().nullable(),
   isRequired: z.boolean().optional(),
+  isPhi: z.boolean().optional(),
   position: z.number().int().min(0).optional(),
 });
 
@@ -64,6 +65,12 @@ const updateDefinitionSchema = z.object({
   label: z.string().min(1).max(120).optional(),
   description: z.string().max(500).nullable().optional(),
   isRequired: z.boolean().optional(),
+  // isPhi is intentionally NOT patchable here — flipping PHI on/off
+  // mid-life would need a re-encryption pass over every existing value
+  // for this definition (a heavy migration). See M20 spec §3: "Do NOT
+  // allow tenant-level [encryption mode] to be changed after provisioning
+  // without a migration plan." — the same principle applies at field
+  // level. Create a new PHI-marked field and migrate values manually.
   position: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
 });
@@ -105,6 +112,9 @@ export async function createDefinition(input: z.infer<typeof createDefinitionSch
             label: data.label,
             description: data.description ?? null,
             isRequired: data.isRequired ?? false,
+            // M20.3 — PHI flag is set at create-time only (see
+            // updateDefinitionSchema comment).
+            isPhi: data.isPhi ?? false,
             position: data.position ?? 0,
           },
         })
@@ -272,21 +282,42 @@ export async function upsertValue(input: UpsertValueInput) {
         if (opts.length !== data.valueOptionIds.length) throw new Error("UNKNOWN_OPTION");
       }
 
+      // M20.4 — PHI fields: envelope-encrypt the typed value under the
+      // tenant DEK and store the ciphertext in valueEnc; leave the typed
+      // columns null so a stolen DB dump reveals nothing. Callers with
+      // phiRead permission get the plaintext back via listValuesForTarget.
+      let valueEnc: string | null = null;
+      if (def.isPhi) {
+        const { envelopeEncrypt } = await import("@/core/auth/envelope-crypto");
+        const plainForEnc: Record<string, unknown> = {};
+        if (expected === "valueText") plainForEnc.valueText = data.valueText;
+        else if (expected === "valueNumber") plainForEnc.valueNumber = data.valueNumber;
+        else if (expected === "valueDate")
+          plainForEnc.valueDate = data.valueDate ? data.valueDate.toISOString() : null;
+        else if (expected === "valueBoolean") plainForEnc.valueBoolean = data.valueBoolean;
+        else if (expected === "valueOptionId") plainForEnc.valueOptionId = data.valueOptionId;
+        else if (expected === "valueOptionIds") plainForEnc.valueOptionIds = data.valueOptionIds ?? [];
+        else if (expected === "valueLookupId") plainForEnc.valueLookupId = data.valueLookupId;
+        valueEnc = await envelopeEncrypt(tx, session.tenantId, JSON.stringify(plainForEnc));
+      }
+
       const payload = {
         tenantId: session.tenantId,
         fieldDefinitionId: def.id,
         targetType: def.scope,
         targetId: data.targetId,
-        valueText: expected === "valueText" ? (data.valueText ?? null) : null,
-        valueNumber:
-          expected === "valueNumber" && data.valueNumber != null
+        valueText: def.isPhi ? null : (expected === "valueText" ? (data.valueText ?? null) : null),
+        valueNumber: def.isPhi
+          ? null
+          : expected === "valueNumber" && data.valueNumber != null
             ? new Prisma.Decimal(data.valueNumber)
             : null,
-        valueDate: expected === "valueDate" ? (data.valueDate ?? null) : null,
-        valueBoolean: expected === "valueBoolean" ? (data.valueBoolean ?? null) : null,
-        valueOptionId: expected === "valueOptionId" ? (data.valueOptionId ?? null) : null,
-        valueOptionIds: expected === "valueOptionIds" ? (data.valueOptionIds ?? []) : [],
-        valueLookupId: expected === "valueLookupId" ? (data.valueLookupId ?? null) : null,
+        valueDate: def.isPhi ? null : (expected === "valueDate" ? (data.valueDate ?? null) : null),
+        valueBoolean: def.isPhi ? null : (expected === "valueBoolean" ? (data.valueBoolean ?? null) : null),
+        valueOptionId: def.isPhi ? null : (expected === "valueOptionId" ? (data.valueOptionId ?? null) : null),
+        valueOptionIds: def.isPhi ? [] : (expected === "valueOptionIds" ? (data.valueOptionIds ?? []) : []),
+        valueLookupId: def.isPhi ? null : (expected === "valueLookupId" ? (data.valueLookupId ?? null) : null),
+        valueEnc,
       };
 
       return tx.customFieldValue.upsert({
@@ -305,6 +336,7 @@ export async function upsertValue(input: UpsertValueInput) {
           valueOptionId: payload.valueOptionId,
           valueOptionIds: payload.valueOptionIds,
           valueLookupId: payload.valueLookupId,
+          valueEnc: payload.valueEnc,
         },
       });
     }
@@ -461,6 +493,9 @@ export type CustomFieldTargetRow = {
     type: CustomFieldType;
     isActive: boolean;
     isRequired: boolean;
+    // M20.3 — PHI marker surfaced to the UI so the sidebar can badge
+    // the field. Read-side masking happens in the value block below.
+    isPhi: boolean;
     position: number;
     // Available options for DD/MS (empty array for other types). The full
     // list is included so a value editor doesn't need a second round-trip.
@@ -481,6 +516,9 @@ export type CustomFieldTargetRow = {
     // target has been deleted from the wrapper — sidebar renders a fallback.
     valueLookupId: string | null;
     valueLookupLabel: string | null;
+    // M20.4 — true when this row's value was PHI-masked because the
+    // caller lacks `phiRead`. Sidebar renders "•••" in that case.
+    phiMasked?: boolean;
   } | null;
 };
 
@@ -530,6 +568,49 @@ export async function listValuesForTarget(
           : Promise.resolve(new Map<string, { name: string }>()),
       ]);
 
+      // M20.4 — PHI read gate. ADMIN+ inherits; other roles require
+      // the phiRead permission bit on their Role.permissions JSON.
+      // Load the caller's Role.permissions once and cache the decision.
+      const { canReadPhi } = await import("@/lib/compliance/phi");
+      const rolePermissions =
+        session.role === "ADMIN" || session.role === "SUPER_ADMIN"
+          ? { phiRead: true }
+          : await (async () => {
+              // Non-admin: consult wrapper Role.permissions. If we can't
+              // resolve the role, close by default (no PHI read).
+              const tm = await tx.$queryRawUnsafe<{ permissions: unknown }[]>(
+                `SELECT r."permissions" FROM team_members tm
+                   JOIN roles r ON r.id = tm."roleId"
+                  WHERE tm.id = $1 AND tm."tenantId" = $2 LIMIT 1`,
+                session.subjectId,
+                session.tenantId
+              );
+              return (tm[0]?.permissions ?? {}) as { phiRead?: boolean };
+            })();
+      const phiRead = canReadPhi(session, rolePermissions);
+
+      // Decrypt PHI-marked values eagerly for authorised callers so the
+      // rest of the render path stays synchronous. Non-authorised
+      // callers never see the ciphertext.
+      const { envelopeDecrypt } = await import("@/core/auth/envelope-crypto");
+      const decryptedByDefId = new Map<string, Record<string, unknown> | null>();
+      if (phiRead) {
+        await Promise.all(
+          defs
+            .filter((d) => d.isPhi && valueByDef.get(d.id)?.valueEnc)
+            .map(async (d) => {
+              const v = valueByDef.get(d.id)!;
+              const plain = v.valueEnc
+                ? await envelopeDecrypt(tx, session.tenantId, v.valueEnc)
+                : null;
+              decryptedByDefId.set(
+                d.id,
+                plain ? (JSON.parse(plain) as Record<string, unknown>) : null
+              );
+            })
+        );
+      }
+
       return defs
         .filter((d) => d.isActive || valueByDef.has(d.id))
         .map((d) => {
@@ -545,6 +626,38 @@ export async function listValuesForTarget(
               lookupLabel = o?.name ?? null;
             }
           }
+          // PHI read/mask.
+          let phiMasked = false;
+          let valueText = v?.valueText ?? null;
+          let valueNumber = v?.valueNumber ? v.valueNumber.toString() : null;
+          let valueDate = v?.valueDate ?? null;
+          let valueBoolean = v?.valueBoolean ?? null;
+          let valueOptionId = v?.valueOptionId ?? null;
+          let valueOptionIds = v?.valueOptionIds ?? [];
+          let valueLookupId = v?.valueLookupId ?? null;
+          if (v && d.isPhi) {
+            if (!phiRead) {
+              phiMasked = true;
+              valueText = null;
+              valueNumber = null;
+              valueDate = null;
+              valueBoolean = null;
+              valueOptionId = null;
+              valueOptionIds = [];
+              valueLookupId = null;
+            } else {
+              const p = decryptedByDefId.get(d.id) ?? null;
+              if (p) {
+                valueText = typeof p.valueText === "string" ? p.valueText : null;
+                valueNumber = typeof p.valueNumber === "number" ? String(p.valueNumber) : null;
+                valueDate = typeof p.valueDate === "string" ? new Date(p.valueDate) : null;
+                valueBoolean = typeof p.valueBoolean === "boolean" ? p.valueBoolean : null;
+                valueOptionId = typeof p.valueOptionId === "string" ? p.valueOptionId : null;
+                valueOptionIds = Array.isArray(p.valueOptionIds) ? (p.valueOptionIds as string[]) : [];
+                valueLookupId = typeof p.valueLookupId === "string" ? p.valueLookupId : null;
+              }
+            }
+          }
           return {
             definition: {
               id: d.id,
@@ -553,22 +666,24 @@ export async function listValuesForTarget(
               type: d.type,
               isActive: d.isActive,
               isRequired: d.isRequired,
+              isPhi: d.isPhi,
               position: d.position,
               options: d.options,
             },
             value: v
               ? {
-                  valueText: v.valueText,
-                  valueNumber: v.valueNumber ? v.valueNumber.toString() : null,
-                  valueDate: v.valueDate,
-                  valueBoolean: v.valueBoolean,
-                  valueOptionId: v.valueOptionId,
-                  valueOptionIds: v.valueOptionIds,
-                  valueOptionLabels: (v.valueOptionId ? [v.valueOptionId] : v.valueOptionIds)
+                  valueText,
+                  valueNumber,
+                  valueDate,
+                  valueBoolean,
+                  valueOptionId,
+                  valueOptionIds,
+                  valueOptionLabels: (valueOptionId ? [valueOptionId] : valueOptionIds)
                     .map((id) => optionLabelById.get(id))
                     .filter((l): l is string => Boolean(l)),
-                  valueLookupId: v.valueLookupId,
+                  valueLookupId,
                   valueLookupLabel: lookupLabel,
+                  phiMasked,
                 }
               : null,
           };

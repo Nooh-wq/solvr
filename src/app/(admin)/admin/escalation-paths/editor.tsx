@@ -28,14 +28,14 @@ const DEST_LABELS: Record<DestKind, string> = {
   TEAM: "Assign to team group",
   WEBHOOK: "Call webhook",
   EMAIL: "Send email",
-  INTEGRATION: "Marketplace integration (coming soon)",
+  INTEGRATION: "Marketplace integration",
 };
 
 const EXAMPLE_CONFIGS: Record<DestKind, string> = {
   TEAM: JSON.stringify({ groupId: "REPLACE_WITH_GROUP_ID", alsoSetPriority: "URGENT" }, null, 2),
   WEBHOOK: JSON.stringify({ url: "https://example.com/hooks/escalation", secret: "shared-secret" }, null, 2),
   EMAIL: JSON.stringify({ toEmails: ["ops@example.com"], subject: "Escalation" }, null, 2),
-  INTEGRATION: JSON.stringify({ kind: "jira" }, null, 2),
+  INTEGRATION: JSON.stringify({ integrationId: "REPLACE_WITH_INSTALLED_INTEGRATION_ID", note: "" }, null, 2),
 };
 
 export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
@@ -53,10 +53,6 @@ export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
   const selected = initialRows.find((r) => r.id === selectedId) ?? null;
 
   function onCreate() {
-    if (destKind === "INTEGRATION") {
-      toast({ title: "Not available", description: "Marketplace hasn't shipped yet.", variant: "error" });
-      return;
-    }
     try {
       const destConfig = JSON.parse(configText);
       const categoryIds = categoryIdsText
@@ -149,7 +145,7 @@ export function EscalationPathsEditor({ initialRows }: { initialRows: Row[] }) {
               }}
             >
               {(Object.keys(DEST_LABELS) as DestKind[]).map((k) => (
-                <option key={k} value={k} disabled={k === "INTEGRATION"}>
+                <option key={k} value={k}>
                   {DEST_LABELS[k]}
                 </option>
               ))}

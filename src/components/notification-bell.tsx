@@ -88,9 +88,14 @@ export function NotificationBell({
   }, [toast]);
 
   useEffect(() => {
-    poll();
+    // First poll is deferred a tick so the effect body itself never sets
+    // state synchronously (react-hooks/set-state-in-effect).
+    const first = setTimeout(poll, 0);
     const interval = setInterval(poll, POLL_MS);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
   }, [poll]);
 
   useEffect(() => {

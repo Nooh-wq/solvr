@@ -289,5 +289,34 @@ export async function requireSession(opts?: { minRole?: UserRole; tenantId?: str
   if (!user) throw new Error("UNAUTHENTICATED");
   if (opts?.tenantId && user.tenantId !== opts.tenantId) throw new Error("TENANT_MISMATCH");
   if (opts?.minRole && !roleAtLeast(user.role, opts.minRole)) throw new Error("FORBIDDEN");
+  // M20.1 — cross-region guard. Loads the tenant's residency and
+  // compares against APP_REGION; throws on mismatch (spec §3 "Do NOT
+  // cross-region a query"). No-op when APP_REGION is unset or "*".
+  await assertRequestResidency(user.tenantId);
   return user;
+}
+
+/**
+ * M20.1 residency check helper. Extracted so tests can drive it
+ * directly without spinning up a full session. Cached per tenant per
+ * request (React `cache`) so a page's ten `requireSession()` calls hit
+ * one DB read.
+ */
+const getTenantResidency = cache(async (tenantId: string): Promise<string | null> => {
+  try {
+    const { prisma } = await import("@/lib/db");
+    const row = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { residencyRegion: true },
+    });
+    return row?.residencyRegion ?? null;
+  } catch {
+    return null;
+  }
+});
+
+async function assertRequestResidency(tenantId: string): Promise<void> {
+  const residency = await getTenantResidency(tenantId);
+  const { assertResidency } = await import("@/lib/compliance/residency");
+  assertResidency(residency);
 }

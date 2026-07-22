@@ -6,6 +6,8 @@ import { ImpersonationBanner } from "./impersonation-banner";
 import { listPendingUsers } from "@/actions/admin";
 import { listPendingAccountDeletions } from "@/actions/accountDeletions";
 import { buildAdminNav } from "@/lib/admin-nav";
+import { CommandPalette } from "@/components/command-palette";
+import { MobileDesktopBanner } from "@/components/mobile-desktop-banner";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getSessionUser();
@@ -52,6 +54,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       banner={user.isImpersonating ? <ImpersonationBanner tenantName={tenant.name} /> : undefined}
     >
       <main className="mx-auto max-w-screen-2xl px-6 py-8">{children}</main>
+      <CommandPalette />
+      <MobileDesktopBanner />
     </Sidebar>
   );
 }
