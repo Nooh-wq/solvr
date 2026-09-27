@@ -543,3 +543,55 @@ begin
     execute format('create policy super_admin_write on %I for all using (app_current_role() = ''SUPER_ADMIN'') with check (app_current_role() = ''SUPER_ADMIN'');', t);
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- CI sweep (2026-09): the schema grew to 87 models while this file's
+-- enable-loop only covered 41 tables. scripts/qa_full_rls_audit.mjs — running
+-- in CI for the first time ever on this repo — caught 45 tenant-scoped tables
+-- with RLS NOT ENABLED at all: any query against them (through the app_runtime
+-- role, no less) returned every tenant's rows. No confirmed through-the-app
+-- leak was found (every app-layer query already filters by tenantId), but the
+-- RLS backstop AGENTS.md promises was simply missing for about half the
+-- schema. See the same precedent below (the 2026-07 api_keys/etc. sweep).
+do $$
+declare
+  t text;
+begin
+  for t in select unnest(array[
+    'account_deletion_requests','agent_profiles','auth_credentials',
+    'auto_assignment_logs','business_calendars','canned_responses',
+    'core_audit_logs','csat_queue','csat_settings',
+    'custom_field_definitions','custom_field_options','custom_field_values',
+    'data_export_requests','digest_queue','end_user_lifecycle',
+    'end_user_organizations','end_users','escalation_logs','escalation_paths',
+    'groups','login_activity','macros','notification_preferences',
+    'organization_settings','organizations','roles','rule_run_logs','rules',
+    'saved_reports','saved_views','sla_policies','subject_avatars',
+    'subject_preferences','tag_assignments','tags','team_member_groups',
+    'team_member_lifecycle','team_members','ticket_daily_rollups',
+    'ticket_form_categories','ticket_form_fields','ticket_forms',
+    'ticket_slas','ticket_views','user_sessions'
+  ])
+  loop
+    execute format('alter table %I enable row level security;', t);
+    execute format('alter table %I force row level security;', t);
+    execute format('drop policy if exists tenant_isolation on %I;', t);
+    execute format('create policy tenant_isolation on %I using ("tenantId" = app_current_tenant_id());', t);
+  end loop;
+end $$;
+
+-- end_users / team_members: listTenantsWithHealth() (src/actions/super.ts)
+-- deliberately runs tx.endUser.groupBy({ by: ["tenantId"] }) and the same for
+-- teamMember, under a SUPER_ADMIN session, to build the cross-tenant user
+-- counts on the super-admin health dashboard — the comment there ("Z1.5b")
+-- already assumed a policy like this would exist. Without it, enabling plain
+-- tenant_isolation above would silently break that dashboard's user counts
+-- (each groupBy would only see the host tenant's own users) rather than fail
+-- loudly, so it's called out explicitly here rather than left to be
+-- rediscovered. Read-only, same shape as tickets' super_admin_read below.
+drop policy if exists super_admin_read on end_users;
+create policy super_admin_read on end_users
+  for select using (app_current_role() = 'SUPER_ADMIN');
+drop policy if exists super_admin_read on team_members;
+create policy super_admin_read on team_members
+  for select using (app_current_role() = 'SUPER_ADMIN');
