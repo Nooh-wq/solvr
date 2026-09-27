@@ -91,4 +91,9 @@ jobs:
         run: node --env-file=.env scripts/qa_full_rls_audit.mjs
 
       - name: Test suite
-        run: node --env-file=.env --import tsx --test "src/**/*.test.ts"
+        # GitHub Actions' default bash doesn't expand ** (needs `globstar`),
+        # so without this the glob is passed to Node literally and it
+        # reports the (nonexistent) literal path as "not found".
+        run: |
+          shopt -s globstar
+          node --env-file=.env --import tsx --test src/**/*.test.ts
