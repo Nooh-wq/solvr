@@ -544,3 +544,80 @@ Expected size: ~15 lines removed.
 3. If old-shape decodes are >1%: extend contingency, re-file removal for day 14.
 
 **Post-removal.** Delete this §7.15 entry from the boundary doc in the same follow-up commit. The item's job is done.
+
+### 7.16 Purpose-claim casing inconsistency: `analytics_share` uses underscore
+
+**Filed during B3 (core-auth tokens.ts port)** to make the inconsistency deliberate rather than an accident of history.
+
+**What.** Every JWT this codebase mints carries a `purpose` claim. Nine of the ten values use kebab-case (`session`, `password-reset`, `email-change`, `data-export`, `invite`, `otp-verify`, `tenant-signup`, `csat`, plus the coming `impersonation`). One — `analytics_share` — uses snake_case. See `src/lib/session.ts:540` for the wire-format origin (M13 gap 2 read-only share tokens) and `src/core/auth/types.ts::TokenPurpose` for the union that mirrors it.
+
+**Why preserved.** `analytics_share` links are signed with a 30-day TTL and land in customer inboxes as clickable URLs. Renaming the claim from `analytics_share` to `analytics-share` would silently invalidate every share link already delivered — the verifier's `purpose !== "analytics-share"` check would reject the old claim value. Normalising is a token-rotation exercise (issue-a-warning-then-swap-then-drop the old claim), not a types change.
+
+**Not doing now.** No rotation exercise scheduled. Cosmetic inconsistency accepted.
+
+**When to revisit.** If any future work touches share-link issuance for another reason (e.g., adding revocation state, scoping share tokens to a specific viewer email), fold the rename into that same rotation. Until then, `analytics_share` stays.
+
+**Post-normalisation.** Delete this §7.16 entry. Its job is done.
+
+### 7.17 Impersonation-verify grace period (B6.1)
+
+**Filed during B6.1 (session.ts → core migration)** to make the impersonation-claim rotation window deliberate and time-bounded.
+
+**What.** B6.1 replaces Support's internal `signImpersonationToken` (never set a `purpose` claim) with `signPurposeToken("impersonation", …)` from core (always sets the claim). The verifier in `getImpersonationPayload` is temporarily loosened via a Support-local `verifyImpersonationTokenGrace` wrapper that accepts **both** `purpose === undefined` (legacy tokens still in flight) **and** `purpose === "impersonation"` (post-B6.1 tokens). Alg allow-list (`["HS256"]`) and every other verify check remains strict.
+
+**Why grace, not straight swap.** Impersonation TTL is 1 hour. A straight swap would immediately invalidate every legacy impersonation cookie at deploy time — a Super Admin mid-way through investigating a live P0 ticket would get silently kicked out. Grace-period pattern mirrors §7.15's Z1.8a session-cookie dual-shape decode: a pattern the codebase already understands.
+
+**Removal target.** **Deploy timestamp + 24 hours** (24× the 1-hour token TTL, no in-flight legacy tokens possible). One-file follow-up commit tightens the wrapper to `purpose === "impersonation"` only, and — for symmetry with the B3 verifier surface — the follow-up can just delete `verifyImpersonationTokenGrace` and call `verifyPurposeToken(t, "impersonation")` from core directly.
+
+Expected follow-up commit size: ~5 lines removed. Same size-and-shape as the §7.15 removal.
+
+**Day-1 contingency.** If deploy is rolled back (any reason) inside the 24-hour window, reset the removal clock to the redeploy timestamp + 24 hours.
+
+**Post-removal.** Delete this §7.17 entry from the boundary doc in the same follow-up commit.
+
+### 7.18 Test-infrastructure helper: withAppPrisma (B4 follow-up)
+
+**Filed during B4** ([adapter.ts](../src/core/auth/adapter.ts) tests) to make the flag durable rather than let it slip.
+
+**What.** The live-Postgres round-trip tests in B4 (and the QA Phase 2/3 scripts) all duplicate the same setup pattern:
+
+```ts
+const url = process.env.APP_DIRECT_URL || process.env.APP_DATABASE_URL;
+const p = new PrismaClient({ datasources: { db: { url } } });
+try {
+  // …test work…
+} finally {
+  await p.$disconnect();
+}
+```
+
+Four files today: `scripts/qa_phase2_behavior.mjs`, `scripts/qa_phase2_probes.mjs`, `scripts/qa_phase3_integration.mjs`, `src/core/auth/adapter.test.ts`. Each will grow more callsites as the core/ migration proceeds.
+
+**Not doing now.** Extracting to `src/test-utils/withAppPrisma.ts` is straightforward but sits outside every current chunk's scope (Z-post/core-auth). Doing it inline in one of those chunks would muddle the diff.
+
+**When to revisit.** After M7's cross-repo integration testing needs stabilise — the helper's shape should be informed by whether Support's platform side wants to consume it (via workspace-relative import) or write its own. Speculative extraction now would likely need to be redone.
+
+**QA-seed extension (filed during B7.2 wrap-up).** `scripts/qa_seed_tenant.mjs` currently seeds wrapper `EndUser` / `TeamMember` rows but does **not** seed `AuthCredential` rows for them. B7.2's live-app verification for the password-reset flow hit this gap: no seeded user is loggable, so end-to-end reset/verify against a real user was skipped in favour of unit-level round-trips. Future F-5 test-hardening passes for `src/lib/auth.ts` (central session resolver) and `src/actions/super.ts` (impersonation) will hit the same gap — both require a real logged-in session to exercise meaningfully. Extend the QA seed to include bcrypt-hashed `AuthCredential` rows for at least one seeded `TeamMember` and one seeded `EndUser`, then the F-5 test-hardening work becomes tractable. Bundle into the `withAppPrisma` helper design if the shape converges naturally.
+
+**Post-extraction.** Delete this §7.18 entry.
+
+### 7.19 M-core-extraction — extract `src/core/*` to Shared Platform
+
+**Filed during B7.1 wrap-up** when it was clarified that the entire `src/core/auth` + `src/core/rbac` build (B1 through B7.1) landed in Support's working tree rather than in Shared Platform's — the intended long-term home. Not reverting: the code is correct as-is; only the location is transitional. This entry names the future extraction so the reasoning is durable, not implicit.
+
+**What.** Move `src/core/*` (currently `auth/*` and `rbac/*`; ~1000 LOC across ~10 files including tests) out of the Support repo and into Shared Platform as a first-class package. Callers in Support (13 files migrating through B7.1–B7.5) swap their `@/core/auth/*` import path for whatever the extracted package's public surface ends up being.
+
+**Trigger.** When HRMS or CRM planning begins consuming these services. Neither app exists yet; conservative estimate is 6–12 months out. Support consumes core in the meantime without any special ceremony.
+
+**Extraction-invariant** (enforced today, so extraction stays cheap): `src/core/*` MUST NOT import from `src/lib/*` or `src/app/*`. Enforced by ESLint (`no-restricted-imports` under `src/core/**` in `eslint.config.mjs`) and by review discipline (AGENTS.md "src/core/* is an extraction candidate — hard import rule"). Same shape as ADR-004's reference-model read-only rule.
+
+**Design questions to resolve at extraction time** — deliberately not decided now:
+
+- **Package structure.** Single `@stralis/core` package with sub-paths (`@stralis/core/auth`, `@stralis/core/rbac`)? Or one package per subsystem? Sub-paths keep the boundary tight without inflating the package count.
+- **Consumption pattern.** npm workspace inside a Shared Platform monorepo? Published to a private registry consumed by Support/HRMS/CRM separately? HTTP client wrapping a hosted core-auth service? Each shape has different implications for cross-app secret rotation and version drift.
+- **Migration coordination with Support's live tenants.** `SESSION_SECRET` is the seam — any change to how it's read or where it lives has to preserve every in-flight session cookie. §7.15's grace-period pattern is the reference precedent.
+- **What comes with core, what stays** — some current core-adjacent code (`src/lib/session.ts`'s Support-owned cookie R/W layer per B6.0's Category B/C) explicitly does NOT extract. Extraction plan needs to name every file that DOES and every file that DOESN'T, with reasoning.
+
+**Not scoping now.** No design pass, no tranching, no follow-up commits until the trigger fires.
+
+**Post-extraction.** Delete this §7.19 entry. Delete or refactor AGENTS.md's core-extraction section (rule becomes moot once core lives in its own package). Update ESLint config to remove the now-redundant restriction rule.

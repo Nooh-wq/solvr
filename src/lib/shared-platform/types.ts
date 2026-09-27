@@ -13,7 +13,11 @@
 // ---- Enum mirrors ----
 
 export type TicketAccessScope = "ALL" | "GROUPS" | "ASSIGNED_ONLY";
-export type TagTargetType = "END_USER" | "TEAM_MEMBER" | "ORGANIZATION";
+// Z8 widened the DB enum to include TICKET so `add_tag` rule
+// actions can tag ticket rows. The wrapper's type mirror needs to
+// track that — otherwise every TICKET-scoped row round-trips
+// through toAssignmentDto and gets rejected.
+export type TagTargetType = "END_USER" | "TEAM_MEMBER" | "ORGANIZATION" | "TICKET";
 export type AuditActorType = "TEAM_MEMBER" | "SYSTEM";
 
 // ---- Resource DTOs ----

@@ -268,6 +268,12 @@ async function assertTargetExists(
     case "ORGANIZATION":
       exists = !!(await tx.organization.findFirst({ where: { id: target.id, tenantId } }));
       break;
+    // Z8 added TICKET so add_tag rule actions can attach tags to
+    // tickets. Tickets are Support-owned but visible on the shared
+    // Prisma client because the schemas mirror into one database.
+    case "TICKET":
+      exists = !!(await tx.ticket.findFirst({ where: { id: target.id, tenantId } }));
+      break;
   }
   if (!exists) throw new WrapperNotFoundError(resourceForTargetType(target.type), target.id);
 }
@@ -280,6 +286,8 @@ function resourceForTargetType(t: TagTargetType): string {
       return "TeamMember";
     case "ORGANIZATION":
       return "Organization";
+    case "TICKET":
+      return "Ticket";
   }
 }
 
@@ -305,7 +313,11 @@ function toAssignmentDto(row: {
   id: string;
   tenantId: string;
   tagId: string;
-  targetType: "END_USER" | "TEAM_MEMBER" | "ORGANIZATION";
+  // TagTargetType widened in Z8 to include TICKET so `add_tag` rule
+  // actions can attach tags to ticket rows. The DTO surface has to
+  // widen with it — narrowing here silently rejected TICKET-scoped
+  // rows.
+  targetType: TagTargetType;
   targetId: string;
   createdAt: Date;
 }): TagAssignment {

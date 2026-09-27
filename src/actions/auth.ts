@@ -5,15 +5,18 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { withRls } from "@/lib/db";
+// B7.2: cookie R/W stays on Support (createSessionCookie /
+// destroySessionCookie are Category B/C — cookie halves owned by
+// Support until §7.19 cross-app cookie domain resolves).
+// Token sign/verify goes through @/core/auth/tokens generic surface.
+import { createSessionCookie, destroySessionCookie } from "@/lib/session";
+import { signPurposeToken, verifyPurposeToken } from "@/core/auth/tokens";
 import {
-  createSessionCookie,
-  destroySessionCookie,
-  signPasswordResetToken,
-  verifyPasswordResetToken,
-  verifyInviteToken,
-  signOtpSessionToken,
-  verifyOtpSessionToken,
-} from "@/lib/session";
+  verifyMfaCode,
+  issueMfaChallengeToken,
+  verifyMfaChallengeToken,
+  confirmForcedTotpEnrollment,
+} from "@/actions/mfa";
 import { getCurrentTenant } from "@/lib/current-tenant";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
 import { passwordSchema } from "@/lib/validation/password";
@@ -131,7 +134,7 @@ export async function registerClient(input: z.infer<typeof registerSchema>): Pro
   });
 
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-  const otpToken = await signOtpSessionToken({ userId: result.userId, tenantId: tenant.id });
+  const otpToken = await signPurposeToken("otp-verify", { userId: result.userId, tenantId: tenant.id });
   return { ok: true, otpToken };
 }
 
@@ -152,7 +155,7 @@ export async function verifyRegistrationOtp(input: z.infer<typeof verifyOtpSchem
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
   const data = parsed.data;
 
-  const payload = await verifyOtpSessionToken(data.otpToken);
+  const payload = await verifyPurposeToken(data.otpToken, "otp-verify");
   if (!payload) return { error: "This verification session has expired — please register again." };
 
   const rateLimit = await checkRateLimitWithIp(`register-otp-verify:${payload.userId}`, 8, 15, 60_000);
@@ -324,6 +327,11 @@ export async function login(input: z.infer<typeof loginSchema>) {
       where: isStaff
         ? { tenantId: tenant.id, subjectTeamMemberId: subjectId }
         : { tenantId: tenant.id, subjectEndUserId: subjectId },
+      select: {
+        passwordHash: true,
+        mfaEnabledAt: true,
+        isBreakGlass: true,
+      },
     });
     const lifecycle = isStaff
       ? await tx.teamMemberLifecycle.findUnique({ where: { subjectId } })
@@ -341,6 +349,17 @@ export async function login(input: z.infer<typeof loginSchema>) {
   const valid = await bcrypt.compare(data.password, lookup?.creds?.passwordHash ?? DUMMY_PASSWORD_HASH);
   if (!lookup || !lookup.creds || !valid) return { error: "Invalid email or password." };
 
+  // M6.4 — tenant-wide SSO enforcement. When enforceSso is on, ONLY
+  // break-glass Super Admins can sign in via email/password. Every
+  // other credential-holder must go through SAML/OIDC. The gate must
+  // sit AFTER password verify so we don't leak "SSO is enforced" as an
+  // enumeration signal on invalid passwords.
+  if (tenant.enforceSso && !lookup.creds.isBreakGlass) {
+    return {
+      error: "This workspace requires SSO. Sign in with your organization's identity provider.",
+    };
+  }
+
   const status = lookup.lifecycle?.status;
   if (!status) return { error: "This account is not yet ready — please contact support." };
 
@@ -352,6 +371,34 @@ export async function login(input: z.infer<typeof loginSchema>) {
 
   const role = lookup.isStaff ? wrapperRoleNameToUserRole(lookup.roleName!) : "CLIENT";
   const subjectKind = lookup.isStaff ? "TEAM_MEMBER" : "END_USER";
+
+  // M6.1 — if 2FA is enabled, don't mint a session yet. Issue a
+  // short-lived (5min) MFA challenge token instead; the client swaps to
+  // the code prompt and calls completeMfaLogin(). A stolen challenge
+  // token has no session authority on its own — it only proves the
+  // password was checked, and expires in 5 minutes.
+  if (lookup.creds.mfaEnabledAt) {
+    const challengeToken = await issueMfaChallengeToken({
+      subjectId: lookup.subjectId,
+      subjectKind,
+      tenantId: tenant.id,
+    });
+    return { requiresMfa: true as const, challengeToken };
+  }
+
+  // M6.1.b — tenant-wide MFA enforcement. If the tenant has enforceMfa
+  // and the user has never enrolled, route them into forced enrollment
+  // instead of issuing a session. The 15-min enrollment token is what
+  // authenticates the anonymous enrollment surface (`/auth/enroll-2fa`).
+  if (tenant.enforceMfa) {
+    const enrollmentToken = await signPurposeToken("mfa-enrollment", {
+      subjectId: lookup.subjectId,
+      subjectKind,
+      tenantId: tenant.id,
+    });
+    return { requiresEnrollment: true as const, enrollmentToken };
+  }
+
   const sessionId = await createUserSession({
     subjectId: lookup.subjectId,
     subjectKind,
@@ -427,7 +474,7 @@ export async function requestPasswordReset(input: z.infer<typeof resetSchema>): 
   });
 
   if (subject && isActive) {
-    const token = await signPasswordResetToken({ userId: subject.id, tenantId: tenant.id });
+    const token = await signPurposeToken("password-reset", { userId: subject.id, tenantId: tenant.id });
     const resetUrl = `${siteUrl()}/auth/reset/confirm?token=${encodeURIComponent(token)}`;
     await sendPasswordResetEmail(subject.email, resetUrl, branding);
   }
@@ -453,7 +500,7 @@ export async function confirmPasswordReset(
   const rateLimit = await checkRateLimitWithIp(`reset-confirm:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
 
-  const payload = await verifyPasswordResetToken(data.token);
+  const payload = await verifyPurposeToken(data.token, "password-reset");
   if (!payload) return { error: "This reset link is invalid or has expired." };
 
   type TxResult = { failed: true; message: string } | { failed: false; role: "CLIENT" | "AGENT" | "ADMIN" | "SUPER_ADMIN"; isStaff: boolean };
@@ -544,7 +591,7 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
   const rateLimit = await checkRateLimitWithIp(`invite-accept:${data.token.slice(0, 16)}`, 10, 20, 60_000);
   if (!rateLimit.allowed) return { error: "Too many attempts. Try again shortly." };
 
-  const payload = await verifyInviteToken(data.token);
+  const payload = await verifyPurposeToken(data.token, "invite");
   if (!payload) return { error: "This invite link is invalid or has expired." };
 
   type TxResult =
@@ -610,7 +657,7 @@ export async function acceptInvite(input: z.infer<typeof acceptInviteSchema>): P
   if (result.failed) return { error: result.message };
 
   await sendLoginOtpEmail(result.email, result.code, result.branding);
-  const otpToken = await signOtpSessionToken({ userId: payload.userId, tenantId: payload.tenantId });
+  const otpToken = await signPurposeToken("otp-verify", { userId: payload.userId, tenantId: payload.tenantId });
   return { ok: true, otpToken };
 }
 
@@ -619,7 +666,7 @@ type VerifyOtpResult = { error: string } | { ok: true; redirectTo: string };
 export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Promise<VerifyOtpResult> {
   const data = verifyOtpSchema.parse(input);
 
-  const payload = await verifyOtpSessionToken(data.otpToken);
+  const payload = await verifyPurposeToken(data.otpToken, "otp-verify");
   if (!payload) return { error: "This verification session has expired — please start over." };
 
   const rateLimit = await checkRateLimitWithIp(`otp-verify:${payload.userId}`, 8, 15, 60_000);
@@ -682,4 +729,185 @@ export async function verifyLoginOtp(input: z.infer<typeof verifyOtpSchema>): Pr
     subjectKind,
   });
   return { ok: true, redirectTo: REDIRECT_BY_ROLE[result.role] };
+}
+
+// ---------------------------------------------------------------------------
+// M6.1 — MFA challenge-completion step
+// ---------------------------------------------------------------------------
+
+const completeMfaSchema = z.object({
+  challengeToken: z.string().min(1),
+  code: z.string().min(6).max(11), // 6 for TOTP, 11 for xxxxx-xxxxx backup
+});
+
+/**
+ * Step 2 of the split login flow (M6.1). Verifies the challenge token,
+ * verifies the TOTP or backup code, and only then creates the session
+ * cookie + records login activity. Rate-limited independently of the
+ * password step so a stolen challenge token can't brute-force TOTP at
+ * unbounded rate.
+ */
+export async function completeMfaLogin(
+  input: z.infer<typeof completeMfaSchema>
+) {
+  const parsed = completeMfaSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid code." };
+  const data = parsed.data;
+
+  const payload = await verifyMfaChallengeToken(data.challengeToken);
+  if (!payload) return { error: "This sign-in session has expired. Start over." };
+
+  const rateLimit = await checkRateLimitWithIp(
+    `mfa-verify:${payload.tenantId}:${payload.subjectId}`,
+    8,
+    15,
+    60_000
+  );
+  if (!rateLimit.allowed) {
+    return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
+  }
+
+  // Re-resolve identity + role from the current DB state — the token
+  // only carries subjectId/kind, so role has to come from the wrapper
+  // read. Also catches the "deprovisioned mid-challenge" case: if the
+  // account has been deactivated in the 5-min window, the login fails
+  // clean instead of silently landing a session.
+  const lookup = await withRls({ tenantId: payload.tenantId, userId: null }, async (tx) => {
+    if (payload.subjectKind === "TEAM_MEMBER") {
+      const tm = await tx.teamMember.findFirst({
+        where: { id: payload.subjectId, tenantId: payload.tenantId },
+        include: { role: { select: { name: true } } },
+      });
+      const lifecycle = await tx.teamMemberLifecycle.findUnique({
+        where: { subjectId: payload.subjectId },
+      });
+      return { tm, endUser: null, lifecycle };
+    }
+    const endUser = await tx.endUser.findFirst({
+      where: { id: payload.subjectId, tenantId: payload.tenantId },
+    });
+    const lifecycle = await tx.endUserLifecycle.findUnique({
+      where: { subjectId: payload.subjectId },
+    });
+    return { tm: null, endUser, lifecycle };
+  });
+
+  const email = lookup.tm?.email ?? lookup.endUser?.email;
+  if (!email) return { error: "This sign-in session is no longer valid." };
+  if (lookup.lifecycle?.status !== "ACTIVE") {
+    return { error: "This account is no longer active." };
+  }
+
+  const ok = await verifyMfaCode({
+    subjectId: payload.subjectId,
+    subjectKind: payload.subjectKind,
+    tenantId: payload.tenantId,
+    email,
+    code: data.code,
+  });
+  if (!ok) return { error: "Incorrect code." };
+
+  const role = lookup.tm ? wrapperRoleNameToUserRole(lookup.tm.role.name) : "CLIENT";
+  const sessionId = await createUserSession({
+    subjectId: payload.subjectId,
+    subjectKind: payload.subjectKind,
+    tenantId: payload.tenantId,
+  });
+  await createSessionCookie({
+    subjectId: payload.subjectId,
+    subjectKind: payload.subjectKind,
+    tenantId: payload.tenantId,
+    sessionId,
+  });
+  await recordLoginActivity({
+    tenantId: payload.tenantId,
+    subjectId: payload.subjectId,
+    subjectKind: payload.subjectKind,
+  });
+  const saved = await withRls(
+    { tenantId: payload.tenantId, userId: payload.subjectId, role: "SUPER_ADMIN" },
+    (tx) =>
+      tx.subjectPreference.findUnique({
+        where: { subjectId: payload.subjectId },
+        select: { defaultLanding: true },
+      })
+  );
+  return { ok: true as const, redirectTo: resolvePostAuthLanding(role, saved?.defaultLanding ?? null) };
+}
+
+// ---------------------------------------------------------------------------
+// M6.1.b — forced-enrollment completion → session
+// ---------------------------------------------------------------------------
+
+const completeForcedEnrollSchema = z.object({
+  enrollmentToken: z.string().min(1),
+  code: z.string().min(6).max(8),
+});
+
+/**
+ * Called by the forced-enrollment UI after the user has scanned the QR
+ * and typed a valid TOTP code. Delegates the actual enrollment write to
+ * actions/mfa.confirmForcedTotpEnrollment (which validates the token +
+ * code and sets mfaEnabledAt), then mints the session cookie so the
+ * user lands signed in.
+ */
+export async function completeForcedEnrollment(
+  input: z.infer<typeof completeForcedEnrollSchema>
+) {
+  const parsed = completeForcedEnrollSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid code." };
+
+  const rateLimit = await checkRateLimitWithIp(
+    `mfa-enroll:${parsed.data.enrollmentToken.slice(0, 16)}`,
+    8,
+    15,
+    60_000
+  );
+  if (!rateLimit.allowed) {
+    return { error: `Too many attempts. Try again in ${Math.ceil(rateLimit.retryAfterMs / 1000)}s.` };
+  }
+
+  const enrolled = await confirmForcedTotpEnrollment(parsed.data);
+  if (!enrolled.ok) return { error: enrolled.error };
+
+  // Re-resolve role from wrapper — same defense-in-depth as
+  // completeMfaLogin (deprovisioned mid-enrollment must fail clean).
+  const lookup = await withRls({ tenantId: enrolled.tenantId, userId: null }, async (tx) => {
+    if (enrolled.subjectKind === "TEAM_MEMBER") {
+      const tm = await tx.teamMember.findFirst({
+        where: { id: enrolled.subjectId, tenantId: enrolled.tenantId },
+        include: { role: { select: { name: true } } },
+      });
+      const lifecycle = await tx.teamMemberLifecycle.findUnique({
+        where: { subjectId: enrolled.subjectId },
+      });
+      return { tm, lifecycle };
+    }
+    const lifecycle = await tx.endUserLifecycle.findUnique({
+      where: { subjectId: enrolled.subjectId },
+    });
+    return { tm: null, lifecycle };
+  });
+  if (lookup.lifecycle?.status !== "ACTIVE") {
+    return { error: "This account is no longer active." };
+  }
+
+  const role = lookup.tm ? wrapperRoleNameToUserRole(lookup.tm.role.name) : "CLIENT";
+  const sessionId = await createUserSession({
+    subjectId: enrolled.subjectId,
+    subjectKind: enrolled.subjectKind,
+    tenantId: enrolled.tenantId,
+  });
+  await createSessionCookie({
+    subjectId: enrolled.subjectId,
+    subjectKind: enrolled.subjectKind,
+    tenantId: enrolled.tenantId,
+    sessionId,
+  });
+  await recordLoginActivity({
+    tenantId: enrolled.tenantId,
+    subjectId: enrolled.subjectId,
+    subjectKind: enrolled.subjectKind,
+  });
+  return { ok: true as const, redirectTo: REDIRECT_BY_ROLE[role] };
 }

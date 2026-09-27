@@ -105,6 +105,15 @@ export default async function OrganizationDetailPage({
             <div className="mt-1 text-[11px]">
               Created {org.createdAt.toLocaleDateString()}
             </div>
+            {/* M13.8 — per-organization dashboard is the analytics page scoped
+                by organizationId. Widgets stay in one place; the URL param does
+                the scoping. */}
+            <Link
+              href={`/admin/analytics?organizationId=${org.id}`}
+              className="inline-block mt-2 text-[11px] font-medium text-[var(--color-primary)] hover:underline"
+            >
+              Open analytics dashboard →
+            </Link>
           </div>
           <OrgActionsMenu organizationId={org.id} organizationName={org.name} />
         </div>

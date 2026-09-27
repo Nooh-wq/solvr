@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import { ADMIN_URL_REDIRECTS } from "./src/lib/admin-url-map";
 
 // Supabase Storage origin (public bucket for logos/avatars) needs to be an
 // allowed image source under the CSP below. Derived from the same env var the
@@ -74,6 +75,16 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
+  },
+  // M-admin — legacy admin URL redirects. The list itself lives in
+  // src/lib/admin-url-map.ts so tests and audits can read it without
+  // touching this config file.
+  async redirects() {
+    return ADMIN_URL_REDIRECTS.map((r) => ({
+      source: r.source,
+      destination: r.destination,
+      permanent: r.permanent,
+    }));
   },
 };
 

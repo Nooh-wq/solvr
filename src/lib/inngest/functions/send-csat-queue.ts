@@ -1,6 +1,6 @@
 import { inngest } from "../client";
 import { prisma, withRls } from "@/lib/db";
-import { signCsatToken } from "@/lib/session";
+import { signPurposeToken } from "@/core/auth/tokens";
 import { sendCsatRequestEmail } from "@/lib/email/events";
 import { getEmailDecision } from "@/lib/notification-prefs";
 
@@ -89,7 +89,7 @@ export const sendCsatQueue = inngest.createFunction(
               }
             );
 
-            const token = await signCsatToken({
+            const token = await signPurposeToken("csat", {
               ticketId: row.ticketId,
               tenantId: tenant.id,
             });

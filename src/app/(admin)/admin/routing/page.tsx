@@ -64,7 +64,7 @@ export default async function RoutingPage() {
       <div>
         <h1 className="text-2xl font-semibold text-[var(--foreground)]">Routing</h1>
         <p className="mt-2 text-[13px] text-[var(--color-neutral-600)] max-w-2xl">
-          Snapshot of every group's agents — skills, capacity, current
+          Snapshot of every group&apos;s agents — skills, capacity, current
           load, and availability. Auto-routing (Escalation Paths + rule
           actions) picks from this pool using round-robin, load-based, or
           skills-based strategies. Configure per-agent details on their{" "}

@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { withRls } from "@/lib/db";
+import { emitClassifyEvent } from "@/lib/ai/emit-classify";
 import { requireSession } from "@/lib/auth";
 import { createGuestToken, parseGuestToken } from "@/lib/guest-access";
 import { sendTicketGuestInviteEmail, sendClientReplyNotification } from "@/lib/email/events";
@@ -325,7 +326,7 @@ export async function postGuestReply(
   const guest = await resolveGuestSession(data.token);
   if (!guest) return { ok: false, error: "This link is no longer valid." };
 
-  const { ticket, assignedAgent, branding } = await withRls(
+  const { ticket, assignedAgent, branding, messageId } = await withRls(
     { tenantId: guest.tenantId, userId: null, role: "GUEST", guestTicketId: guest.ticketId },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: guest.ticketId } });
@@ -362,9 +363,12 @@ export async function postGuestReply(
         });
       }
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: guest.tenantId } });
-      return { ticket, assignedAgent, branding };
+      return { ticket, assignedAgent, branding, messageId: message.id };
     }
   );
+
+  // M9 — fire classification for the guest reply (inbound customer signal).
+  await emitClassifyEvent(guest.tenantId, messageId);
 
   if (assignedAgent) {
     const decision = await getEmailDecision(guest.tenantId, assignedAgent.id, "ticketReply");

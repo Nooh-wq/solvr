@@ -7,6 +7,15 @@ import { buildDataExport } from "@/lib/inngest/functions/build-data-export";
 import { runScheduledAutomations } from "@/lib/inngest/functions/run-automations";
 import { emitSlaEvents } from "@/lib/inngest/functions/emit-sla-events";
 import { sendCsatQueue } from "@/lib/inngest/functions/send-csat-queue";
+import { buildTicketRollup } from "@/lib/inngest/functions/build-ticket-rollup";
+import { sendReportSchedules } from "@/lib/inngest/functions/send-report-schedules";
+import { deliverWebhook } from "@/lib/inngest/functions/deliver-webhook";
+import { classifyMessageFn } from "@/lib/inngest/functions/classify-message";
+import { clusterKbSuggestions } from "@/lib/inngest/functions/cluster-kb-suggestions";
+import { scoreReplyFn } from "@/lib/inngest/functions/score-reply";
+import { expireApprovals } from "@/lib/inngest/functions/expire-approvals";
+import { sweepAgentPresence } from "@/lib/inngest/functions/sweep-agent-presence";
+import { sweepRetention } from "@/lib/inngest/functions/sweep-retention";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -18,5 +27,14 @@ export const { GET, POST, PUT } = serve({
     runScheduledAutomations,
     emitSlaEvents,
     sendCsatQueue,
+    buildTicketRollup,
+    sendReportSchedules,
+    deliverWebhook,
+    classifyMessageFn,
+    clusterKbSuggestions,
+    scoreReplyFn,
+    expireApprovals,
+    sweepAgentPresence,
+    sweepRetention,
   ],
 });

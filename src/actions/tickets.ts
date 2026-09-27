@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import geoip from "geoip-lite";
+import { emitClassifyEvent } from "@/lib/ai/emit-classify";
 import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { getClientIp } from "@/lib/rate-limit";
@@ -31,7 +32,6 @@ import {
   type EmailEventKey,
 } from "@/lib/notification-prefs";
 import { getAttachmentSignedUrl } from "@/lib/storage";
-import { signCsatToken } from "@/lib/session";
 import {
   dualFkForUser,
   ticketClientCols,
@@ -620,7 +620,7 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
   const session = await requireSession();
   const data = replySchema.parse(input);
 
-  const { ticket, assignedAgent, branding } = await withRls(
+  const { ticket, assignedAgent, branding, messageId } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({
@@ -682,9 +682,12 @@ export async function postClientReply(input: z.infer<typeof replySchema>) {
         });
       }
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { ticket: updatedTicket, assignedAgent, branding };
+      return { ticket: updatedTicket, assignedAgent, branding, messageId: message.id };
     }
   );
+
+  // M9 — classify inbound client message asynchronously.
+  await emitClassifyEvent(session.tenantId, messageId);
 
   if (assignedAgent) {
     const decision = await getEmailDecision(session.tenantId, assignedAgent.id, "ticketReply");
@@ -736,7 +739,7 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
     throw new Error("LIGHT_AGENT_NO_PUBLIC_REPLY");
   }
 
-  const { ticket, client, branding } = await withRls(
+  const { ticket, client, branding, messageId } = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {
       const ticket = await tx.ticket.findFirst({ where: { id: data.ticketId, tenantId: session.tenantId } });
@@ -793,9 +796,21 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
         });
       }
       const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
-      return { ticket, client, branding };
+      return { ticket, client, branding, messageId: message.id };
     }
   );
+
+  // M11 — non-blocking QA scoring on public replies only (spec §3:
+  // don't run QA on internal notes). Fire-and-forget; queue outage is
+  // never fatal to the reply.
+  if (!data.isInternal) {
+    try {
+      const { emitScoreReplyEvent } = await import("@/lib/ai/emit-score");
+      await emitScoreReplyEvent(session.tenantId, messageId);
+    } catch {
+      // Non-fatal.
+    }
+  }
 
   if (!data.isInternal) {
     const decision = await getEmailDecision(session.tenantId, client.id, "ticketReply");
@@ -845,6 +860,28 @@ export async function postAgentReply(input: z.infer<typeof agentReplySchema>) {
       });
     } catch {
       // Non-fatal.
+    }
+  }
+
+  // M12 — omnichannel outbound. When the ticket's source is a
+  // registered channel (SMS/WhatsApp/Messenger/Instagram), fan the
+  // reply body back out through the connector. Fire-and-forget: never
+  // fails the agent's reply.
+  if (!data.isInternal) {
+    try {
+      const { channelForTicketSource, dispatchOutbound, externalIdFromEndUserEmail } =
+        await import("@/lib/channels/dispatch");
+      const channel = channelForTicketSource(ticket.source);
+      if (channel && client?.email) {
+        await dispatchOutbound({
+          tenantId: session.tenantId,
+          ticketSource: ticket.source,
+          toExternalId: externalIdFromEndUserEmail(client.email),
+          body: data.body,
+        });
+      }
+    } catch {
+      // Non-fatal — spec §3 pin, never log body / provider errors.
     }
   }
 

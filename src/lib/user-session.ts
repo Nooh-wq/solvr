@@ -6,7 +6,11 @@
 
 import { headers } from "next/headers";
 import { withRls } from "@/lib/db";
-import { SESSION_DURATION_SECONDS, type SubjectKind } from "@/lib/session";
+// B7.1: SubjectKind type migrates to core; SESSION_DURATION_SECONDS stays
+// on Support's re-export (D-1.b — Support keeps the const so this callsite
+// doesn't need to know about PURPOSE_TTL_SECONDS).
+import { SESSION_DURATION_SECONDS } from "@/lib/session";
+import type { SubjectKind } from "@/core/auth/types";
 
 async function readClientContext(): Promise<{ userAgent: string | null; ipAddress: string | null }> {
   const h = await headers();

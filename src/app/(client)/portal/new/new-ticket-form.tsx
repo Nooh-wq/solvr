@@ -53,12 +53,11 @@ export function NewTicketForm({ categories }: { categories: { id: string; name: 
   const [values, setValues] = useState<Record<string, CustomValue>>({});
 
   useEffect(() => {
+    // The "no category" reset happens in the select's onChange handler;
+    // this effect only owns the async form fetch, so it never sets state
+    // synchronously (react-hooks/set-state-in-effect).
+    if (!categoryId) return;
     let cancelled = false;
-    if (!categoryId) {
-      setForm(null);
-      setValues({});
-      return;
-    }
     resolveTicketFormForCategory(categoryId).then((f) => {
       if (cancelled) return;
       setForm(f);
@@ -206,7 +205,13 @@ export function NewTicketForm({ categories }: { categories: { id: string; name: 
             id="categoryId"
             name="categoryId"
             value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
+            onChange={(e) => {
+              setCategoryId(e.target.value);
+              if (!e.target.value) {
+                setForm(null);
+                setValues({});
+              }
+            }}
           >
             <option value="">Select a category</option>
             {categories.map((c) => (

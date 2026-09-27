@@ -45,6 +45,12 @@ export type RouteTicketInput = {
   strategy: RoutingStrategy;
   /** Only used by SKILLS_BASED. Exact string match against AgentProfile.skills. */
   requiredSkills?: string[];
+  /**
+   * M9.6 — soft preference. When SKILLS_BASED and this is set, candidates
+   * whose skills include the intent slug get preferred over equally-loaded
+   * candidates. Never disqualifies — a hard requirement uses requiredSkills.
+   */
+  preferredIntent?: string;
   /** How this call was invoked. Feeds the loop-cap log + audit trail. */
   source: AutoRouteSource;
 };
@@ -61,7 +67,7 @@ export type RouteTicketResult =
  * audit logs, and downstream rule events all fire through the usual path.
  */
 export async function routeTicket(input: RouteTicketInput): Promise<RouteTicketResult> {
-  const { session, ticketId, groupId, strategy, requiredSkills, source } = input;
+  const { session, ticketId, groupId, strategy, requiredSkills, preferredIntent, source } = input;
 
   return withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
@@ -227,11 +233,18 @@ export async function routeTicket(input: RouteTicketInput): Promise<RouteTicketR
             message: "All eligible agents are at capacity.",
           };
         }
-        // Fewest-open wins. Ties broken by `id` for determinism.
+        // Fewest-open wins. Ties broken by intent-skill match (M9.6 —
+        // agents whose skills include the intent slug get preferred over
+        // equally-loaded candidates), then by `id` for determinism.
         withinCapacity.sort((a, b) => {
           const la = loadByMember.get(a.id) ?? 0;
           const lb = loadByMember.get(b.id) ?? 0;
           if (la !== lb) return la - lb;
+          if (preferredIntent) {
+            const aHas = new Set(profileByMember.get(a.id)?.skills ?? []).has(preferredIntent);
+            const bHas = new Set(profileByMember.get(b.id)?.skills ?? []).has(preferredIntent);
+            if (aHas !== bHas) return aHas ? -1 : 1;
+          }
           return a.id.localeCompare(b.id);
         });
         picked = withinCapacity[0].id;

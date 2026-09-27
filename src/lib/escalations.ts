@@ -29,8 +29,14 @@ export const EMAIL_DEST_CONFIG = z.object({
   subject: z.string().max(200).optional(),
   template: z.string().max(20_000).optional(),
 });
+// M19 — INTEGRATION dest points at a TenantIntegration row (installed
+// marketplace app). Old shape (kind: "jira"|"github"|"linear") is kept
+// readable so any pre-M19 rows still parse — pre-M19 the branch just
+// threw, so nothing was ever created against it in production.
 export const INTEGRATION_DEST_CONFIG = z.object({
-  kind: z.enum(["jira", "github", "linear"]),
+  integrationId: z.string().min(1).optional(),
+  note: z.string().max(2000).optional(),
+  kind: z.enum(["jira", "github", "linear"]).optional(),
 });
 
 export const escalationDestConfigSchema = z.union([
@@ -207,7 +213,18 @@ export async function runEscalation(params: {
         isInternal: true,
       });
     } else if (path.destKind === "INTEGRATION") {
-      throw new Error("Integration destinations require the Marketplace (M19), which isn't shipped yet.");
+      const cfg = INTEGRATION_DEST_CONFIG.parse(path.destConfig);
+      if (!cfg.integrationId) {
+        throw new Error("Integration escalation destination has no integrationId — reconfigure the path.");
+      }
+      const { executeIntegration } = await import("@/lib/marketplace/executor");
+      await executeIntegration({
+        session,
+        integrationId: cfg.integrationId,
+        ticketId,
+        note: cfg.note,
+        source,
+      });
     }
 
     await withRls(

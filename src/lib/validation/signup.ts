@@ -33,6 +33,11 @@ export const tenantSignupSchema = z.object({
   adminName: z.string().trim().min(1, "Enter your full name.").max(120, "Name is too long."),
   adminEmail: z.string().trim().toLowerCase().email("Enter a valid email address."),
   password: passwordSchema,
+  // M15.6 — optional Service Mode preset. Absent = CUSTOMER (classic
+  // support). "EMPLOYEE" flips the new tenant into the Employee
+  // Service Suite preset from the "Stralis for Employee Service"
+  // marketing landing.
+  serviceMode: z.enum(["CUSTOMER", "EMPLOYEE"]).optional().default("CUSTOMER"),
 });
 export type TenantSignupInput = z.infer<typeof tenantSignupSchema>;
 

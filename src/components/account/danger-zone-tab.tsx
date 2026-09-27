@@ -69,7 +69,7 @@ function DataExportCard() {
         <h2 className="text-[15px] font-semibold">Export your data</h2>
         <p className="text-[13px] text-[var(--color-neutral-600)] mt-1">
           Get every ticket, message, and preference tied to your account as a JSON file.
-          The download link expires 72 hours after it's ready.
+          The download link expires 72 hours after it&apos;s ready.
         </p>
       </div>
       <Button onClick={submit} disabled={pending}>

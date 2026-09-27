@@ -95,9 +95,9 @@ export async function listEscalationPathsForTicket(ticketId: string): Promise<Es
 export async function createEscalationPath(input: z.infer<typeof createEscalationPathSchema>) {
   const session = await requireSession({ minRole: "ADMIN" });
   const data = createEscalationPathSchema.parse(input);
-  if (data.destKind === "INTEGRATION") {
-    throw new Error("Integration destinations aren't available yet.");
-  }
+  // M19 — INTEGRATION destinations are now supported. The picker in the
+  // editor writes destConfig = { integrationId, note? }; runEscalation
+  // funnels through executeIntegration.
   const row = await withRls(
     { tenantId: session.tenantId, userId: session.subjectId, role: session.role },
     async (tx) => {

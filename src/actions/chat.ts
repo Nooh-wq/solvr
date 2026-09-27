@@ -6,6 +6,9 @@ import { withRls } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
 import { aiProvider } from "@/lib/ai";
 import { retrieveContext } from "@/lib/ai/rag";
+import { loadToolsForCaller } from "@/lib/ai/tools/for-caller";
+import { runProposedTool } from "@/lib/ai/tools/executor";
+import type { ToolCallerRole } from "@/lib/ai/tools/types";
 import { chatSendMessageSchema } from "@/lib/validation/kb";
 import { createWithReference } from "@/lib/ticket-number";
 import { checkRateLimitWithIp } from "@/lib/rate-limit";
@@ -78,12 +81,17 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
 
     const branding = await tx.tenantBranding.findUnique({ where: { tenantId: session.tenantId } });
     const context = await retrieveContext(tx, session.tenantId, data.body);
+    const tools = await loadToolsForCaller(
+      tx,
+      session.tenantId,
+      session.role as ToolCallerRole
+    );
 
-    return { disabled: false as const, config, conversation, priorMessages, branding, context };
+    return { disabled: false as const, config, conversation, priorMessages, branding, context, tools };
   });
 
   if (setup.disabled) return { error: "DISABLED" as const };
-  const { config, conversation, priorMessages, branding, context } = setup;
+  const { config, conversation, priorMessages, branding, context, tools } = setup;
 
   // Pass 2 (slow, outside any transaction): the actual generation call.
   const contextText = context.map((c) => `[${c.articleTitle}] ${c.content}`).join("\n\n");
@@ -94,17 +102,62 @@ export async function sendChatMessage(input: z.infer<typeof chatSendMessageSchem
     content: m.body,
   }));
 
-  const answer = shouldEscalate
-    ? "I haven't been able to find a good answer to this in our knowledge base. Want me to create a support ticket so an agent can help?"
-    : await aiProvider.generate({
-        systemPrompt:
-          `You are ${config.persona} for ${branding?.productName ?? "this product"}. ` +
-          "Answer only using the knowledge base context below. Never invent prices, policies, or " +
-          "commitments the context doesn't support. If the context doesn't cover the question, say so " +
-          "plainly and offer to create a support ticket. Sentence case, short sentences, no filler." +
-          (contextText ? `\n\nKnowledge base context:\n${contextText}` : "\n\nNo knowledge base context matched this question."),
-        turns: chatTurns,
+  // M8 — if any tools are exposed to this caller role, use the
+  // tool-proposal turn instead of plain generate. The model either
+  // proposes a call (executor runs / queues it) or returns a plain
+  // reply.
+  const systemPrompt =
+    `You are ${config.persona} for ${branding?.productName ?? "this product"}. ` +
+    "Answer only using the knowledge base context below. Never invent prices, policies, or " +
+    "commitments the context doesn't support. If the context doesn't cover the question, say so " +
+    "plainly and offer to create a support ticket. Sentence case, short sentences, no filler." +
+    (contextText ? `\n\nKnowledge base context:\n${contextText}` : "\n\nNo knowledge base context matched this question.");
+
+  let answer: string;
+  if (shouldEscalate) {
+    answer = "I haven't been able to find a good answer to this in our knowledge base. Want me to create a support ticket so an agent can help?";
+  } else if (tools.length > 0) {
+    const proposal = await aiProvider.proposeToolCall({
+      systemPrompt,
+      turns: chatTurns,
+      tools,
+    });
+    if (proposal.toolCall) {
+      const outcome = await runProposedTool({
+        tenantId: session.tenantId,
+        callerRole: session.role as ToolCallerRole,
+        callerSubjectId: session.subjectId,
+        ticketId: null,
+        conversationId: conversation.id,
+        proposal: proposal.toolCall,
       });
+      if (outcome.kind === "executed") {
+        // Ask the model to compose a final reply now that the tool
+        // succeeded. Kept short — the result JSON is small.
+        answer = await aiProvider.generate({
+          systemPrompt,
+          turns: [
+            ...chatTurns,
+            {
+              role: "assistant",
+              content: `I called the ${proposal.toolCall.name} tool. Result: ${JSON.stringify(outcome.result).slice(0, 1500)}`,
+            },
+            { role: "user", content: "Please give me a short, plain-English answer using that result." },
+          ],
+        });
+      } else if (outcome.kind === "queued-for-approval") {
+        answer = `I've flagged your request (${proposal.toolCall.name}) for our team to confirm — you'll get an update as soon as it's reviewed.`;
+      } else if (outcome.kind === "rejected") {
+        answer = `I can't run that action right now (${outcome.reason}). Want me to hand this to an agent instead?`;
+      } else {
+        answer = `I tried to help but the action failed. I've logged it so an agent can pick it up.`;
+      }
+    } else {
+      answer = proposal.message || "Sorry, I don't have an answer for that yet.";
+    }
+  } else {
+    answer = await aiProvider.generate({ systemPrompt, turns: chatTurns });
+  }
 
   // Pass 3 (fast, transactional): persist the answer.
   const botMessage = await withRls(rlsCtx, (tx) =>

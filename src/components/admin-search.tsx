@@ -106,7 +106,7 @@ export function AdminSearch() {
           {isPending && results.length === 0 ? (
             <div className="px-3 py-3 text-[12px] text-[var(--color-neutral-500)]">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="px-3 py-3 text-[12px] text-[var(--color-neutral-500)]">No matches for "{query}".</div>
+            <div className="px-3 py-3 text-[12px] text-[var(--color-neutral-500)]">No matches for &quot;{query}&quot;.</div>
           ) : (
             <ul className="py-1">
               {results.map((r, i) => (

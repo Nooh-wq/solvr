@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-types:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+  rls-and-tests:
+    name: RLS audit & tests
+    needs: lint-and-types
+    runs-on: ubuntu-latest
+
+    # Real Postgres, not PGlite — RLS (and the app_runtime role's lack of
+    # BYPASSRLS) has to be exercised against the genuine engine, not the
+    # WASM build used for local dev.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      SESSION_SECRET: ci-test-secret-at-least-32-characters-long-000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # create-app-runtime-role.mjs reads/writes a real .env file on disk
+      # (not just process.env), so one has to exist before it runs.
+      - name: Write .env for scripts that require a file
+        run: |
+          cat > .env <<EOF
+          DATABASE_URL=${DATABASE_URL}
+          DIRECT_URL=${DIRECT_URL}
+          SESSION_SECRET=${SESSION_SECRET}
+          EOF
+
+      - name: Push schema
+        run: npx prisma db push --accept-data-loss
+
+      - name: Create least-privileged app_runtime role
+        run: node scripts/create-app-runtime-role.mjs
+
+      - name: Apply RLS policies
+        run: npm run db:rls
+
+      # The tenant-isolation gate — see AGENTS.md's RLS invariant.
+      - name: Full RLS audit
+        run: node --env-file=.env scripts/qa_full_rls_audit.mjs
+
+      - name: Test suite
+        # GitHub Actions' default bash doesn't expand ** (needs `globstar`),
+        # so without this the glob is passed to Node literally and it
+        # reports the (nonexistent) literal path as "not found".
+        run: |
+          shopt -s globstar
+          node --env-file=.env --import tsx --test src/**/*.test.ts

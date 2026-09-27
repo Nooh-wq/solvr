@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { Select } from "@/components/ui/input";
+import { DropdownSelect } from "@/components/ui/dropdown-menu";
 
 const RANGE_OPTIONS = [
   { value: "7d", label: "Last 7 days" },
@@ -9,7 +9,7 @@ const RANGE_OPTIONS = [
   { value: "90d", label: "Last 90 days" },
 ];
 
-const SELECT_WIDTH = "h-9 w-40";
+const SELECT_WIDTH = "w-40";
 
 type Filter = {
   range: string;
@@ -17,20 +17,50 @@ type Filter = {
   categoryId?: string;
   priority?: string;
   assignedToId?: string;
+  organizationId?: string;
+  groupId?: string;
+  tag?: string;
+  customFieldDefinitionId?: string;
+  customFieldValue?: string;
+  groupBy?: string;
+};
+
+export type CustomFieldDef = {
+  id: string;
+  scope: string;   // TICKET | USER
+  key: string;
+  label: string;
+  type: string;
 };
 
 /** Drives the analytics page's filters entirely via the URL — every change
  * pushes a new query string, causing the server component (page.tsx) to
  * re-render with new searchParams and re-fetch, same pattern the audit-log
- * page already uses for its one filter, just generalized to several. */
+ * page already uses for its one filter, just generalized to several.
+ *
+ * Uses the shadcn-style DropdownSelect (Radix-free custom impl) — same
+ * URL-sync semantics as before, just a floating panel instead of the
+ * native <select> chrome that never matched the platform look. */
 export function FilterBar({
   current,
   categories,
   agents,
+  organizations,
+  groups,
+  tags,
+  customFieldDefinitions = [],
+  showGroupBy = true,
+  hideOrganization = false,
 }: {
   current: Filter;
   categories: { id: string; name: string }[];
   agents: { id: string; name: string }[];
+  organizations: { id: string; name: string }[];
+  groups: { id: string; name: string }[];
+  tags: { name: string }[];
+  customFieldDefinitions?: CustomFieldDef[];
+  showGroupBy?: boolean;
+  hideOrganization?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -38,79 +68,161 @@ export function FilterBar({
 
   function setParam(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString());
-    if (!value || value === "ALL") params.delete(key);
-    else params.set(key, value);
+    if (!value || value === "ALL") {
+      params.delete(key);
+      // Clearing the CF definition also clears the value — a stray
+      // value with no key would filter nothing on the server anyway,
+      // but the UI stays coherent.
+      if (key === "customFieldDefinitionId") params.delete("customFieldValue");
+    } else params.set(key, value);
     router.push(`${pathname}?${params.toString()}`);
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2 mb-6">
-      <Select
+      <DropdownSelect
         value={current.range}
-        onChange={(e) => setParam("range", e.target.value)}
+        onChange={(v) => setParam("range", v)}
+        options={RANGE_OPTIONS}
+        ariaLabel="Date range"
         className={SELECT_WIDTH}
-        aria-label="Date range"
-      >
-        {RANGE_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </Select>
+      />
 
-      <Select
+      <DropdownSelect
         value={current.channel ?? "ALL"}
-        onChange={(e) => setParam("channel", e.target.value)}
+        onChange={(v) => setParam("channel", v)}
+        options={[
+          { value: "ALL", label: "All channels" },
+          { value: "portal", label: "Portal" },
+          { value: "chatbot", label: "Chatbot" },
+          { value: "email", label: "Email" },
+        ]}
+        ariaLabel="Channel"
         className={SELECT_WIDTH}
-        aria-label="Channel"
-      >
-        <option value="ALL">All channels</option>
-        <option value="portal">Portal</option>
-        <option value="chatbot">Chatbot</option>
-        <option value="email">Email</option>
-      </Select>
+      />
 
-      <Select
+      <DropdownSelect
         value={current.categoryId ?? "ALL"}
-        onChange={(e) => setParam("categoryId", e.target.value)}
+        onChange={(v) => setParam("categoryId", v)}
+        options={[
+          { value: "ALL", label: "All categories" },
+          ...categories.map((c) => ({ value: c.id, label: c.name })),
+        ]}
+        ariaLabel="Category"
         className={SELECT_WIDTH}
-        aria-label="Category"
-      >
-        <option value="ALL">All categories</option>
-        {categories.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </Select>
+      />
 
-      <Select
+      <DropdownSelect
         value={current.priority ?? "ALL"}
-        onChange={(e) => setParam("priority", e.target.value)}
+        onChange={(v) => setParam("priority", v)}
+        options={[
+          { value: "ALL", label: "All priorities" },
+          { value: "LOW", label: "Low" },
+          { value: "MEDIUM", label: "Medium" },
+          { value: "HIGH", label: "High" },
+          { value: "URGENT", label: "Urgent" },
+        ]}
+        ariaLabel="Priority"
         className={SELECT_WIDTH}
-        aria-label="Priority"
-      >
-        <option value="ALL">All priorities</option>
-        <option value="LOW">Low</option>
-        <option value="MEDIUM">Medium</option>
-        <option value="HIGH">High</option>
-        <option value="URGENT">Urgent</option>
-      </Select>
+      />
 
-      <Select
+      <DropdownSelect
         value={current.assignedToId ?? "ALL"}
-        onChange={(e) => setParam("assignedToId", e.target.value)}
+        onChange={(v) => setParam("assignedToId", v)}
+        options={[
+          { value: "ALL", label: "All agents" },
+          { value: "unassigned", label: "Unassigned" },
+          ...agents.map((a) => ({ value: a.id, label: a.name })),
+        ]}
+        ariaLabel="Assigned agent"
         className={SELECT_WIDTH}
-        aria-label="Assigned agent"
-      >
-        <option value="ALL">All agents</option>
-        <option value="unassigned">Unassigned</option>
-        {agents.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </Select>
+      />
+
+      {hideOrganization ? null : (
+        <DropdownSelect
+          value={current.organizationId ?? "ALL"}
+          onChange={(v) => setParam("organizationId", v)}
+          options={[
+            { value: "ALL", label: "All organizations" },
+            ...organizations.map((o) => ({ value: o.id, label: o.name })),
+          ]}
+          ariaLabel="Organization"
+          className={SELECT_WIDTH}
+        />
+      )}
+
+      <DropdownSelect
+        value={current.groupId ?? "ALL"}
+        onChange={(v) => setParam("groupId", v)}
+        options={[
+          { value: "ALL", label: "All groups" },
+          ...groups.map((g) => ({ value: g.id, label: g.name })),
+        ]}
+        ariaLabel="Group"
+        className={SELECT_WIDTH}
+      />
+
+      <DropdownSelect
+        value={current.tag ?? "ALL"}
+        onChange={(v) => setParam("tag", v)}
+        options={[
+          { value: "ALL", label: "All tags" },
+          ...tags.map((t) => ({ value: t.name, label: t.name })),
+        ]}
+        ariaLabel="Tag"
+        className={SELECT_WIDTH}
+      />
+
+      {/* Z10.1 — custom-field filter. Two-part: pick the definition
+          (User CF or Ticket CF), then supply the value. Value input is
+          a plain text field because CF values are stored polymorphic
+          (text / number / option label) and the server matches by
+          string equality — that's the same shape M13's
+          customFieldValue filter already accepts. */}
+      {customFieldDefinitions.length > 0 ? (
+        <>
+          <DropdownSelect
+            value={current.customFieldDefinitionId ?? "ALL"}
+            onChange={(v) => setParam("customFieldDefinitionId", v)}
+            options={[
+              { value: "ALL", label: "All custom fields" },
+              ...customFieldDefinitions.map((d) => ({
+                value: d.id,
+                label: `${d.scope === "USER" ? "User" : "Ticket"} · ${d.label}`,
+              })),
+            ]}
+            ariaLabel="Custom field"
+            className="w-56"
+          />
+          {current.customFieldDefinitionId ? (
+            <input
+              type="text"
+              value={current.customFieldValue ?? ""}
+              onChange={(e) => setParam("customFieldValue", e.target.value)}
+              placeholder="Value"
+              aria-label="Custom field value"
+              className="h-9 rounded-md border border-[var(--color-neutral-300)] bg-[var(--color-surface)] px-3 text-sm w-40"
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {showGroupBy ? (
+        <DropdownSelect
+          value={current.groupBy ?? "ALL"}
+          onChange={(v) => setParam("groupBy", v)}
+          options={[
+            { value: "ALL", label: "Group by: default" },
+            { value: "category", label: "Group by: category" },
+            { value: "organization", label: "Group by: organization" },
+            { value: "group", label: "Group by: group" },
+            { value: "tag", label: "Group by: tag" },
+            { value: "agent", label: "Group by: agent" },
+          ]}
+          ariaLabel="Group by"
+          className="w-48"
+        />
+      ) : null}
     </div>
   );
 }
