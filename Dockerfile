@@ -31,6 +31,15 @@ RUN npx prisma generate
 ENV DATABASE_URL="postgresql://user:pass@localhost:5432/db"
 ENV DIRECT_URL="postgresql://user:pass@localhost:5432/db"
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* vars are inlined into the client bundle at build time, not
+# read at runtime — so the real deployed origin has to be known here, not
+# just set as a container env var later. Pass it with:
+#   docker build --build-arg NEXT_PUBLIC_SITE_URL=https://solvr.thestralis.com .
+# Defaulting to localhost is deliberate: it makes a forgotten --build-arg
+# obvious (every emailed link would visibly point at localhost) rather than
+# silently shipping something that merely looks plausible.
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 RUN npm run build
 
 # ---- runner: minimal runtime image -----------------------------------------
